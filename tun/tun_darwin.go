@@ -33,60 +33,8 @@ const (
 	utunOptIfname = 2
 )
 
-// Config holds the parameters used to configure a TUN interface.
-//
-// On Path A (CLI) Configure() uses these values to call ifconfig(8) equivalents
-// via ioctl. On Path B (GUI) these are informational only — NEPacketTunnelNetworkSettings
-// has already been applied by setTunnelNetworkSettings before handing us the fd.
-type Config struct {
-	LocalIP net.IP
-	PeerIP  net.IP
-	Mask    net.IPMask
-	MTU     int
-}
-
-// Device represents an open TUN interface.
-type Device struct {
-	file *os.File
-	name string
-}
-
-// Name returns the kernel interface name (e.g. "utun3").
-func (d *Device) Name() string { return d.name }
-
-// File returns the underlying *os.File for reading and writing raw IP packets.
-func (d *Device) File() *os.File { return d.file }
-
-// Close closes the TUN device file descriptor.
-func (d *Device) Close() error { return d.file.Close() }
-
-// utunPktInfo is the 4-byte big-endian AF_ header that macOS prepends to every
-// packet read from a utun fd and expects before every packet written to it.
-// AF_INET = 2 on Darwin.
-var utunPktInfoAFInet = [4]byte{0x00, 0x00, 0x00, 0x02}
-
-// Read reads one IP packet from the utun device, stripping the 4-byte AF header.
-func (d *Device) Read(buf []byte) (int, error) {
-	// We need room for the 4-byte header + the IP packet.
-	tmp := make([]byte, len(buf)+4)
-	n, err := d.file.Read(tmp)
-	if err != nil {
-		return 0, err
-	}
-	if n < 4 {
-		return 0, nil
-	}
-	return copy(buf, tmp[4:n]), nil
-}
-
-// Write writes one IP packet to the utun device, prepending the 4-byte AF header.
-func (d *Device) Write(pkt []byte) (int, error) {
-	buf := make([]byte, 4+len(pkt))
-	copy(buf[:4], utunPktInfoAFInet[:])
-	copy(buf[4:], pkt)
-	_, err := d.file.Write(buf)
-	return len(pkt), err
-}
+// Read and Write are in tun_utun.go: the framing is the kernel's, not the
+// platform's, and iOS gets its utun fd from the same kernel interface.
 
 // Configure sets the local IP, peer IP/mask, and MTU on the utun interface.
 //

@@ -19,7 +19,7 @@ ifndef ANDROID_NDK_HOME
   endif
 endif
 
-.PHONY: all aar aar-sha256 cli build-macos-cli relay-server run-local-relay check-platforms test lint clean \
+.PHONY: test-privileged all aar aar-sha256 cli build-macos-cli relay-server run-local-relay check-platforms test lint clean \
         build-bins test-integration-cli matrix-images matrix-clean prf-vectors \
         tls-wrap-vectors comp-vectors \
 
@@ -85,6 +85,10 @@ test:
 ## Run integration tests (starts local mock server, no Docker needed)
 integration-test:
 	go test -v -tags=integration -timeout 120s .
+
+## Privileged pass: needs root. See docs/testing.md.
+test-privileged:
+	sudo OPENLAWSVPN_PRIVILEGED_TESTS=1 go test -v -tags=privileged -timeout 60s ./tun
 
 ## Build the pinned OpenVPN 2.4/2.5/2.6 server images for the e2e matrix.
 ## Slow (source builds); run once, then matrix entries start in well under a

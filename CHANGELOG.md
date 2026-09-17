@@ -58,6 +58,13 @@ and releases follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - The server's key-method-2 packet is now read field by field instead of being
   drained into a fixed buffer, so a truncated packet is reported as a protocol
   error rather than parsed from whatever had arrived.
+- The macOS utun labelled every packet AF_INET. A utun prepends a four-byte
+  address family and injects by it rather than by reading the packet, so an
+  IPv6 packet labelled AF_INET is dropped on its version nibble: with a pushed
+  `ifconfig-ipv6` on the interface, a dual-stack tunnel sent IPv6 out and
+  discarded everything that came back — a tunnel that connects, reports green
+  and carries half its traffic. The header now follows the packet's version, and
+  macOS and iOS share one copy of the framing in `tun/tun_utun.go`.
 - The relay agent allocated whatever a frame header declared. `readMessage` read
   the WebSocket length field and called `make` on it before a single payload
   byte arrived, so ten bytes on the wire could ask for a gigabyte the peer never

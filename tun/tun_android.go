@@ -10,36 +10,10 @@ package tun
 
 import (
 	"fmt"
-	"net"
 	"os"
 
 	"golang.org/x/sys/unix"
 )
-
-// Config holds the parameters used to configure a TUN interface.
-// On Android these are informational only — the VpnService layer has already
-// applied them before handing us the fd.
-type Config struct {
-	LocalIP net.IP
-	PeerIP  net.IP
-	Mask    net.IPMask
-	MTU     int
-}
-
-// Device represents an open TUN interface.
-type Device struct {
-	file *os.File
-	name string
-}
-
-// Name returns the interface name ("tun0" on Android).
-func (d *Device) Name() string { return d.name }
-
-// File returns the underlying *os.File for reading and writing raw IP packets.
-func (d *Device) File() *os.File { return d.file }
-
-// Close closes the TUN device file descriptor.
-func (d *Device) Close() error { return d.file.Close() }
 
 // Read reads one IP packet from the TUN device.
 func (d *Device) Read(buf []byte) (int, error) { return d.file.Read(buf) }

@@ -1,8 +1,6 @@
-//go:build integration
+//go:build privileged
 
-// Integration test: TUN device, routing, and DNS configuration.
-//
-// This test exercises the full Phase 4 stack end-to-end:
+// Integration test: the TUN device, routing and DNS configuration, end to end.
 //
 //  1. Opens a TUN device via /dev/net/tun.
 //  2. Configures the device with the ifconfig addresses from a synthetic
@@ -19,7 +17,7 @@
 //
 // Run with:
 //
-//	sudo go test -v -tags=integration -timeout=30s ./tun/
+//	sudo go test -v -tags=privileged -timeout=30s ./tun/
 //
 // Root (or CAP_NET_ADMIN + CAP_NET_RAW) is required.
 package tun_test
@@ -36,8 +34,8 @@ import (
 	"github.com/openlawsvpn/go-openlawsvpn/tun"
 )
 
-// syntheticPushReply is a realistic PUSH_REPLY string that the mock server
-// would send after a successful auth.
+// syntheticPushReply is a PUSH_REPLY of the shape a server sends after a
+// successful auth.
 const syntheticPushReply = "PUSH_REPLY," +
 	"ifconfig 10.99.8.6 10.99.8.5," +
 	"route 10.99.0.0 255.255.0.0," +
@@ -74,7 +72,7 @@ func TestTunnelUpRoutesApplied(t *testing.T) {
 	// ---- 3. Configure the TUN interface -------------------------------------
 	cfg := tun.Config{
 		LocalIP: routeOpts.Ifconfig.Local,
-		PeerIP:  routeOpts.Ifconfig.Peer,
+		PeerIP:  routeOpts.Ifconfig.Gateway,
 		MTU:     1500,
 	}
 	if err := dev.Configure(cfg); err != nil {
@@ -162,9 +160,8 @@ func TestTunnelUpRoutesApplied(t *testing.T) {
 	t.Log("cleanup complete")
 }
 
-// verifyRoute checks /proc/net/route to confirm that routes with the given
-// hex-encoded destination prefixes appear.  The prefixes are matched as
-// substring of the hex destination field (little-endian 32-bit).
+// verifyRoute checks /proc/net/route for the given hex-encoded destination
+// prefixes, matched as a substring of the little-endian 32-bit field.
 //
 // /proc/net/route columns (tab-separated):
 //

@@ -32,15 +32,11 @@ import (
 	"golang.org/x/sys/unix"
 )
 
-// ifReq is the ifreq structure used by TUN/TAP ioctl calls.
-// The name field is [unix.IFNAMSIZ]byte (16 bytes); the union
-// field that follows is at least 16 bytes wide and carries
-// different data depending on the ioctl.
-//
-// We define it here instead of relying on unix.Ifreq because the
-// kernel TUNSETIFF ioctl expects flags in the second word of the
-// union while the socket ioctls (SIOCSIFADDR etc.) expect a
-// sockaddr_in — so we use two separate layouts.
+// The ifreq structure the TUN/TAP ioctls take has a [unix.IFNAMSIZ]byte name
+// (16 bytes) followed by a union at least 16 bytes wide, carrying different
+// data depending on the ioctl. unix.Ifreq will not serve: TUNSETIFF expects
+// flags in the second word of that union while the socket ioctls (SIOCSIFADDR
+// etc.) expect a sockaddr_in, so the layouts below are declared separately.
 
 // ifreqFlags holds an ifreq with the flags word (used by TUNSETIFF).
 type ifreqFlags struct {
@@ -86,32 +82,10 @@ const (
 	iffRunning = 0x40
 )
 
-// Config holds the parameters used to configure a TUN interface.
-type Config struct {
-	// LocalIP is the IP address assigned to this end of the tunnel.
-	LocalIP net.IP
-	// PeerIP is the P2P peer address for net30 topology.
-	// Mutually exclusive with Mask — set one or the other.
-	PeerIP net.IP
-	// Mask is the subnet mask for subnet topology.
-	// When set, the interface is configured with SIOCSIFNETMASK instead of
-	// SIOCSIFDSTADDR so the kernel treats it as a regular (non-P2P) subnet.
-	Mask net.IPMask
-	// MTU is the maximum transmission unit for the interface (default 1500).
-	// A value of 0 means use 1500.
-	MTU int
-}
-
-// Device represents an open TUN interface.
-type Device struct {
-	file *os.File
-	name string
-}
-
 // Open allocates a TUN interface.
 //
-// If ifaceName is empty, the kernel assigns a name (e.g. "tun0").
-// The interface is not yet configured; call Configure before writing packets.
+// If ifaceName is empty, the kernel assigns a name (e.g. "tun0"). The interface
+// is unconfigured; call Configure before writing packets.
 //
 // Opening sequence (mirrors wireguard-go tun/tun_linux.go):
 //  1. Open /dev/net/tun with unix.Open (O_RDWR|O_CLOEXEC) — raw syscall,
@@ -121,11 +95,10 @@ type Device struct {
 //  4. Wrap with os.NewFile — this registers the fd with epoll and enables
 //     deadline-based reads.
 //
-// Using os.OpenFile instead of unix.Open causes Go to register the fd with
-// epoll before TUNSETIFF runs. On some kernels the /dev/net/tun char device
-// is not epoll-able until a TUN interface is attached; epoll registration
-// fails silently, and all subsequent os.File.Read calls return
-// poll.ErrNotPollable ("read /dev/net/tun: not pollable") immediately.
+// os.OpenFile instead of unix.Open registers the fd with epoll before TUNSETIFF
+// runs. On some kernels /dev/net/tun is not epoll-able until a TUN interface is
+// attached; epoll registration then fails silently and every os.File.Read
+// returns poll.ErrNotPollable ("read /dev/net/tun: not pollable") at once.
 func Open(ifaceName string) (*Device, error) {
 	// Step 1: raw open — no Go poller registration yet.
 	fd, err := unix.Open("/dev/net/tun", unix.O_RDWR|unix.O_CLOEXEC, 0)
@@ -163,16 +136,6 @@ func Open(ifaceName string) (*Device, error) {
 	name := unix.ByteSliceToString(req.name[:])
 	return &Device{file: f, name: name}, nil
 }
-
-// Name returns the kernel interface name, e.g. "tun0".
-func (d *Device) Name() string { return d.name }
-
-// File returns the underlying *os.File for reading and writing raw IP packets.
-func (d *Device) File() *os.File { return d.file }
-
-// Close closes the TUN device file descriptor.
-// The kernel automatically removes the interface when the last fd is closed.
-func (d *Device) Close() error { return d.file.Close() }
 
 // Read reads one IP packet from the TUN device.
 // Linux TUN with IFF_NO_PI has no packet-info header; packets are raw IP.
@@ -268,10 +231,9 @@ func (d *Device) setMTU(sock int, mtu int) error {
 	return nil
 }
 
-// setFlags issues SIOCSIFFLAGS to set the given interface flags.
-// It first reads the current flags with SIOCGIFFLAGS so pre-existing
-// flags (e.g. IFF_POINTOPOINT set by the kernel for a TUN device) are
-// preserved.
+// setFlags issues SIOCSIFFLAGS to set the given interface flags, reading the
+// current ones with SIOCGIFFLAGS first so pre-existing flags (e.g.
+// IFF_POINTOPOINT, set by the kernel for a TUN device) are preserved.
 func (d *Device) setFlags(sock int, extraFlags int16) error {
 	var req ifreqFlags
 	copy(req.name[:], d.name)
