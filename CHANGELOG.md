@@ -32,6 +32,13 @@ and releases follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- `redirect-gateway` installs two /1 routes, `0.0.0.0/1` and `128.0.0.0/1`,
+  instead of replacing the host's default with its own `0.0.0.0/0`, and covers
+  IPv6 with four prefixes rather than a `::/0`. Each wins by longest-prefix
+  match over whatever default the host carries, so nothing is deleted and
+  restored and an interrupted teardown cannot leave the host with no default at
+  all. The flag words are read too, into `PushOptions.RedirectFlags`: `local`,
+  `autolocal`, `ipv6` and `!ipv4` are acted on, the rest recorded and reported.
 - `mssfix N` is read as a link budget rather than as an MTU. The directive
   bounds the whole encapsulated packet, so `internal/mssfix.MaxMSS` subtracts
   the transport prefix, the opcode and peer-id, the packet id, the cipher's tag
@@ -76,6 +83,13 @@ and releases follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   configuration. The names are parsed into `Route.Symbolic`, and a route that
   asks to go around the tunnel is left out of the plan rather than sent to the
   tunnel's own gateway.
+- `routing.LookupGateway` truncated every IPv6 next hop to its first four bytes.
+  `parseRouteGateway` allocated a four-byte destination and copied the netlink
+  `RTA_GATEWAY` attribute into it, and Go's `copy` stops at the shorter slice,
+  so a 16-byte next hop became a bogus IPv4-shaped address with no error. The
+  attribute is now walked with the standard library's own netlink parser and
+  returned at its natural width, and the lookup takes either family instead of
+  refusing anything that is not IPv4.
 - The macOS utun labelled every packet AF_INET. A utun prepends a four-byte
   address family and injects by it rather than by reading the packet, so an
   IPv6 packet labelled AF_INET is dropped on its version nibble: with a pushed

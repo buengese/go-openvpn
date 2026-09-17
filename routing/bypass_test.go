@@ -1,21 +1,13 @@
 //go:build linux || android
 
-// Tests for issue #7: redirect-gateway routing loop.
+// Bypass-route tests: parseRouteGateway, LookupGateway, and the netlink writes
+// behind AddBypassRoute and DeleteBypassRoute.
 //
-// When redirect-gateway is active the daemon installed a 0.0.0.0/0 default
-// route via tun0 without first protecting the VPN server's own IP. The kernel
-// then re-evaluated the existing TCP socket's route, found tun0 as the best
-// path, and the VPN traffic looped back through the tunnel — killing the
-// connection with "broken pipe" within seconds.
-//
-// The fix adds a /32 bypass route for the VPN server IP before the default
-// route is applied, using LookupGateway + AddBypassRoute.  DeleteBypassRoute
-// removes it on disconnect.
-//
-// These tests cover:
-//  1. parseRouteGateway — the netlink response parser (pure unit test, no root)
-//  2. LookupGateway — loopback sanity check (no root)
-//  3. AddBypassRoute / DeleteBypassRoute — real netlink writes (root required)
+// Under redirect-gateway a 0.0.0.0/0 route via tun0 makes the kernel
+// re-evaluate the VPN server's own socket, find tun0 as the best path, and loop
+// the traffic back through the tunnel. The /32 bypass route for the server IP,
+// installed before the default route and removed on disconnect, is what
+// prevents it.
 package routing
 
 import (
@@ -27,15 +19,20 @@ import (
 	"golang.org/x/sys/unix"
 )
 
-// buildFakeRouteReply builds a minimal RTM_NEWROUTE netlink response.
-// When gw is non-nil an RTA_GATEWAY attribute is appended; otherwise the
-// response models a direct-link route (no gateway).
+// buildFakeRouteReply builds a minimal RTM_NEWROUTE netlink response. An
+// RTA_GATEWAY attribute is appended when gw is non-nil; otherwise the response
+// models a direct-link route. The address family follows gw.
 func buildFakeRouteReply(gw net.IP) []byte {
 	const rtmsgSize = 12
 
 	var gwAttr []byte
+	family := byte(unix.AF_INET)
 	if gw != nil {
-		gwAttr = nlAttr(unix.RTA_GATEWAY, gw.To4())
+		addr := gw.To4()
+		if addr == nil {
+			addr, family = gw.To16(), unix.AF_INET6
+		}
+		gwAttr = nlAttr(unix.RTA_GATEWAY, addr)
 	}
 
 	totalLen := nlmsgHdrSize + rtmsgSize + len(gwAttr)
@@ -43,41 +40,37 @@ func buildFakeRouteReply(gw net.IP) []byte {
 
 	binary.LittleEndian.PutUint32(buf[0:4], uint32(totalLen))  // nlmsg_len
 	binary.LittleEndian.PutUint16(buf[4:6], unix.RTM_NEWROUTE) // nlmsg_type
-	buf[nlmsgHdrSize] = unix.AF_INET                           // rtmsg.Family
+	buf[nlmsgHdrSize] = family                                 // rtmsg.Family
 
 	copy(buf[nlmsgHdrSize+rtmsgSize:], gwAttr)
 	return buf
 }
 
-// TestParseRouteGateway_WithGateway verifies that a netlink response
-// containing RTA_GATEWAY is decoded to the correct IP.
-func TestParseRouteGateway_WithGateway(t *testing.T) {
-	want := net.IPv4(192, 168, 1, 1)
-	buf := buildFakeRouteReply(want)
-
-	got, err := parseRouteGateway(buf)
-	if err != nil {
-		t.Fatalf("parseRouteGateway: %v", err)
-	}
-	if got == nil {
-		t.Fatal("expected non-nil gateway, got nil")
-	}
-	if !got.Equal(want) {
-		t.Errorf("gateway: got %s, want %s", got, want)
-	}
-}
-
-// TestParseRouteGateway_NoGateway verifies that a response without RTA_GATEWAY
-// (direct-link route) returns nil without error.
-func TestParseRouteGateway_NoGateway(t *testing.T) {
-	buf := buildFakeRouteReply(nil)
-
-	got, err := parseRouteGateway(buf)
-	if err != nil {
-		t.Fatalf("parseRouteGateway: %v", err)
-	}
-	if got != nil {
-		t.Errorf("expected nil for direct-link route, got %s", got)
+// TestParseRouteGateway decodes a netlink route reply with and without an
+// RTA_GATEWAY attribute: a direct-link route legitimately carries no gateway,
+// so its absence is a nil result and not an error.
+func TestParseRouteGateway(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		want net.IP
+	}{
+		{"with gateway", net.IPv4(192, 168, 1, 1)},
+		{"direct-link route", nil},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := parseRouteGateway(buildFakeRouteReply(tc.want))
+			if err != nil {
+				t.Fatalf("parseRouteGateway: %v", err)
+			}
+			switch {
+			case tc.want == nil && got != nil:
+				t.Errorf("expected nil for a direct-link route, got %s", got)
+			case tc.want != nil && got == nil:
+				t.Fatal("expected a non-nil gateway, got nil")
+			case tc.want != nil && !got.Equal(tc.want):
+				t.Errorf("gateway: got %s, want %s", got, tc.want)
+			}
+		})
 	}
 }
 
@@ -92,11 +85,8 @@ func TestLookupGateway_Loopback(t *testing.T) {
 }
 
 // TestAddDeleteBypassRoute verifies that AddBypassRoute installs a /32 host
-// route for an RFC-5737 test address, that a second call is idempotent
-// (EEXIST treated as success), and that DeleteBypassRoute removes it with the
-// same idempotency guarantee.
-//
-// Requires root (CAP_NET_ADMIN).  Skipped automatically otherwise.
+// route, that a second call is idempotent (EEXIST as success), and that
+// DeleteBypassRoute removes it with the same guarantee. Requires root.
 func TestAddDeleteBypassRoute(t *testing.T) {
 	if os.Getuid() != 0 {
 		t.Skip("requires root — re-run with sudo or in a privileged network namespace")

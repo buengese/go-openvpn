@@ -2,9 +2,8 @@
 
 // Route management for the macOS CLI (Path A — native utun).
 //
-// macOS does not expose Linux rtnetlink(7); routes are added via the BSD
-// route(8) binary using exec.Command. This is the same approach used by
-// WireGuard-tools, OpenVPN3-cli, and Homebrew-distributed VPN clients on macOS.
+// macOS does not expose Linux rtnetlink(7); routes are added by running the BSD
+// route(8) binary.
 //
 // On the GUI path (NEPacketTunnelProvider / Path B) the OS applies routes via
 // setTunnelNetworkSettings; these functions are never called.
@@ -68,10 +67,14 @@ func ApplyRoutes(opts *PushOptions, ifIndex int) error {
 		}
 	}
 
-	// Default route (redirect-gateway).
+	// redirect-gateway: two /1 routes rather than one 0.0.0.0/0, so the host's
+	// own default is neither removed nor competed with on metric. See
+	// RedirectRoutes4.
 	if opts.RedirectGateway {
-		if err := routeAdd(net.IPv4(0, 0, 0, 0), net.CIDRMask(0, 32), defaultGW, ifName); err != nil {
-			return fmt.Errorf("routing: default route: %w", err)
+		for _, r := range RedirectRoutes4(defaultGW) {
+			if err := routeReplace(r.Network, r.Mask, r.Gateway, ifName); err != nil {
+				return fmt.Errorf("routing: redirect-gateway route %s: %w", r.Network, err)
+			}
 		}
 	}
 
@@ -118,7 +121,9 @@ func DeleteRoutes(opts *PushOptions, ifIndex int) error {
 		save(routeDel(r.Network, r.Mask, gw, ifName))
 	}
 	if opts.RedirectGateway {
-		save(routeDel(net.IPv4(0, 0, 0, 0), net.CIDRMask(0, 32), defaultGW, ifName))
+		for _, r := range RedirectRoutes4(defaultGW) {
+			save(routeDel(r.Network, r.Mask, r.Gateway, ifName))
+		}
 	}
 
 	if len(errs) > 0 {
@@ -178,8 +183,8 @@ func DeleteBypassRoute(serverIP, gw net.IP) error {
 	return nil
 }
 
-// AddIPv6Addr is a no-op on macOS — IPv6 address is set by Configure() via
-// SIOCSIFADDR_IN6 (not implemented yet; macOS CLI is IPv4-only for now).
+// AddIPv6Addr is a no-op on macOS: the macOS CLI path is IPv4-only, and an IPv6
+// interface address would be tun.Device.Configure's to set via SIOCSIFADDR_IN6.
 func AddIPv6Addr(_ int, _ net.IP, _ int) error { return nil }
 
 // InterfaceIndex returns the OS interface index for ifName.
@@ -213,6 +218,17 @@ func routeAdd(dst net.IP, mask net.IPMask, gw net.IP, ifName string) error {
 // routeDel deletes an IPv4 route.
 func routeDel(dst net.IP, mask net.IPMask, gw net.IP, ifName string) error {
 	return routeCmd("delete", dst, mask, gw, ifName)
+}
+
+// routeReplace installs a route that has to end up in the table whatever was
+// there before: route(8) has no replace verb and answers "entry already exists"
+// to an add, so the old entry is removed first and only the add is allowed to
+// fail. That is the reference's own shape for a route it insists on — delete
+// then add (openvpn-2.6.22 src/openvpn/route.c:1085-1096) — and it keeps a
+// redirect from silently installing nothing over a stale route.
+func routeReplace(dst net.IP, mask net.IPMask, gw net.IP, ifName string) error {
+	routeDel(dst, mask, gw, ifName) //nolint:errcheck // absent is the wanted state
+	return routeAdd(dst, mask, gw, ifName)
 }
 
 // isRouteExists returns true when route(8) reports "entry already exists".
