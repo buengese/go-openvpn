@@ -9,7 +9,7 @@
 //	relay-server [-addr :18080]
 //
 //	# CLI agent (same machine or LAN):
-//	ovpn3 -config tunnel.ovpn -relay testtoken -relay-endpoint ws://192.168.1.12:18080/ws
+//	openlawsvpn-cli -config tunnel.ovpn -relay testtoken -relay-endpoint ws://192.168.1.12:18080/ws
 //
 //	# Android app: set relay endpoint to http://192.168.1.12:18080/api/v1
 //	#              and org token to  mytoken
@@ -30,6 +30,7 @@ import (
 	"crypto/sha1"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -349,14 +350,6 @@ func (srv *server) handleWS(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	token := r.URL.Query().Get("token")
-	hostname := r.URL.Query().Get("hostname")
-	agentID := r.URL.Query().Get("agent_id")
-	if token == "" || hostname == "" || agentID == "" {
-		http.Error(w, "missing token/hostname/agent_id", http.StatusBadRequest)
-		return
-	}
-
 	// Hijack the connection before writing the 101 response.
 	hj, ok := w.(http.Hijacker)
 	if !ok {
@@ -382,6 +375,18 @@ func (srv *server) handleWS(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Registration arrives in the first text frame, not in the URL: the agent
+	// keeps its token out of the query string so it cannot turn up in an
+	// access log. Demanding those values as query parameters here answers 400
+	// to every connection this server's own client makes.
+	rdr := bufio.NewReaderSize(conn, 64*1024)
+	conn.SetReadDeadline(time.Now().Add(10 * time.Second)) //nolint:errcheck
+	token, agentID, hostname, err := readAuthFrame(conn, rdr)
+	if err != nil {
+		log.Printf("ws auth: %v", err)
+		return
+	}
+
 	connID := newID()
 	srv.st.registerAgent(token, agentID, hostname, connID)
 	defer srv.st.unregisterConn(connID)
@@ -400,7 +405,6 @@ func (srv *server) handleWS(w http.ResponseWriter, r *http.Request) {
 	}()
 
 	// Reader loop: handles pings, status, logs from the agent.
-	rdr := bufio.NewReaderSize(conn, 64*1024)
 	for {
 		conn.SetReadDeadline(time.Now().Add(90 * time.Second)) //nolint:errcheck
 		payload, opcode, err := wsReadFrame(rdr)
@@ -418,6 +422,44 @@ func (srv *server) handleWS(w http.ResponseWriter, r *http.Request) {
 	}
 done:
 	<-done
+}
+
+// readAuthFrame reads the agent's opening registration frame, which carries the
+// token, agent id and hostname that the URL deliberately does not.
+func readAuthFrame(conn net.Conn, rdr *bufio.Reader) (token, agentID, hostname string, err error) {
+	for {
+		payload, opcode, err := wsReadFrame(rdr)
+		if err != nil {
+			return "", "", "", fmt.Errorf("read auth frame: %w", err)
+		}
+		switch opcode {
+		case 0x9: // a ping before auth is harmless; answer it and keep waiting
+			wsSendFrame(conn, 0xA, payload) //nolint:errcheck
+			continue
+		case 0x8:
+			return "", "", "", errors.New("closed before authenticating")
+		case 0x1, 0x2:
+		default:
+			continue
+		}
+
+		var msg struct {
+			Action   string `json:"action"`
+			Token    string `json:"token"`
+			AgentID  string `json:"agent_id"`
+			Hostname string `json:"hostname"`
+		}
+		if err := json.Unmarshal(payload, &msg); err != nil {
+			return "", "", "", fmt.Errorf("auth frame is not JSON: %w", err)
+		}
+		if msg.Action != "auth" {
+			return "", "", "", fmt.Errorf("first frame has action %q, want auth", msg.Action)
+		}
+		if msg.Token == "" || msg.AgentID == "" || msg.Hostname == "" {
+			return "", "", "", errors.New("auth frame is missing token, agent_id or hostname")
+		}
+		return msg.Token, msg.AgentID, msg.Hostname, nil
+	}
 }
 
 func (srv *server) handleAgentMessage(agentID string, payload []byte) {
