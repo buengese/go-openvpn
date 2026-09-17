@@ -39,6 +39,12 @@ and releases follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- **Breaking:** `dns.Apply` is now
+  `Apply(cfg *Config, ifName string) (Backend, string, error)`. It took a
+  `backupPath` and returned `(Backend, error)`; the backup path is now chosen by
+  whichever backend needs one and handed back as the second result, because only
+  that backend knows whether it made a backup or what it was called.
+
 - `redirect-gateway` installs two /1 routes, `0.0.0.0/1` and `128.0.0.0/1`,
   instead of replacing the host's default with its own `0.0.0.0/0`, and covers
   IPv6 with four prefixes rather than a `::/0`. Each wins by longest-prefix
@@ -104,6 +110,13 @@ and releases follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   discarded everything that came back — a tunnel that connects, reports green
   and carries half its traffic. The header now follows the packet's version, and
   macOS and iOS share one copy of the framing in `tun/tun_utun.go`.
+- `dns.Apply` no longer leaves an empty backup file in `TMPDIR` on every
+  connection attempt. The caller created the temporary resolv.conf backup
+  before calling `Apply`, unconditionally, and `Apply` wrote it only on the path
+  that edits `/etc/resolv.conf` — so a host served by systemd-resolved or
+  scutil, or pushed no DNS at all, collected a zero-byte
+  `openlawsvpn-resolv-*.conf` per attempt, one per reconnect. The backup is now
+  made by the one path that uses it, which is why `Apply` hands the path back.
 - The relay agent allocated whatever a frame header declared. `readMessage` read
   the WebSocket length field and called `make` on it before a single payload
   byte arrived, so ten bytes on the wire could ask for a gigabyte the peer never

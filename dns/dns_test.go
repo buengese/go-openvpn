@@ -4,6 +4,7 @@ package dns
 import (
 	"net"
 	"os"
+	"path/filepath"
 	"testing"
 )
 
@@ -282,4 +283,39 @@ func findSubstr(s, sub string) bool {
 		}
 	}
 	return false
+}
+
+// TestApplyLeavesNoBackupWhenItDoesNotUseOne pins that the resolv.conf backup
+// belongs to the one code path that restores it. A backup created before Apply
+// runs leaves an empty file in TMPDIR on every tunnel open for a host using
+// systemd-resolved or scutil, or one with no pushed DNS at all — one per
+// attempt for a daemon that reconnects.
+func TestApplyLeavesNoBackupWhenItDoesNotUseOne(t *testing.T) {
+	before := countResolvBackups(t)
+
+	// No servers is the cheapest way to reach the no-backup path without
+	// touching the host's real resolver configuration.
+	backend, backupPath, err := Apply(&Config{}, "tun-does-not-exist")
+	if err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+	if backend != BackendNone {
+		t.Fatalf("backend = %v, want BackendNone", backend)
+	}
+	if backupPath != "" {
+		t.Errorf("Apply returned backup path %q for a backend that has nothing to restore", backupPath)
+	}
+	if after := countResolvBackups(t); after != before {
+		t.Errorf("temporary backup files went from %d to %d; Apply left one behind", before, after)
+	}
+}
+
+// countResolvBackups counts the backup files this package creates in TMPDIR.
+func countResolvBackups(t *testing.T) int {
+	t.Helper()
+	matches, err := filepath.Glob(filepath.Join(os.TempDir(), "openlawsvpn-resolv-*.conf"))
+	if err != nil {
+		t.Fatalf("glob: %v", err)
+	}
+	return len(matches)
 }

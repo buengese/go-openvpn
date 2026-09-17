@@ -2,15 +2,11 @@
 
 // macOS DNS configuration for the CLI (Path A — native utun).
 //
-// DNS is injected into SCDynamicStore via `scutil --set` scoped to the
-// VPN's own service key (State:/Network/Service/<ifName>/DNS). This is
-// the same mechanism used by the OpenVPN3 macOS client and WireGuard-macOS:
-// mDNSResponder picks up the entry immediately without polluting the Wi-Fi
-// or Ethernet service, and the entry disappears automatically when the
-// interface goes down.
-//
-// Fallback: /etc/resolv.conf overwrite (rarely needed; scutil works on all
-// modern macOS versions with SIP disabled or running as root).
+// DNS is injected into SCDynamicStore via `scutil --set` scoped to the VPN's own
+// service key (State:/Network/Service/<ifName>/DNS): mDNSResponder picks the
+// entry up immediately without polluting the Wi-Fi or Ethernet service, and it
+// disappears when the interface goes down. The fallback is a /etc/resolv.conf
+// overwrite, rarely needed since scutil works as root on all modern versions.
 //
 // On Path B (GUI / NEPacketTunnelProvider) the OS applies DNS via
 // setTunnelNetworkSettings; these functions are never called.
@@ -24,22 +20,23 @@ import (
 
 // Apply injects VPN DNS via SCDynamicStore (scutil) scoped to ifName.
 // Falls back to /etc/resolv.conf if scutil fails.
-func Apply(cfg *Config, ifName, backupPath string) (Backend, error) {
+// It returns the backup path to hand to Revert, which is empty unless the
+// resolv.conf fallback was actually taken.
+func Apply(cfg *Config, ifName string) (Backend, string, error) {
 	if cfg == nil || len(cfg.Servers) == 0 {
-		return BackendNone, nil
+		return BackendNone, "", nil
 	}
 
 	if err := applyScutil(cfg, ifName); err == nil {
-		return BackendResolved, nil
+		return BackendResolved, "", nil
 	}
 
 	// Fallback: overwrite /etc/resolv.conf.
-	if backupPath != "" {
-		if err := BackupResolvConf(backupPath); err != nil {
-			return BackendNone, err
-		}
+	backupPath, err := newResolvConfBackup()
+	if err != nil {
+		return BackendNone, "", err
 	}
-	return BackendResolvConf, ApplyResolvConf(cfg)
+	return BackendResolvConf, backupPath, ApplyResolvConf(cfg)
 }
 
 // Revert removes DNS settings applied by Apply.
@@ -54,12 +51,9 @@ func Revert(backend Backend, ifName, backupPath string) error {
 	}
 }
 
-// scutil script that injects a DNS entry into SCDynamicStore for the given
-// interface. mDNSResponder picks this up immediately; the entry is scoped to
-// the VPN service key and does not affect Wi-Fi or Ethernet.
-//
-// Equivalent to what the OpenVPN3 macOS client writes via the
-// openssl_app_proxy helper's dns_setup() call (openvpn3/client/ovpncli.cpp).
+// applyScutil injects a DNS entry into SCDynamicStore for the given interface.
+// mDNSResponder picks this up immediately; the entry is scoped to the VPN
+// service key and does not affect Wi-Fi or Ethernet.
 func applyScutil(cfg *Config, ifName string) error {
 	var script strings.Builder
 	script.WriteString("d.init\n")
@@ -77,10 +71,10 @@ func applyScutil(cfg *Config, ifName string) error {
 		}
 		script.WriteString("\n")
 	}
-	// SupplementalMatchDomains with empty string makes this a split-DNS
-	// entry; mDNSResponder will use this resolver only for VPN-pushed domains
-	// (or for all domains if no match domains are specified and the tunnel
-	// is the default route).
+	// SupplementalMatchDomains with an empty string makes this a split-DNS
+	// entry: mDNSResponder uses this resolver only for VPN-pushed domains,
+	// or for all of them when no match domains are given and the tunnel is
+	// the default route.
 	script.WriteString("d.add SupplementalMatchDomains *\n")
 	script.WriteString(fmt.Sprintf("set State:/Network/Service/%s/DNS\n", ifName))
 

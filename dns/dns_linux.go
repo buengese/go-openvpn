@@ -11,7 +11,7 @@ import (
 	"github.com/godbus/dbus/v5"
 )
 
-// resolvedObject is the D-Bus object path for the systemd-resolved Manager.
+// The systemd-resolved Manager: bus name, object path, interface.
 const resolvedDest = "org.freedesktop.resolve1"
 const resolvedPath = dbus.ObjectPath("/org/freedesktop/resolve1")
 const resolvedIface = "org.freedesktop.resolve1.Manager"
@@ -126,21 +126,23 @@ func RevertResolved(ifName string) error {
 // Apply applies cfg using the best available backend:
 //  1. Try ApplyResolved (direct D-Bus to systemd-resolved, no polkit).
 //  2. Fall back to ApplyResolvConf (overwrites /etc/resolv.conf).
-func Apply(cfg *Config, ifName, backupPath string) (Backend, error) {
+//
+// It returns the backup path to hand to Revert, which is empty unless the
+// resolv.conf fallback was actually taken.
+func Apply(cfg *Config, ifName string) (Backend, string, error) {
 	if cfg == nil || len(cfg.Servers) == 0 {
-		return BackendNone, nil
+		return BackendNone, "", nil
 	}
 	if err := ApplyResolved(cfg, ifName); err == nil {
-		return BackendResolved, nil
+		return BackendResolved, "", nil
 	} else {
 		fmt.Fprintf(os.Stderr, "dns: resolved D-Bus failed (%v), falling back to /etc/resolv.conf\n", err)
 	}
-	if backupPath != "" {
-		if err := BackupResolvConf(backupPath); err != nil {
-			return BackendNone, err
-		}
+	backupPath, err := newResolvConfBackup()
+	if err != nil {
+		return BackendNone, "", err
 	}
-	return BackendResolvConf, ApplyResolvConf(cfg)
+	return BackendResolvConf, backupPath, ApplyResolvConf(cfg)
 }
 
 // Revert removes the DNS configuration applied by Apply.

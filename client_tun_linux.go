@@ -64,11 +64,8 @@ func (c *Client) openNativeTUN(pushOpts *routing.PushOptions, dnsOpts *dns.Confi
 			fmt.Fprintf(os.Stderr, "vpn: apply routes: %v\n", routeErr)
 		}
 	}
-	if f, ferr := os.CreateTemp("", "openlawsvpn-resolv-*.conf"); ferr == nil {
-		c.dnsBackup = f.Name()
-		f.Close()
-	}
-	dnsBackend, dnsErr := dns.Apply(dnsOpts, dev.Name(), c.dnsBackup)
+	dnsBackend, dnsBackup, dnsErr := dns.Apply(dnsOpts, dev.Name())
+	c.dnsBackup = dnsBackup
 	c.dnsBackend = dnsBackend
 	if dnsErr != nil {
 		fmt.Fprintf(os.Stderr, "vpn: apply DNS: %v\n", dnsErr)
