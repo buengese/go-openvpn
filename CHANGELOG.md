@@ -30,11 +30,11 @@ and releases follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   2.6 and most commercial providers.
 - Data-channel breadth: AES-128, AES-192 and AES-256 in both GCM and CBC, with
   CBC authenticated by HMAC-SHA1, HMAC-SHA256 or HMAC-SHA512.
-- Support for `auth-user-pass` through a new `Client.CredentialsFn` callback.
-  The callback is asked for a username and password once per attempt, before
-  the key-method-2 packet is sent, and may block on a keychain or a user
-  interface. A profile that needs credentials and has none fails before it
-  dials, because dialing cannot help.
+- Support for `auth-user-pass` through a new `Client.CredentialsFn` callback,
+  also on `netstack.Options`. The callback is asked for a username and password
+  once per attempt, before the key-method-2 packet is sent, and may block on a
+  keychain or a user interface. A profile that needs credentials and has none
+  fails before it dials, because dialing cannot help.
 - A control-channel replay window, separate from the reliable layer's own
   sequence numbers. Replayed and stale-timestamped control packets are rejected
   and counted in `diag.Counters` rather than dropped silently.
@@ -116,11 +116,21 @@ and releases follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   ServerHello rather than from Go's error text, which is not part of its API and
   covers a second, unrelated case. `diag.TLSInfo.EMSExportFallback` records when
   it was used.
+- `netstack.Tunnel.Lifetime()`: how long a tunnel has been up, how many
+  renegotiations and reconnects it has been through, and the last transient
+  failure it recovered from. For a consumer holding a tunnel open rather than
+  measuring a handshake — a session whose renegotiations have been failing
+  reads as healthy on every other counter.
 - `Client.Attempts()`: one record per attempt of the current or most recent
   `Reconnect`, in order, each carrying its own `diag.SessionReport`. `Report()`
   still answers for the most recent attempt; the reason an earlier attempt
   failed used to be overwritten by whatever happened next, which is the one
   thing a caller wanted from a reconnect loop.
+- `netstack.Tunnel.Reconnect` and `netstack.Options.MaxReconnects`: a tunnel
+  can now be re-established after the link under it fails, from the front door.
+  The stack that comes back is a new one — a netstack tunnel's addresses come
+  from the `PUSH_REPLY` — so the `Tunnel` is repointed at it and connections
+  dialled through the old one are gone.
 - The `device` package: the tunnel-device seam. `device.Backend` turns the
   parameters a server pushed into a `device.Device` — raw IP packets, no framing
   — so the client core no longer knows whether they reach a kernel interface or
