@@ -29,6 +29,16 @@ and releases follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - A control-channel replay window, separate from the reliable layer's own
   sequence numbers. Replayed and stale-timestamped control packets are rejected
   and counted in `diag.Counters` rather than dropped silently.
+- `profile.Spec` and `Spec.Build()`: a tunnel described programmatically, for a
+  caller with a host, a port and a CA in hand and no file to parse. Every entry
+  point takes a `*Profile`, and the only thing that produced a valid one was
+  the text parser — filling the struct by hand skipped the defaults, the
+  normalisers and the post-scan resolution, which is how a profile ends up
+  dialling TCP because an enum's zero value says so. `Build` renders the
+  directives a file would have carried and runs them through the same
+  assembler, so there is no value it can produce that `ParseString` could not,
+  and no second set of rules to keep in step. It refuses what a file could not
+  have said, such as an argument with a space in it.
 - `Profile.TLSAuth`, `Profile.TLSCrypt` and `Profile.KeyDirection`: the inline
   `<tls-auth>` and `<tls-crypt>` bodies are now parsed as 2048-bit static keys.
   An absent `key-direction` is a distinct value from 0, because OpenVPN treats
