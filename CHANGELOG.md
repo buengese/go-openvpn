@@ -68,6 +68,10 @@ and releases follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   shuffled first when the profile carries `remote-random`. A `Config` or
   `Unsupported` failure stops the loop, because a second endpoint cannot help
   with a profile the client cannot honour; `Network` and `TLS` move on.
+- `EndpointInfo.Attempts` in the session report: one record per endpoint
+  actually tried, with its protocol, port, dial time and the class it failed
+  with. `EndpointInfo.Remotes` remains and now counts what the profile offered,
+  which is a different question from what was tried.
 - `netstack.Net.Ping` and `netstack.Net.Gateway`: an ICMP echo through the
   tunnel, and the peer's own tunnel-side address to send it to. The payload is
   chosen by the caller and echoed back verbatim, which makes it a measurement

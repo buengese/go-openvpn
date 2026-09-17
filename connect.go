@@ -136,7 +136,8 @@ func (c *Client) dialAndAuthenticate(ctx context.Context) (*SAMLChallenge, error
 	}
 
 	// Every remote in turn, until one completes the handshake. The failure
-	// that stops the loop is the one the attempt ends with.
+	// that stops the loop is the one the attempt ends with; every remote
+	// tried, and what became of each, is in the session report.
 	order := c.dialOrder()
 	var last *diag.Error
 	for i, target := range order {
@@ -148,11 +149,14 @@ func (c *Client) dialAndAuthenticate(ctx context.Context) (*SAMLChallenge, error
 			}
 		}
 		c.setActiveRemote(target.Remote)
+		c.beginRemoteAttempt(target.Index, target.Remote)
 
 		ch, derr := c.dialRemote(ctx, target.Remote)
 		if derr == nil {
+			c.endRemoteAttempt(nil)
 			return ch, nil
 		}
+		c.endRemoteAttempt(derr)
 		last = derr
 		if !failoverContinues(derr.Class) {
 			break

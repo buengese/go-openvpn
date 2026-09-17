@@ -183,6 +183,7 @@ func (r *sessionRecorder) snapshot(counters diag.Counters) *diag.SessionReport {
 	out.Profile.Gaps = slices.Clone(r.rep.Profile.Gaps)
 	out.Profile.Directives = slices.Clone(r.rep.Profile.Directives)
 	out.TLS.Chain = slices.Clone(r.rep.TLS.Chain)
+	out.Endpoint.Attempts = slices.Clone(r.rep.Endpoint.Attempts)
 	out.Push.UnknownOptions = slices.Clone(r.rep.Push.UnknownOptions)
 	out.Push.Parsed = maps.Clone(r.rep.Push.Parsed)
 	out.Outcome.ErrorChain = slices.Clone(r.rep.Outcome.ErrorChain)
@@ -418,8 +419,57 @@ func (c *Client) markDataFlow(outbound bool) {
 	}
 }
 
+// beginRemoteAttempt opens the endpoint record for one remote of a failover,
+// and points the report's singular Endpoint fields at it. index is the
+// remote's position in the profile's --remote list, which is not its position
+// in the dial order once --remote-random has shuffled.
+//
+// The singular fields move with it: set from the profile at the StageParse
+// boundary, which named the first remote, they would otherwise have the report
+// claim an endpoint that carried nothing. Attempts keeps the earlier ones.
+func (c *Client) beginRemoteAttempt(index int, rem profile.Remote) {
+	attempt := diag.EndpointAttempt{
+		Index: index,
+		Host:  rem.Host,
+		Port:  rem.Port,
+		Proto: rem.Proto.String(),
+	}
+	c.recorder().edit(func(r *diag.SessionReport) {
+		r.Endpoint.Host = attempt.Host
+		r.Endpoint.Port = attempt.Port
+		r.Endpoint.Proto = attempt.Proto
+		r.Endpoint.ResolvedIP = ""
+		r.Endpoint.DialRTT = 0
+		r.Endpoint.Attempts = append(r.Endpoint.Attempts, attempt)
+	})
+}
+
+// endRemoteAttempt closes the endpoint record one remote opened, with the
+// typed failure that ended it or nil for the remote that completed the
+// handshake. The class and stage are the ones the attempt's Outcome would have
+// carried had this been the only remote, which makes a failed first endpoint
+// comparable with a single-remote profile that failed the same way.
+func (c *Client) endRemoteAttempt(derr *diag.Error) {
+	c.recorder().edit(func(r *diag.SessionReport) {
+		if len(r.Endpoint.Attempts) == 0 {
+			return
+		}
+		a := &r.Endpoint.Attempts[len(r.Endpoint.Attempts)-1]
+		if derr == nil {
+			a.Succeeded = true
+			return
+		}
+		a.Class = derr.Class
+		a.Stage = derr.Stage
+		a.Err = derr.Error()
+	})
+}
+
 // recordDial stores what the transport turned out to be: the address the
-// hostname resolved to and how long the connect took.
+// hostname resolved to and how long the connect took. It stamps both the
+// singular Endpoint and the open endpoint record, the same endpoint seen at
+// two lifetimes — the singular one is overwritten by the next remote, the
+// record is not.
 func (c *Client) recordDial(conn net.Conn, rtt time.Duration) {
 	var resolved string
 	if ra := conn.RemoteAddr(); ra != nil {
@@ -432,6 +482,12 @@ func (c *Client) recordDial(conn net.Conn, rtt time.Duration) {
 			r.Endpoint.ResolvedIP = resolved
 		}
 		r.Endpoint.DialRTT = rtt
+		if n := len(r.Endpoint.Attempts); n > 0 {
+			if resolved != "" {
+				r.Endpoint.Attempts[n-1].ResolvedIP = resolved
+			}
+			r.Endpoint.Attempts[n-1].DialRTT = rtt
+		}
 	})
 }
 

@@ -1376,6 +1376,24 @@ func TestDialCountFollowsTheRemoteCount(t *testing.T) {
 			}
 
 			rep := c.Report()
+			if len(rep.Endpoint.Attempts) != tc.remotes {
+				t.Fatalf("report holds %d endpoint attempts, want %d: %+v",
+					len(rep.Endpoint.Attempts), tc.remotes, rep.Endpoint.Attempts)
+			}
+			for i, a := range rep.Endpoint.Attempts {
+				if a.Succeeded {
+					t.Errorf("attempt %d claims success against a dead listener", i)
+				}
+				if a.Class != diag.ClassNetwork {
+					t.Errorf("attempt %d class = %s, want %s", i, a.Class, diag.ClassNetwork)
+				}
+				if a.Index != i {
+					t.Errorf("attempt %d has Index %d; unshuffled, the two are the same", i, a.Index)
+				}
+				if a.Proto != "tcp" {
+					t.Errorf("attempt %d proto = %q, want tcp", i, a.Proto)
+				}
+			}
 			if rep.Endpoint.Remotes != tc.remotes {
 				t.Errorf("Endpoint.Remotes = %d, want %d — the profile's breadth",
 					rep.Endpoint.Remotes, tc.remotes)
@@ -1416,6 +1434,9 @@ func TestFailoverStopsOnAProfileWeCannotHonour(t *testing.T) {
 		t.Errorf("the listener accepted %d connections; a profile we cannot honour must not "+
 			"spend an endpoint on it", got)
 	}
+	if n := len(c.Report().Endpoint.Attempts); n != 0 {
+		t.Errorf("report holds %d endpoint attempts, want none", n)
+	}
 }
 
 // TestEveryRemoteIsRetained proves both remotes reach the session report, which
@@ -1445,6 +1466,33 @@ func TestEveryRemoteIsRetained(t *testing.T) {
 		t.Errorf("Endpoint.Remotes = %d, want 2", rep.Endpoint.Remotes)
 	}
 
+	// One record per endpoint tried, in file order, each with its own port
+	// and its own transport — the second remote's third field says tcp where
+	// the profile says nothing and therefore means udp.
+	if len(rep.Endpoint.Attempts) != 2 {
+		t.Fatalf("Endpoint.Attempts = %+v, want one record per remote", rep.Endpoint.Attempts)
+	}
+	for i, want := range []struct {
+		port  int
+		proto string
+	}{{1194, "udp"}, {443, "tcp"}} {
+		got := rep.Endpoint.Attempts[i]
+		if got.Index != i || got.Port != want.port || got.Proto != want.proto {
+			t.Errorf("attempt %d = index %d, port %d, proto %q; want index %d, port %d, proto %q",
+				i, got.Index, got.Port, got.Proto, i, want.port, want.proto)
+		}
+		if got.Class != diag.ClassNetwork {
+			t.Errorf("attempt %d class = %s, want %s — an unresolvable host is a network failure",
+				i, got.Class, diag.ClassNetwork)
+		}
+	}
+
+	// The scalar Endpoint fields follow the endpoint the attempt ended on,
+	// which is the last one tried when none of them answered.
+	if rep.Endpoint.Port != 443 || rep.Endpoint.Proto != "tcp" {
+		t.Errorf("Endpoint = port %d proto %q, want the last remote tried (443/tcp)",
+			rep.Endpoint.Port, rep.Endpoint.Proto)
+	}
 }
 
 // clientWithWrapper builds a Client with an explicit control-channel wrapping,
