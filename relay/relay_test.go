@@ -2,12 +2,15 @@ package relay
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"crypto/sha1"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"net"
 	"net/http"
+	"runtime"
 	"strings"
 	"sync"
 	"testing"
@@ -57,33 +60,83 @@ func TestNewGeneratesAgentID(t *testing.T) {
 	}
 }
 
-// ── buildWSURL ────────────────────────────────────────────────────────────────
+// ── parseEndpoint ─────────────────────────────────────────────────────────────
 
-func TestBuildWSURLPreservesEndpoint(t *testing.T) {
+func TestParseEndpointPreservesEndpoint(t *testing.T) {
 	for _, endpoint := range []string{
 		"ws://relay.example.com/ws",
 		"wss://relay.example.com/ws",
 		"wss://relay.example.com:8443/ws/v2",
 	} {
-		got, err := buildWSURL(endpoint)
+		u, err := parseEndpoint(endpoint)
 		if err != nil {
-			t.Fatalf("buildWSURL(%q): %v", endpoint, err)
+			t.Fatalf("parseEndpoint(%q): %v", endpoint, err)
 		}
-		if got != endpoint {
-			t.Errorf("buildWSURL(%q) = %q, want unchanged", endpoint, got)
+		if got := u.String(); got != endpoint {
+			t.Errorf("parseEndpoint(%q) = %q, want unchanged", endpoint, got)
 		}
 		// Token must not appear in the URL.
-		if strings.Contains(got, "token") {
-			t.Errorf("URL %q must not contain token", got)
+		if strings.Contains(u.String(), "token") {
+			t.Errorf("URL %q must not contain token", u)
 		}
 	}
 }
 
-func TestBuildWSURLRejectsInvalidScheme(t *testing.T) {
-	if _, err := buildWSURL("http://relay.example.com/ws"); err != nil {
-		// dialWS will reject it; buildWSURL just parses — both are acceptable.
-		// Just ensure it doesn't panic.
-		_ = err
+// TestParseEndpointRejectsInvalidScheme is what the old assertion-free version
+// of this test let through: buildWSURL discarded its parse, so every one of
+// these came back as a valid endpoint.
+func TestParseEndpointRejectsInvalidScheme(t *testing.T) {
+	for _, endpoint := range []string{
+		"http://relay.example.com/ws",
+		"https://relay.example.com/ws",
+		"relay.example.com/ws",
+		"://nope",
+		"ws:///ws",
+	} {
+		if _, err := parseEndpoint(endpoint); err == nil {
+			t.Errorf("parseEndpoint(%q) = nil error, want the endpoint rejected", endpoint)
+		}
+	}
+}
+
+func TestNewRejectsInvalidEndpoint(t *testing.T) {
+	_, err := New(Config{Token: "tok", Endpoint: "http://relay.example.com/ws", OnPhase2: nopPhase2})
+	if err == nil || !strings.Contains(err.Error(), "scheme") {
+		t.Fatalf("expected a scheme error, got %v", err)
+	}
+}
+
+// ── backoff ───────────────────────────────────────────────────────────────────
+
+// TestNextBackoffCapsAtSixtySeconds pins the sequence Run documents: doubling
+// from one second, never past the cap.
+func TestNextBackoffCapsAtSixtySeconds(t *testing.T) {
+	want := []time.Duration{
+		time.Second, 2 * time.Second, 4 * time.Second, 8 * time.Second,
+		16 * time.Second, 32 * time.Second, 60 * time.Second, 60 * time.Second,
+	}
+	var got time.Duration
+	for i, w := range want {
+		got = nextBackoff(got, time.Second) // a connection that failed at once
+		if got != w {
+			t.Errorf("attempt %d: backoff = %s, want %s", i+1, got, w)
+		}
+	}
+}
+
+// TestNextBackoffResetsAfterALongConnection pins the reset the connection's own
+// uptime supplies: a session that lasted an hour starts its next outage back at
+// one second, not at the delay six quick failures had climbed to.
+func TestNextBackoffResetsAfterALongConnection(t *testing.T) {
+	var backoff time.Duration
+	for i := 0; i < 6; i++ {
+		backoff = nextBackoff(backoff, time.Second)
+	}
+	if backoff != 32*time.Second {
+		t.Fatalf("precondition: backoff after six quick failures = %s, want 32s", backoff)
+	}
+	if got := nextBackoff(backoff, time.Hour); got != time.Second {
+		t.Errorf("backoff after an hour-long connection = %s, want 1s", got)
 	}
 }
 
@@ -321,6 +374,159 @@ func TestSendStatusJSON(t *testing.T) {
 		}
 	case <-time.After(2 * time.Second):
 		t.Fatal("timeout reading status frame")
+	}
+}
+
+// ── readMessage framing ───────────────────────────────────────────────────────
+
+// newPipeConn returns a wsConn reading from one end of a net.Pipe, plus the peer
+// end the test writes raw frames into. net.Pipe is synchronous, so every Write
+// here lands as exactly one Read on the other side.
+func newPipeConn(t *testing.T) (*wsConn, net.Conn) {
+	t.Helper()
+	local, peer := net.Pipe()
+	t.Cleanup(func() {
+		local.Close() //nolint:errcheck
+		peer.Close()  //nolint:errcheck
+	})
+	return &wsConn{
+		conn:   local,
+		rdr:    bufio.NewReaderSize(local, 64*1024),
+		closed: make(chan struct{}),
+	}, peer
+}
+
+// TestReadMessageRejectsOversizedFrame measures what a declared length costs.
+// The reader allocated whatever the peer asked for before a single payload byte
+// had arrived, so ten bytes of header bought a gigabyte of heap.
+func TestReadMessageRejectsOversizedFrame(t *testing.T) {
+	ws, peer := newPipeConn(t)
+
+	// FIN|text, 64-bit length, 1 GiB. Nothing follows: the allocation is the
+	// whole attack, and the peer never has to send the payload it promised.
+	go peer.Write([]byte{0x81, 127, 0, 0, 0, 0, 0x40, 0, 0, 0}) //nolint:errcheck
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	var before, after runtime.MemStats
+	runtime.ReadMemStats(&before)
+	msg, err := ws.readMessage(ctx)
+	runtime.ReadMemStats(&after)
+
+	if err == nil {
+		t.Fatalf("readMessage accepted a frame declaring 1 GiB, returned %d bytes", len(msg))
+	}
+	const bound = 64 << 20
+	if grew := after.TotalAlloc - before.TotalAlloc; grew > bound {
+		t.Errorf("readMessage allocated %d MiB for a frame declaring 1 GiB, want under %d MiB",
+			grew>>20, bound>>20)
+	}
+}
+
+// TestReadMessageRejectsLengthAbove32Bits pins that a frame whose 64-bit length
+// field will not fit in 32 bits is refused rather than truncated to its low
+// four bytes.
+func TestReadMessageRejectsLengthAbove32Bits(t *testing.T) {
+	ws, peer := newPipeConn(t)
+
+	go func() {
+		peer.Write([]byte{0x81, 127, 0, 0, 0, 1, 0, 0, 0, 5}) //nolint:errcheck
+		peer.Write([]byte("hello"))                           //nolint:errcheck
+	}()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	msg, err := ws.readMessage(ctx)
+	if err == nil {
+		t.Fatalf("readMessage accepted a frame declaring 2^32+5 bytes, returned %q", msg)
+	}
+}
+
+// TestReadMessageToleratesSlowPayload delivers a 200-byte frame over more than
+// the read poll interval: the payload read has to retry on timeout, or a
+// Phase2Payload arriving over a slow link aborts the whole connection.
+func TestReadMessageToleratesSlowPayload(t *testing.T) {
+	t.Parallel()
+	ws, peer := newPipeConn(t)
+
+	payload := bytes.Repeat([]byte("x"), 200)
+	go func() {
+		// 200 does not fit the 7-bit length field, so this is the 16-bit form.
+		peer.Write([]byte{0x81, 126, 0, byte(len(payload))}) //nolint:errcheck
+		peer.Write(payload[:80])                             //nolint:errcheck
+		time.Sleep(2500 * time.Millisecond)
+		peer.Write(payload[80:]) //nolint:errcheck
+	}()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+
+	got, err := ws.readMessage(ctx)
+	if err != nil {
+		t.Fatalf("readMessage on a slowly delivered frame: %v", err)
+	}
+	if !bytes.Equal(got, payload) {
+		t.Errorf("readMessage returned %d bytes, want %d", len(got), len(payload))
+	}
+}
+
+// TestReadMessageToleratesSplitHeader delivers the header in two pieces: a retry
+// that restarted the frame would read the second half of the header as the first
+// half of the next one.
+func TestReadMessageToleratesSplitHeader(t *testing.T) {
+	t.Parallel()
+	ws, peer := newPipeConn(t)
+
+	payload := []byte("delayed")
+	go func() {
+		peer.Write([]byte{0x81}) //nolint:errcheck
+		time.Sleep(2500 * time.Millisecond)
+		peer.Write([]byte{byte(len(payload))}) //nolint:errcheck
+		peer.Write(payload)                    //nolint:errcheck
+	}()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+
+	got, err := ws.readMessage(ctx)
+	if err != nil {
+		t.Fatalf("readMessage on a split header: %v", err)
+	}
+	if !bytes.Equal(got, payload) {
+		t.Errorf("readMessage = %q, want %q", got, payload)
+	}
+}
+
+// ── sendFrame ─────────────────────────────────────────────────────────────────
+
+// TestSendFrameHonoursCancelledContext checks that the ctx every send takes is
+// actually consulted: a cancelled attempt must not put more bytes on the wire.
+func TestSendFrameHonoursCancelledContext(t *testing.T) {
+	ws, peer := newPipeConn(t)
+
+	// Drain the peer, so that a send which ignores ctx completes rather than
+	// blocking — the test must observe the write, not a deadlock.
+	wrote := make(chan int, 1)
+	go func() {
+		buf := make([]byte, 128)
+		n, err := peer.Read(buf)
+		if err == nil {
+			wrote <- n
+		}
+	}()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	if err := ws.sendText(ctx, []byte(`{"action":"status"}`)); !errors.Is(err, context.Canceled) {
+		t.Errorf("sendText on a cancelled context = %v, want context.Canceled", err)
+	}
+	select {
+	case n := <-wrote:
+		t.Errorf("sendText wrote %d bytes on a cancelled context", n)
+	case <-time.After(250 * time.Millisecond):
 	}
 }
 

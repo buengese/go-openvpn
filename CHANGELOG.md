@@ -58,6 +58,13 @@ and releases follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - The server's key-method-2 packet is now read field by field instead of being
   drained into a fixed buffer, so a truncated packet is reported as a protocol
   error rather than parsed from whatever had arrived.
+- The relay agent allocated whatever a frame header declared. `readMessage` read
+  the WebSocket length field and called `make` on it before a single payload
+  byte arrived, so ten bytes on the wire could ask for a gigabyte the peer never
+  had to send. A frame, and a fragmented message in total, is now bounded before
+  anything is allocated. The same reader truncated 64-bit lengths to their low
+  32 bits, turning a declared 2^32 into a zero-length frame and 2^32+n into an
+  n-byte one, which then desynchronised it against the stream.
 
 ## [1.2.3] - 2026-08-19
 
