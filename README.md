@@ -26,7 +26,7 @@ the AUR) are released from openlawsvpn-linux.
 
 | Component | Description |
 |---|---|
-| `cmd/cli` | `openlawsvpn-cli` — CLI client with SAML flow, reconnect loop, and relay agent mode (`-relay`) |
+| `cmd/cli` | `openlawsvpn-cli` — CLI client with `-auth-user-pass`, the SAML browser flow, a reconnect loop, and relay agent mode (`-relay`) |
 | `cmd/relay-server` | Local relay server for dev/testing without hitting production |
 
 ## Use as a library

@@ -1,11 +1,13 @@
 // Command openlawsvpn-cli is a minimal CLI for the go-openlawsvpn VPN client.
 //
-// It implements the AWS Client VPN SAML/CRV1 authentication flow and
-// brings up a Linux TUN interface with the routes and DNS pushed by the server.
-// Non-SAML profiles (cert-auth, user-pass) are also supported via auto-detection.
+// It brings up a Linux TUN interface with the routes and DNS pushed by the
+// server. The authentication method follows the profile: a client certificate,
+// a username and password from -auth-user-pass, or the AWS Client VPN
+// SAML/CRV1 flow when the profile asks for it.
 //
 // Usage:
 //
+//	openlawsvpn-cli -config <path.ovpn> [-auth-user-pass <mode-0600-file>]
 //	openlawsvpn-cli -config <path.ovpn> [-saml-token-file <mode-0600-file>]
 //	openlawsvpn-cli -relay <token> [-relay-endpoint <wss://...>] [-agent-id <uuid>]
 //
@@ -16,6 +18,9 @@
 //	                 Optional in relay mode — the app always sends the profile inside
 //	                 the phase2 payload; -config is only used as a fallback if the
 //	                 payload carries no ovpn_config.
+//	-auth-user-pass  Read a username and password from a mode-0600 file: the
+//	                 username on the first line, the password on the second,
+//	                 as OpenVPN's own --auth-user-pass file form.
 //	-saml-token-file Read a base64-encoded SAMLResponse from a mode-0600 file.
 //	-saml-token-fd   Read it from an open descriptor (0 means standard input).
 //	-relay            Relay organisation identifier/token. The public demo value
@@ -83,6 +88,7 @@ func main() {
 	samlTokenFD := flag.Int("saml-token-fd", -1, "read a pre-supplied SAMLResponse from an open file descriptor (0 for stdin)")
 	relayToken := flag.String("relay", "", "relay organisation identifier/token (use 'default' for the public demo)")
 	relayTokenFile := flag.String("relay-token-file", "", "read the relay organisation token from a mode-0600 file")
+	authUserPass := flag.String("auth-user-pass", "", "read a username and password from a mode-0600 file, two lines, as OpenVPN's own --auth-user-pass file form")
 	relayTokenFD := flag.Int("relay-token-fd", -1, "read the relay organisation token from an open file descriptor (0 for stdin)")
 	relayEndpoint := flag.String("relay-endpoint", "wss://ws.relay.openlawsvpn.com", "relay WebSocket URL")
 	relayAgentID := flag.String("agent-id", "", "stable UUID for this agent (default: random)")
@@ -91,6 +97,7 @@ func main() {
 	pidFile := flag.String("pidfile", "", "write daemon PID to this file (requires -daemon)")
 	logFile := flag.String("logfile", "", "redirect daemon output to this file (requires -daemon)")
 	browserCmd := flag.String("browser", "", "browser command to open SAML URL (e.g. firefox, chromium); default: xdg-open")
+	showVersion := flag.Bool("version", false, "print the version this binary was built from and exit")
 
 	flag.Usage = func() {
 		fmt.Fprint(os.Stderr, `openlawsvpn-cli — AWS Client VPN with SAML/SSO authentication
@@ -154,6 +161,10 @@ OPTIONS
                           Only used with -daemon. Default: /dev/null.
                           Example: -logfile /tmp/openlawsvpn.log
 
+  -auth-user-pass <path>  Read a username and password from a mode-0600 file:
+                          the username on the first line, the password on the
+                          second. Required by a profile that says
+                          auth-user-pass; ignored by any other.
   -saml-token-file <path> Read a pre-supplied SAMLResponse from a mode-0600 file.
 
   -saml-token-fd <fd>     Read a pre-supplied SAMLResponse from an already-open
@@ -205,6 +216,14 @@ RELAY ENDPOINTS
 
 	flag.Parse()
 
+	// Before anything else looks at a flag: this has to work in a binary that
+	// cannot connect to anything, because the first thing anyone does with a
+	// release artefact is ask what it is.
+	if *showVersion {
+		fmt.Println(vpn.BuildVersion())
+		return
+	}
+
 	// Daemon re-exec: when OPENLAWSVPN_READY_FD is set, we are the background
 	// child. All flags are inherited via os.Args. We notify the parent through
 	// the pipe FD once the tunnel is up, then continue running indefinitely.
@@ -231,13 +250,19 @@ RELAY ENDPOINTS
 		return
 	}
 
-	resolvedSAMLToken, err := resolveSecret("SAML token", *samlToken, *samlTokenFile, *samlTokenFD, saml.MaxSAMLResponseBytes, true)
+	creds, err := loadAuthUserPass(*authUserPass)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "openlawsvpn-cli: %v\n", err)
+		os.Exit(2)
+	}
+
+	resolvedSAMLToken, err := resolveToken("SAML token", *samlToken, *samlTokenFile, *samlTokenFD, saml.MaxSAMLResponseBytes, true)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "openlawsvpn-cli: %v\n", err)
 		os.Exit(1)
 	}
 	warnRelayLiteral := *relayToken != "" && *relayToken != "default"
-	resolvedRelayToken, err := resolveSecret("relay token", *relayToken, *relayTokenFile, *relayTokenFD, 64*1024, warnRelayLiteral)
+	resolvedRelayToken, err := resolveToken("relay token", *relayToken, *relayTokenFile, *relayTokenFD, 64*1024, warnRelayLiteral)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "openlawsvpn-cli: %v\n", err)
 		os.Exit(1)
@@ -296,6 +321,13 @@ RELAY ENDPOINTS
 	}
 	fmt.Fprintf(os.Stderr, "openlawsvpn-cli: connecting to %s:%d (%s)...\n",
 		remoteDesc, p.Port, p.Proto.String())
+
+	// A username/password profile authenticates through this callback. Without
+	// it the attempt is refused at StageParse, which is what made a plain
+	// user-pass profile unusable from this command however it was invoked.
+	if creds != nil {
+		client.CredentialsFn = creds
+	}
 
 	// Wire up the SAML token callback for AWS SSO profiles.
 	preSuppliedToken := resolvedSAMLToken
@@ -388,13 +420,19 @@ RELAY ENDPOINTS
 func waitForSAMLToken(ctx context.Context, challenge vpn.SAMLChallenge, browserCmd string) (string, error) {
 	acs, err := saml.NewACSServer()
 	if err != nil {
-		// ACS port unavailable — fall back to stdin.
-		fmt.Fprintln(os.Stderr, "openlawsvpn-cli: ACS server unavailable; paste SAMLResponse and press Enter:")
-		return readTokenFromStdin()
+		return samlBindFallback(err, os.Stdin)
 	}
 
 	fmt.Fprintf(os.Stderr, "openlawsvpn-cli: waiting for SAML callback on 127.0.0.1:%d\n", saml.ACSPort)
 	fmt.Fprintln(os.Stderr, "       Press Enter to reopen the URL in your browser, or paste SAMLResponse to skip the browser")
+
+	// The ACS server's lifetime is this wait, not the process's. It releases
+	// 127.0.0.1:35001 when it receives a token or when its context ends, so the
+	// wait gets a context of its own: hand it the process-lifetime signal
+	// context and a token that arrived by paste leaves the port bound for good,
+	// with no re-authentication able to bind it again.
+	waitCtx, cancelWait := context.WithCancel(ctx)
+	defer cancelWait()
 
 	tokenCh := make(chan string, 1)
 	errCh := make(chan error, 1)
@@ -402,7 +440,7 @@ func waitForSAMLToken(ctx context.Context, challenge vpn.SAMLChallenge, browserC
 	defer close(stdinDone)
 
 	go func() {
-		tok, err := acs.Wait(ctx)
+		tok, err := acs.Wait(waitCtx)
 		if err != nil {
 			errCh <- err
 			return
@@ -458,9 +496,39 @@ func watchSAMLTokenInput(r io.Reader, done <-chan struct{}, onEmpty func(), toke
 	}
 }
 
-// readTokenFromStdin reads one line from stdin as the SAML token.
-func readTokenFromStdin() (string, error) {
-	scanner := bufio.NewScanner(os.Stdin)
+// samlBindFallback answers an ACS bind this client did not get, and decides
+// whether the paste prompt may stand in for it. It reads the pasted assertion
+// from in, which is os.Stdin in the one place that calls it; taking a reader is
+// what makes the decision testable without a real listener on the real port.
+//
+// A port held by someone else is the case where the paste prompt must not stand
+// in. AWS fixes the callback address, so the browser posts the assertion to
+// 127.0.0.1:35001 whether or not this process is listening there — the holder
+// receives it, and prompting for a paste invites the user to finish by hand a
+// login whose credential has already gone to another local account. Refusing
+// costs the connection; continuing costs the assertion, so the message names
+// whoever holds the port.
+//
+// Any other bind failure leaves the port unowned: the browser's POST reaches
+// nothing rather than someone, so the paste route is the only way through and
+// taking it intercepts nothing. The error is printed either way.
+func samlBindFallback(cause error, in io.Reader) (string, error) {
+	if errors.Is(cause, saml.ErrACSPortBusy) {
+		return "", fmt.Errorf("openlawsvpn-cli: another process holds 127.0.0.1:%d, "+
+			"so it and not this client would receive the SAML assertion — find it with "+
+			"`ss -ltnp 'sport = :%d'` and stop it, then try again: %w",
+			saml.ACSPort, saml.ACSPort, cause)
+	}
+	fmt.Fprintf(os.Stderr, "openlawsvpn-cli: ACS server unavailable: %v\n", cause)
+	fmt.Fprintln(os.Stderr, "openlawsvpn-cli: paste SAMLResponse and press Enter:")
+	return readPastedToken(in)
+}
+
+// readPastedToken reads one line as the SAML token. The reader is the process's
+// standard input in production; the parameter is there so a caller that is not
+// the process can be tested.
+func readPastedToken(r io.Reader) (string, error) {
+	scanner := bufio.NewScanner(r)
 	if scanner.Scan() {
 		tok := scanner.Text()
 		if tok == "" {
@@ -486,6 +554,18 @@ func validateDaemonSecretSources(samlLiteral, relayLiteral string, samlFD, relay
 		return fmt.Errorf("daemon mode cannot preserve file-descriptor token inputs across re-exec; use a token-file option")
 	}
 	return nil
+}
+
+// resolveToken is resolveSecret for a secret that is one opaque token, and trims
+// the whitespace around it. A SAML assertion or a bearer token is base64 or hex,
+// so surrounding whitespace is how it was pasted rather than part of it; a
+// password is not, and resolveSecret hands that back exactly as written.
+func resolveToken(name, literal, path string, fd, maxBytes int, warnLiteral bool) (string, error) {
+	secret, err := resolveSecret(name, literal, path, fd, maxBytes, warnLiteral)
+	if err != nil {
+		return "", err
+	}
+	return strings.TrimSpace(secret), nil
 }
 
 func resolveSecret(name, literal, path string, fd, maxBytes int, warnLiteral bool) (string, error) {
@@ -545,9 +625,18 @@ func readBoundedSecret(name string, r io.Reader, maxBytes int) (string, error) {
 		clear(raw)
 		return "", fmt.Errorf("%s exceeds %d bytes", name, maxBytes)
 	}
-	secret := strings.TrimSpace(string(raw))
+	secret := string(raw)
 	clear(raw)
-	if secret == "" {
+	// Returned as it was written. Whitespace is not stripped here because not
+	// every secret is an opaque token: a password may begin or end with a space
+	// and OpenVPN keeps it, chomping the line terminator and nothing else
+	// (get_user_pass_cr, openvpn-2.6.22 src/openvpn/misc.c). A trim here would
+	// eat that space and the only symptom is an unaccountable AUTH_FAILED.
+	//
+	// A caller whose secret really is one opaque token trims at its own call
+	// site, which is also what makes the literal and file forms agree: a
+	// command-line literal is not trimmed either.
+	if strings.TrimSpace(secret) == "" {
 		return "", fmt.Errorf("%s is empty", name)
 	}
 	return secret, nil
@@ -579,9 +668,9 @@ func isPermissionError(err error) bool {
 		strings.Contains(s, "CAP_NET_ADMIN")
 }
 
-// runRelayMode connects to the relay server and waits for the mobile/desktop app to deliver
-// Phase 2 credentials. Phase 1 and the SAML browser flow run on the app — not here.
-// runRelayMode starts the relay agent. fallback may be nil — the app always sends
+// runRelayMode starts the relay agent: it connects to the relay server and waits
+// for the app to deliver Phase 2 credentials. Phase 1 and the SAML browser flow
+// run on the app, not here. fallback may be nil — the app always sends
 // ovpn_config in the phase2 payload, so a local profile is not required.
 func runRelayMode(ctx context.Context, stop context.CancelFunc, fallback *profile.Profile, cfg relay.Config, readyFD int) {
 	cfg.Log = func(msg string) { fmt.Fprintln(os.Stderr, msg) }
@@ -640,7 +729,7 @@ func runRelayMode(ctx context.Context, stop context.CancelFunc, fallback *profil
 			activeClientMu.Unlock()
 		}()
 
-		// Pre-load the Phase 1 state that the app already obtained so connectPhase2
+		// Pre-load the Phase 1 state that the app already obtained so bringUpTunnel
 		// skips Phase 1 entirely and connects directly to the sticky backend IP.
 		client.SetRelayPhase2(payload.RemoteIP, payload.StateID)
 
@@ -789,3 +878,40 @@ func notifyReady(readyFD int, localIP string) {
 	fmt.Fprintf(f, "ok local=%s\n", localIP)
 	f.Close()
 }
+
+// loadAuthUserPass reads a username and password from an --auth-user-pass file
+// and returns the callback that presents them.
+//
+// The format is OpenVPN's own: the username on the first line, the password on
+// the second. A path is the only form offered, because a username and password
+// on the command line would sit in every process listing on the machine. The
+// file goes through the same gate as the other secret files: regular, mode 0600
+// or stricter, size-capped.
+func loadAuthUserPass(path string) (func(context.Context) (vpn.Credentials, error), error) {
+	if path == "" {
+		return nil, nil
+	}
+	body, err := resolveSecret("credentials", "", path, -1, maxAuthUserPassBytes, false)
+	if err != nil {
+		return nil, err
+	}
+	// A trailing newline is normal; anything after the second line is not, and
+	// silently ignoring it would hide a file that is not what its author meant.
+	lines := strings.Split(strings.TrimRight(body, "\r\n"), "\n")
+	if len(lines) != 2 {
+		return nil, fmt.Errorf("credentials file: expected two lines, a username and a password, got %d", len(lines))
+	}
+	user := strings.TrimRight(lines[0], "\r")
+	pass := strings.TrimRight(lines[1], "\r")
+	if user == "" || pass == "" {
+		return nil, errors.New("credentials file: username and password must both be non-empty")
+	}
+	return func(context.Context) (vpn.Credentials, error) {
+		return vpn.Credentials{Username: user, Password: pass}, nil
+	}, nil
+}
+
+// maxAuthUserPassBytes bounds an --auth-user-pass file. OpenVPN caps a
+// username and a password at 128 bytes each (USER_PASS_LEN in misc.h); this is
+// generous beside that and still refuses a file handed over by mistake.
+const maxAuthUserPassBytes = 4096

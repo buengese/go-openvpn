@@ -10,9 +10,9 @@ and releases follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 - A username and password can now be supplied through a front door that could
   not take one. The library has driven `auth-user-pass` profiles since
-  `CredentialsFn` was added, but the gomobile binding had no way to pass one
-  across the language boundary, so every provider that asks for a password was
-  unreachable from Android and iOS.
+  `CredentialsFn` was added, and the CLI since `-auth-user-pass`, but the
+  gomobile binding had no way to pass one across the language boundary, so
+  every provider that asks for a password was unreachable from Android and iOS.
   - `MobileClient.SetCredentials(username, password)` in the gomobile binding,
     a method rather than a callback because gomobile cannot bind a function
     value.
@@ -513,7 +513,11 @@ and releases follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   stage — instead of as an unexplained listen error. AWS fixes the callback to
   `127.0.0.1:35001` and the ACS server now runs in the system daemon, where the
   port is not partitioned by user: whatever holds it receives the identity
-  provider's POST, which carries the assertion.
+  provider's POST, which carries the assertion. `openlawsvpn-cli` no longer
+  answers a lost bind by prompting for a pasted assertion, which asked the user
+  to complete, by hand, a login whose credential had already gone elsewhere; it
+  refuses and names the port so the holder can be found. The paste route is
+  unchanged when the bind succeeds.
 
 ## [1.2.3] - 2026-08-19
 
