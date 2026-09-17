@@ -239,6 +239,38 @@ func TestParseNumericDirectives(t *testing.T) {
 			want: 0,
 		},
 		{"mssfix", "mssfix 1200\n", func(p *profile.Profile) int64 { return int64(p.MSSFix) }, 1200},
+		{"ping", "ping 5\n", func(p *profile.Profile) int64 { return int64(p.PingInterval) }, 5},
+		{"ping-restart", "ping-restart 120\n", func(p *profile.Profile) int64 { return int64(p.PingTimeout) }, 120},
+		{"ping-exit", "ping-exit 90\n", func(p *profile.Profile) int64 { return int64(p.PingTimeout) }, 90},
+		{
+			// The helper expands to ping N plus ping-restart M, unchanged:
+			// the doubling in OpenVPN 2.6.22 src/openvpn/helper.c line 549 is
+			// the server expansion, and a client is point-to-point.
+			name: "keepalive expands to its interval",
+			src:  "keepalive 10 120\n",
+			get:  func(p *profile.Profile) int64 { return int64(p.PingInterval) },
+			want: 10,
+		},
+		{
+			name: "keepalive expands to its timeout",
+			src:  "keepalive 10 120\n",
+			get:  func(p *profile.Profile) int64 { return int64(p.PingTimeout) },
+			want: 120,
+		},
+		{
+			// Zero means "the profile said nothing", which is what lets the
+			// keepalive engine tell a configured value from an absent one.
+			name: "absent ping leaves the interval unset",
+			src:  "",
+			get:  func(p *profile.Profile) int64 { return int64(p.PingInterval) },
+			want: 0,
+		},
+		{
+			name: "absent ping-restart leaves the timeout unset",
+			src:  "",
+			get:  func(p *profile.Profile) int64 { return int64(p.PingTimeout) },
+			want: 0,
+		},
 		{
 			// mssfix 0 is valid and means "disabled".
 			name: "mssfix 0",
@@ -271,6 +303,19 @@ func TestParseRejectsOutOfRangeArguments(t *testing.T) {
 		"tun-mtu -1\n",
 		"mssfix abc\n",
 		"mssfix -1\n",
+		"ping\n",
+		"ping abc\n",
+		"ping -1\n",
+		"ping-restart -1\n",
+		"ping-exit abc\n",
+		// OpenVPN 2.6.22 src/openvpn/options.c line 6952 accepts --keepalive
+		// only with exactly two arguments, and src/openvpn/helper.c lines
+		// 521-524 rejects a non-positive value in either of them.
+		"keepalive\n",
+		"keepalive 10\n",
+		"keepalive 0 60\n",
+		"keepalive 10 0\n",
+		"keepalive abc 60\n",
 	} {
 		t.Run(strings.TrimSpace(src), func(t *testing.T) {
 			if _, err := profile.ParseString("remote vpn.example.test 443\n" + src); err == nil {
@@ -297,6 +342,59 @@ func TestParseMSSFixSetSeparatesZeroFromAbsent(t *testing.T) {
 	}
 	if bare.MSSFixSet {
 		t.Error("MSSFixSet = true for a bare mssfix, which names no value")
+	}
+}
+
+// TestParseKeepaliveOutranksPingDirectives pins the precedence between the
+// helper and the two directives it expands to: openvpn3 ssl/proto.hpp lines
+// 1278-1294 reads ping and ping-restart only when no keepalive was given, so
+// the helper wins wherever the file puts it. OpenVPN 2.6.22 src/openvpn/helper.c
+// lines 531-534 refuses the combination instead; this parser takes the
+// precedence rather than the refusal.
+func TestParseKeepaliveOutranksPingDirectives(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		src  string
+	}{
+		{"keepalive first", "keepalive 10 120\nping 5\nping-restart 30\n"},
+		{"keepalive last", "ping 5\nping-restart 30\nkeepalive 10 120\n"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			p, err := profile.ParseString("remote vpn.example.test 443\n" + tc.src)
+			if err != nil {
+				t.Fatalf("ParseString: %v", err)
+			}
+			if p.PingInterval != 10 {
+				t.Errorf("PingInterval = %d, want 10 from the keepalive helper", p.PingInterval)
+			}
+			if p.PingTimeout != 120 {
+				t.Errorf("PingTimeout = %d, want 120 from the keepalive helper", p.PingTimeout)
+			}
+			if p.PingExit {
+				t.Error("PingExit = true, but keepalive expands to ping-restart")
+			}
+		})
+	}
+}
+
+// TestParsePingExitIsNotPingRestart covers the one bit that separates two
+// directives sharing a field: OpenVPN 2.6.22 src/openvpn/options.c lines
+// 6963-6975 writes both into options->ping_rec_timeout and distinguishes them
+// only by ping_rec_timeout_action.
+func TestParsePingExitIsNotPingRestart(t *testing.T) {
+	exit, err := profile.ParseString("remote vpn.example.test 443\nping-exit 60\n")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if exit.PingTimeout != 60 || !exit.PingExit {
+		t.Errorf("ping-exit 60 parsed to timeout %d exit %v, want 60 true", exit.PingTimeout, exit.PingExit)
+	}
+	restart, err := profile.ParseString("remote vpn.example.test 443\nping-restart 60\n")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if restart.PingTimeout != 60 || restart.PingExit {
+		t.Errorf("ping-restart 60 parsed to timeout %d exit %v, want 60 false", restart.PingTimeout, restart.PingExit)
 	}
 }
 
@@ -334,6 +432,64 @@ remote vpn.example.com 1194
 	}
 	if p.Remote != "vpn.example.com" {
 		t.Errorf("Remote = %q", p.Remote)
+	}
+}
+
+// TestParseExplicitExitNotify covers the directive's optional argument, bare
+// and with a count. The arithmetic is OpenVPN 2.4.12's, which reads the
+// argument through positive_atoi (options.c line 4210) — atoi clamped at zero —
+// so a negative or unparseable count disables the notification instead of
+// refusing the profile, as an explicit 0 does.
+func TestParseExplicitExitNotify(t *testing.T) {
+	for _, tc := range []struct {
+		directive string
+		want      int
+	}{
+		{"explicit-exit-notify", 1},
+		{"explicit-exit-notify 5", 5},
+		{"explicit-exit-notify 0", 0},
+		{"explicit-exit-notify -3", 0},
+		{"explicit-exit-notify garbage", 0},
+	} {
+		t.Run(tc.directive, func(t *testing.T) {
+			p, err := profile.ParseString("remote h 1194\nproto udp\n" + tc.directive + "\n")
+			if err != nil {
+				t.Fatalf("ParseString(%q): %v", tc.directive, err)
+			}
+			if p.ExplicitExitNotify != tc.want {
+				t.Errorf("%q: ExplicitExitNotify = %d, want %d",
+					tc.directive, p.ExplicitExitNotify, tc.want)
+			}
+		})
+	}
+}
+
+// TestParseWithoutExplicitExitNotifySendsNone checks that the absent directive
+// and "explicit-exit-notify 0" reach the same value, which is what lets the
+// client treat one number as the whole decision.
+func TestParseWithoutExplicitExitNotifySendsNone(t *testing.T) {
+	p, err := profile.ParseString("remote h 1194\nproto udp\n")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p.ExplicitExitNotify != 0 {
+		t.Errorf("ExplicitExitNotify = %d with no directive, want 0", p.ExplicitExitNotify)
+	}
+}
+
+// TestParseExplicitExitNotifyIsAcceptedOverTCP records a deliberate divergence
+// from stock openvpn, which refuses the combination at option-validation time
+// ("--explicit-exit-notify can only be used with --proto udp", 2.4.12
+// options.c line 2181). A profile is a thing this client measures rather than
+// rejects, so it parses and the send declines instead.
+func TestParseExplicitExitNotifyIsAcceptedOverTCP(t *testing.T) {
+	p, err := profile.ParseString("remote h 443\nproto tcp-client\nexplicit-exit-notify 5\n")
+	if err != nil {
+		t.Fatalf("ParseString: %v", err)
+	}
+	if p.ExplicitExitNotify != 5 {
+		t.Errorf("ExplicitExitNotify = %d, want 5: the directive is parsed over TCP and "+
+			"declined at the send", p.ExplicitExitNotify)
 	}
 }
 
@@ -644,6 +800,26 @@ func TestParseMalformedTagsAreNeitherBlocksNorDirectives(t *testing.T) {
 	}
 	if got := strings.Join(names, " "); got != "remote fast-io" {
 		t.Errorf("directives = %q, want \"remote fast-io\"", got)
+	}
+}
+
+// hand-window sets the ceiling on how long a renegotiated key waits before it
+// carries traffic. Unparsed, a profile asking for a shorter one silently gets
+// the reference's 60 and, the capability registry being closed, is graded fatal
+// for asking.
+func TestParseHandWindow(t *testing.T) {
+	p, err := profile.ParseString("client\nremote vpn.example.com 1194 udp\nhand-window 25\n")
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	if p.HandWindowSec != 25 {
+		t.Fatalf("HandWindowSec = %d, want 25", p.HandWindowSec)
+	}
+
+	for _, bad := range []string{"hand-window", "hand-window 0", "hand-window -5", "hand-window soon"} {
+		if _, err := profile.ParseString("client\nremote vpn.example.com 1194 udp\n" + bad + "\n"); err == nil {
+			t.Errorf("Parse(%q) accepted a value that decides when keys turn over", bad)
+		}
 	}
 }
 

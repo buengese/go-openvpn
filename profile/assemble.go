@@ -30,6 +30,12 @@ const defaultPort = 1194
 type assembler struct {
 	p    *Profile
 	refs []pendingFileRef
+
+	// "keepalive N M" is resolved in finish, not at the line it appears on,
+	// because it outranks ping/ping-restart wherever the file puts them.
+	keepalivePing    int
+	keepaliveTimeout int
+	keepaliveSeen    bool
 }
 
 // newAssembler returns an assembler holding the defaults a profile starts
@@ -205,6 +211,64 @@ func (a *assembler) directive(d Directive) error {
 			return fmt.Errorf("profile: reneg-bytes: invalid %q", fields[1])
 		}
 		p.RenegBytes = n
+	case "ping":
+		// The probe interval on its own. Strict, because a value that does
+		// not parse would silently change when the link is declared dead.
+		//
+		// Reference: OpenVPN 2.6.22 src/openvpn/options.c line 6958
+		// (--ping sets options->ping_send_timeout).
+		if len(fields) < 2 {
+			return fmt.Errorf("profile: ping: missing value")
+		}
+		n, err := strconv.Atoi(fields[1])
+		if err != nil || n < 0 {
+			return fmt.Errorf("profile: ping: invalid %q", fields[1])
+		}
+		p.PingInterval = n
+	case "ping-restart", "ping-exit":
+		// Both write the same timeout; only the action differs — see
+		// Profile.PingTimeout. Reference: OpenVPN 2.6.22
+		// src/openvpn/options.c lines 6963-6975.
+		if len(fields) < 2 {
+			return fmt.Errorf("profile: %s: missing value", directive)
+		}
+		n, err := strconv.Atoi(fields[1])
+		if err != nil || n < 0 {
+			return fmt.Errorf("profile: %s: invalid %q", directive, fields[1])
+		}
+		p.PingTimeout = n
+		p.PingExit = directive == "ping-exit"
+	case "keepalive":
+		// A helper, not a setting of its own: it expands to "ping N" plus
+		// "ping-restart M", deferred to finish because keepalive outranks
+		// any ping/ping-restart wherever the file puts them. Both arguments
+		// are required and both must be positive: OpenVPN 2.6.22
+		// src/openvpn/options.c line 6952 takes exactly two, and
+		// src/openvpn/helper.c lines 521-524 rejects a non-positive one.
+		if len(fields) < 3 {
+			return fmt.Errorf("profile: keepalive: want 'keepalive <interval> <timeout>'")
+		}
+		ping, err := strconv.Atoi(fields[1])
+		if err != nil || ping <= 0 {
+			return fmt.Errorf("profile: keepalive: invalid interval %q", fields[1])
+		}
+		timeout, err := strconv.Atoi(fields[2])
+		if err != nil || timeout <= 0 {
+			return fmt.Errorf("profile: keepalive: invalid timeout %q", fields[2])
+		}
+		a.keepalivePing, a.keepaliveTimeout, a.keepaliveSeen = ping, timeout, true
+	case "hand-window":
+		// Strict, like reneg-sec and become-primary: the value decides
+		// when a key that has been negotiated starts carrying traffic,
+		// and a silently wrong one is a timing bug found much later.
+		if len(fields) < 2 {
+			return fmt.Errorf("profile: hand-window: missing value")
+		}
+		n, err := strconv.Atoi(fields[1])
+		if err != nil || n <= 0 {
+			return fmt.Errorf("profile: hand-window: invalid %q", fields[1])
+		}
+		p.HandWindowSec = n
 	case "become-primary":
 		if len(fields) < 2 {
 			return fmt.Errorf("profile: become-primary: missing value")
@@ -214,6 +278,21 @@ func (a *assembler) directive(d Directive) error {
 			return fmt.Errorf("profile: become-primary: invalid %q", fields[1])
 		}
 		p.BecomePrimarySec = n
+	case "explicit-exit-notify":
+		// The argument is optional, and a malformed one is not an error.
+		// OpenVPN reads it through positive_atoi (2.4.12 options.c line
+		// 4210), atoi clamped at zero, so "explicit-exit-notify -3" and
+		// "explicit-exit-notify x" both disable the notification there
+		// rather than refusing the profile. A bad count costs only the
+		// notification, which is why this case is lax and the rest strict.
+		n := 1
+		if len(fields) > 1 {
+			n = 0
+			if v, err := strconv.Atoi(fields[1]); err == nil && v > 0 {
+				n = v
+			}
+		}
+		p.ExplicitExitNotify = n
 	case "comp-lzo", "compress":
 		// The framing is decided by the directive and the option flags it
 		// sets, not by the algorithm it names: bare 'compress' and
@@ -325,6 +404,22 @@ func (a *assembler) directive(d Directive) error {
 // then hands back the profile.
 func (a *assembler) finish(baseDir string) (*Profile, error) {
 	p := a.p
+
+	// The keepalive helper expands here so that it wins over a ping or
+	// ping-restart on any line of the file, above it or below it: openvpn3
+	// ssl/proto.hpp lines 1278-1294 reads those two only when the option list
+	// carried no keepalive. 2.6 refuses the combination outright
+	// (src/openvpn/helper.c lines 531-534), which would reject a profile
+	// openvpn3 accepts.
+	//
+	// Both values pass through unchanged. The doubling at
+	// src/openvpn/helper.c line 549 is the server expansion; lines 540-543
+	// expand a point-to-point client to exactly ping N and ping-restart M.
+	if a.keepaliveSeen {
+		p.PingInterval = a.keepalivePing
+		p.PingTimeout = a.keepaliveTimeout
+		p.PingExit = false
+	}
 
 	if len(p.Remotes) == 0 {
 		return nil, fmt.Errorf("profile: missing 'remote' directive")

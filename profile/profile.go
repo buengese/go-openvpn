@@ -229,6 +229,51 @@ type Profile struct {
 	// the primary send key. 0 uses the OpenVPN default derived from reneg-sec.
 	BecomePrimarySec int
 
+	// HandWindowSec is "hand-window": the time a key exchange is given to
+	// finish, and the ceiling on how long a renegotiated key waits before it
+	// becomes the send key. 0 means the profile asked for nothing and the
+	// reference's 60 applies (openvpn-2.6.22 src/openvpn/options.c:880).
+	HandWindowSec int
+
+	// PingInterval is the keepalive send interval in seconds, from "ping N"
+	// or the first argument of "keepalive N M". 0 means the profile asked for
+	// nothing, and the client's default applies.
+	PingInterval int
+
+	// PingTimeout is the dead-link receive timeout in seconds, from
+	// "ping-restart N", "ping-exit N", or the second argument of
+	// "keepalive N M". 0 means the profile asked for nothing.
+	//
+	// One field for three directives because the reference keeps one
+	// variable: OpenVPN 2.6.22 src/openvpn/options.c lines 6963-6975 writes
+	// both ping-restart and ping-exit into options->ping_rec_timeout and
+	// separates them only by ping_rec_timeout_action, which is what PingExit
+	// records here.
+	PingTimeout int
+
+	// PingExit reports that PingTimeout came from "ping-exit" rather than
+	// "ping-restart": the profile asked for the session to end when the link
+	// goes quiet, not to be restarted.
+	//
+	// Nothing acts on it — this client's dead-link teardown is terminal
+	// either way, and Reconnect is the caller's to invoke — but discarding it
+	// would make "ping-exit 60" indistinguishable from "ping-restart 60".
+	PingExit bool
+
+	// ExplicitExitNotify is how many exit notifications a deliberate
+	// disconnect puts on the wire, from "explicit-exit-notify [n]". 0 sends
+	// none, and is both the absent directive and an explicit
+	// "explicit-exit-notify 0".
+	//
+	// The bare directive means one notification, not "on" (OpenVPN 2.4.12
+	// src/openvpn/options.c:6133 stores a literal 1 when no argument is
+	// present).
+	//
+	// Stock openvpn refuses the directive alongside a TCP transport
+	// (options.c:2181). This client parses it either way and declines to send
+	// instead — a profile is a thing to measure, not a thing to reject.
+	ExplicitExitNotify int
+
 	// Compression is the data-channel framing the profile itself asked for,
 	// from 'comp-lzo' or 'compress [algo]', independent of what the server
 	// later pushes. compress.EffectiveMode reconciles the two.
