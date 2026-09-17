@@ -47,7 +47,6 @@ import (
 	"github.com/openlawsvpn/go-openlawsvpn/internal/datachannel"
 	"github.com/openlawsvpn/go-openlawsvpn/internal/framing"
 	"github.com/openlawsvpn/go-openlawsvpn/internal/mssfix"
-	"github.com/openlawsvpn/go-openlawsvpn/internal/prf"
 	"github.com/openlawsvpn/go-openlawsvpn/internal/reliable"
 	"github.com/openlawsvpn/go-openlawsvpn/profile"
 	"github.com/openlawsvpn/go-openlawsvpn/routing"
@@ -269,10 +268,6 @@ type Client struct {
 	// lastRecv is the UnixNano timestamp of the last successfully decrypted
 	// data-channel packet. Used by keepaliveLoop for dead-link detection.
 	lastRecv atomic.Int64
-
-	// tlsSecrets captures the TLS 1.2 master secret and randoms for the PRF
-	// key derivation path. Only populated when KeyDerivation == OpenVPNPRF.
-	tlsSecrets *tlsSecretCapture
 }
 
 // emit delivers an event to EventFn when set, and mirrors it to stderr otherwise.
@@ -658,11 +653,7 @@ func (c *Client) connectPhase2(ctx context.Context, samlToken string) error {
 		c.recvExp = srvPacketID2 + 1
 		c.sendSeq = 1
 
-		// Always capture TLS secrets; used by PRF path if server doesn't push tls-ekm.
-		capture := &tlsSecretCapture{}
-		c.tlsSecrets = capture
-
-		tlsConn2, err := c.tlsHandshake(ctx, rawConn2, capture)
+		tlsConn2, err := c.tlsHandshake(ctx, rawConn2, nil)
 		if err != nil {
 			rawConn2.Close()
 			c.setDisconnected(err)
@@ -768,14 +759,15 @@ func (c *Client) connectPhase2(ctx context.Context, samlToken string) error {
 		}
 		keyMat256 = ekm
 	case routing.KeyDerivationOpenVPNPRF:
-		// Legacy HMAC-SHA256 PRF over TLS 1.2 master secret.
-		km, prfErr := deriveKeysPRF(c.tlsSecrets, cs)
-		if prfErr != nil {
-			c.rawConn.Close()
-			c.setDisconnected(prfErr)
-			return fmt.Errorf("vpn: PRF key derivation: %w", prfErr)
-		}
-		keyMat256 = append(km.ClientCipher, append(km.ClientHMAC, append(km.ServerCipher, km.ServerHMAC...)...)...)
+		// The classic derivation needs the key_source2 exchange, which this
+		// client does not perform yet. What stood here derived from the TLS
+		// master secret and a zeroed server random, and produced keys no peer
+		// agrees with — README, "Known limitations". Refuse at the decision
+		// rather than bring up a tunnel that carries nothing.
+		prfErr := fmt.Errorf("vpn: classic OpenVPN key derivation is not wired up")
+		c.rawConn.Close()
+		c.setDisconnected(prfErr)
+		return prfErr
 	}
 	txCipherKey := keyMat256[0:32]    // CIPHER|ENCRYPT|NORMAL = slot 0
 	txNonceTail := keyMat256[64:72]   // HMAC|ENCRYPT|NORMAL   = slot 1, first 8 bytes
@@ -1135,7 +1127,6 @@ func (c *Client) reset() {
 	c.bytesSent.Store(0)
 	c.bytesRecv.Store(0)
 	c.lastRecv.Store(0)
-	c.tlsSecrets = nil
 	c.clearCredentialsOnCleanup = false
 }
 
@@ -2314,8 +2305,7 @@ func (c *Client) doRekey(ctx context.Context) error {
 		return err
 	}
 
-	rekeyCapture := &tlsSecretCapture{}
-	tlsCfg, err := buildTLSConfig(c.prof, rekeyCapture)
+	tlsCfg, err := buildTLSConfig(c.prof, nil)
 	if err != nil {
 		rekey.transport.Close()
 		return fmt.Errorf("build TLS config: %w", err)
@@ -2376,12 +2366,9 @@ func (c *Client) doRekey(ctx context.Context) error {
 			return fmt.Errorf("rekey ExportKeyingMaterial: %w", err)
 		}
 	case routing.KeyDerivationOpenVPNPRF:
-		km, prfErr := deriveKeysPRF(rekeyCapture, rekeCS)
-		if prfErr != nil {
-			rekeyTLS.Close()
-			return fmt.Errorf("rekey PRF key derivation: %w", prfErr)
-		}
-		rekeyMat = append(km.ClientCipher, append(km.ClientHMAC, append(km.ServerCipher, km.ServerHMAC...)...)...)
+		// As in the connect path above.
+		rekeyTLS.Close()
+		return fmt.Errorf("rekey: classic OpenVPN key derivation is not wired up")
 	}
 	txCipherKey := rekeyMat[0:32]    // CIPHER|ENCRYPT|NORMAL = slot 0
 	txNonceTail := rekeyMat[64:72]   // HMAC|ENCRYPT|NORMAL   = slot 1, first 8 bytes
@@ -2606,7 +2593,6 @@ func (c *Client) clearCredentialsLocked() {
 	if c.pushOpts != nil {
 		c.pushOpts.AuthToken = ""
 	}
-	c.tlsSecrets = nil
 }
 
 // setDisconnected moves the client to the disconnected state and closes doneCh.
@@ -2960,82 +2946,3 @@ type prereadRW struct {
 
 func (p *prereadRW) Read(b []byte) (int, error)  { return p.r.Read(b) }
 func (p *prereadRW) Write(b []byte) (int, error) { return p.w.Write(b) }
-
-// ---- TLS secret capture for legacy PRF key derivation -----------------------
-
-// tlsSecretCapture records the TLS 1.2 master secret and client/server randoms
-// by acting as a KeyLogWriter. crypto/tls writes NSS key log lines in the form:
-//
-//	CLIENT_RANDOM <client_random_hex> <master_secret_hex>
-//
-// These are the only fields needed by prf.ExpandKeys for the OpenVPN PRF path.
-// The server random is taken from tls.ConnectionState.ServerHello (not available
-// directly), so we reconstruct it from the key log by comparing random values.
-//
-// Reference: NSS key log format — https://firefox-source-docs.mozilla.org/security/nss/legacy/key_log_format/index.html
-// Reference: openvpn3-core ssl/proto.hpp generate_key_expansion() line ~2080:
-//
-//	prf.Derive(master_secret, "OpenVPN master secret", client_random||server_random, 256)
-type tlsSecretCapture struct {
-	mu           sync.Mutex
-	masterSecret []byte // 48 bytes
-	clientRandom []byte // 32 bytes
-}
-
-// Write implements io.Writer for use as tls.Config.KeyLogWriter.
-// It parses lines of the form "CLIENT_RANDOM <hex_client_random> <hex_master_secret>".
-func (c *tlsSecretCapture) Write(p []byte) (int, error) {
-	line := strings.TrimSpace(string(p))
-	const prefix = "CLIENT_RANDOM "
-	if !strings.HasPrefix(line, prefix) {
-		return len(p), nil
-	}
-	parts := strings.Fields(line)
-	if len(parts) != 3 {
-		return len(p), nil
-	}
-	cr, err1 := hex.DecodeString(parts[1])
-	ms, err2 := hex.DecodeString(parts[2])
-	if err1 != nil || err2 != nil || len(cr) != 32 || len(ms) != 48 {
-		return len(p), nil
-	}
-	c.mu.Lock()
-	c.clientRandom = cr
-	c.masterSecret = ms
-	c.mu.Unlock()
-	return len(p), nil
-}
-
-// get returns (masterSecret, clientRandom) captured from the last handshake,
-// or an error if the capture is incomplete.
-func (c *tlsSecretCapture) get() (masterSecret, clientRandom []byte, err error) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	if len(c.masterSecret) != 48 || len(c.clientRandom) != 32 {
-		return nil, nil, fmt.Errorf("prf: TLS secrets not captured (TLS 1.3 or capture failed)")
-	}
-	return c.masterSecret, c.clientRandom, nil
-}
-
-// deriveKeysPRF derives data-channel keys via the OpenVPN legacy PRF.
-// It requires the TLS 1.2 master secret (from tlsSecretCapture) and
-// the server random (from tls.ConnectionState).
-//
-// Slot layout with NORMAL direction matches ExpandKeys: slot 0 = txCipher,
-// slot 1 = txHMAC/nonce, slot 2 = rxCipher, slot 3 = rxHMAC/nonce.
-func deriveKeysPRF(capture *tlsSecretCapture, cs tls.ConnectionState) (keyMat *prf.KeyMaterial, err error) {
-	masterSecret, clientRandom, err := capture.get()
-	if err != nil {
-		return nil, err
-	}
-	// ServerRandom is not directly exposed by crypto/tls, but it is embedded
-	// in cs.TLSUnique (finished message hash) only for TLS 1.2.
-	// Instead we read it from the raw ServerHello stored in cs.
-	// Since Go 1.21 tls.ConnectionState has no ServerRandom field.
-	// Workaround: re-derive using only clientRandom for the seed and log a warning.
-	// This is a best-effort implementation; a patched crypto/tls could do better.
-	// For AWS/EKM servers this path is never taken, so the limitation is acceptable.
-	serverRandom := make([]byte, 32) // zero fallback; correct value requires patched crypto/tls
-	_ = cs
-	return prf.ExpandKeys(masterSecret, clientRandom, serverRandom)
-}

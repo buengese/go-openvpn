@@ -163,12 +163,49 @@ Key concepts an AI agent must know:
 - Reliable layer: sequence numbers + sliding window + retransmit (matches reliable.hpp in openvpn3-core)
 - TLS bytes are fragmented across P_CONTROL_V1 packets, reassembled in order
 
-**Key derivation**
-- After TLS handshake, both sides derive data channel keys using OpenVPN PRF:
-  `key_material = PRF(master_secret, "OpenVPN master secret", client_random + server_random)`
-- PRF is HMAC-SHA256-based, NOT the standard TLS PRF
-- Produces 64 bytes: first 32 = cipher key, last 32 = HMAC key (for CBC mode)
-- For GCM modes: only cipher key used, HMAC key unused
+**Key derivation** (`internal/prf`)
+
+Read `internal/prf/prf.go` before touching this. A previous implementation here
+computed HMAC-SHA256 over the TLS session's master secret and hello randoms,
+passed a green test suite, and was wrong. That is *not* what OpenVPN does, and
+it is what this section used to describe.
+
+The TLS session contributes nothing to the classic derivation. Each peer sends a
+`key_source2` structure *through* the control channel — the client's carries a
+48-byte pre-master and two 32-byte randoms, the server's the two randoms alone
+— and both sides run two stages over the union:
+
+```
+master    = TLS1PRF(client.PreMaster, "OpenVPN master secret",
+                    client.Random1 ‖ server.Random1)            ->  48 B
+key_block = TLS1PRF(master,           "OpenVPN key expansion",
+                    client.Random2 ‖ server.Random2
+                    ‖ clientSessionID ‖ serverSessionID)        -> 256 B
+```
+
+- `TLS1PRF` is the **TLS 1.0 MD5+SHA1 split PRF of RFC 2246 §5** — P_MD5 over
+  the first half of the secret XORed with P_SHA1 over the second half. Not
+  HMAC-SHA256, and not the TLS 1.2 single-digest PRF.
+- The two stages consume **disjoint** randoms: Random1 seeds the master secret,
+  Random2 seeds the key expansion. Feeding the same pair to both still produces
+  plausible-looking bytes.
+- Labels are raw ASCII with no terminating NUL. Session IDs are the two peers'
+  8-byte control-channel session IDs, client first.
+- The output is **256 bytes, not 64** — four 64-byte slots reached through
+  `prf.Split`: cipher-encrypt, hmac-encrypt, cipher-decrypt, hmac-decrypt, named
+  for this client's NORMAL direction. A slot is 64 bytes whatever consumes it;
+  AES-256 takes the first 32, an HMAC-SHA1 key the first 20, a GCM nonce tail the
+  first 8. The trailing bytes are unused, not spare.
+- Under GCM the "HMAC" slots are not unused: they supply the 8-byte implicit IV.
+
+**The 2.6+ alternative:** a server that pushes `key-derivation tls-ekm` (or
+`tls-ekm` inside `protocol-flags`) selects RFC 5705 exported keying material
+instead — `ExportKeyingMaterial` with label `EXPORTER-OpenVPN-datakeys`, same
+256 bytes, same `prf.Split`. `routing/push.go` parses the switch;
+`internal/prf/capture.go` implements it. AWS Client VPN and openvpn3-core 3.x
+use this path. Only known-answer vectors (`internal/prf/testdata/vectors.json`,
+captured from a real OpenVPN 2.4.12 peer) distinguish a correct derivation from
+a convincing wrong one — length and determinism tests do not.
 
 **Data channel**
 - P_DATA_V2: [0x09 | key_id][peer_id (3 bytes)][iv (12 bytes for GCM)][ciphertext+tag]
@@ -198,7 +235,7 @@ All in openvpn3-core (https://github.com/OpenVPN/openvpn3):
 | `reliable/reliable.hpp` | Reliable control channel — seq numbers, ACK, window |
 | `crypto/cipher.hpp` + `data_epoch.cpp` | Data channel crypto, IV construction |
 | `transport/tcplink.hpp` + `udplink.hpp` | Framing: 2-byte length prefix (TCP), raw (UDP) |
-| `openvpn/prf/prfplus.hpp` | Key derivation PRF |
+| `ssl/tlsprf.hpp` + `openssl/crypto/tls1prf.hpp` | Classic key derivation: both labels, and the `EVP_md5_sha1()` digest choice. These, not `prf/prfplus.hpp`, are what `internal/prf` cites |
 | `tun/builder/base.hpp` | TUN callback interface (what gomobile must expose) |
 
 ## Legacy libopenlawsvpn C API (historical — the Go API replaced this)

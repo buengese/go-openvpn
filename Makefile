@@ -20,7 +20,7 @@ ifndef ANDROID_NDK_HOME
 endif
 
 .PHONY: all aar aar-sha256 cli build-macos-cli relay-server run-local-relay check-platforms test lint clean \
-        build-bins test-integration-cli matrix-images matrix-clean \
+        build-bins test-integration-cli matrix-images matrix-clean prf-vectors \
         comp-vectors \
 
 all: aar
@@ -92,6 +92,15 @@ integration-test:
 matrix-images:
 	bash docker/openvpn-server/build.sh
 
+## Recapture internal/prf/testdata/vectors.json.
+## Builds a separately tagged instrumented OpenVPN 2.4 image — never the stock
+## matrix tag — and drives real handshakes through it. Needs Docker and
+## /dev/net/tun. The committed vectors are already good; this only needs
+## running to extend or re-derive them. See docker/PRF-VECTORS.md.
+prf-vectors:
+	bash docker/openvpn-server/build-prfdebug.sh
+	bash docker/openvpn-server/prf-capture.sh
+
 ## Recapture internal/compress/testdata/vectors.json.
 ## The compression analogue of prf-vectors and tls-wrap-vectors: separately
 ## tagged instrumented OpenVPN 2.4, 2.5 and 2.6 images — never the stock matrix
@@ -108,8 +117,10 @@ comp-vectors:
 ## Remove any matrix containers, networks and images left behind.
 matrix-clean:
 	-docker ps -aq --filter label=com.openlawsvpn.testenv=matrix | xargs -r docker rm -f
+	-docker ps -aq --filter label=com.openlawsvpn.testenv=prf-capture | xargs -r docker rm -f
 	-docker ps -aq --filter label=com.openlawsvpn.testenv=comp-capture | xargs -r docker rm -f
 	-docker network ls -q --filter label=com.openlawsvpn.testenv=matrix | xargs -r docker network rm
+	-docker network ls -q --filter label=com.openlawsvpn.testenv=prf-capture | xargs -r docker network rm
 	-docker network ls -q --filter label=com.openlawsvpn.testenv=comp-capture | xargs -r docker network rm
 	-docker images -q openlawsvpn-test/openvpn-server | xargs -r docker rmi -f
 

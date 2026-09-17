@@ -8,6 +8,14 @@ whichever directory the `PATCH_DIR` build arg names.
 matrix images `build.sh` produces — the ones `testenv.StartMatrix` resolves —
 are stock upstream builds.
 
+The key-derivation capture landed its `generate_key_expansion()`
+instrumentation in a *sibling* directory, `../patches-prfdebug/`, selected with `--build-arg
+PATCH_DIR=patches-prfdebug` and tagged `:2.4.12-prfdebug`. That patch makes
+every handshake print the 256-byte data-channel key block into the container
+log; applying it here would have made the whole matrix leak key material into
+the logs that tests capture and print on failure. See
+[`../../PRF-VECTORS.md`](../../PRF-VECTORS.md).
+
 The compression-framing capture did it again for the data channel in
 `../patches-compdebug/`, tagged `:{2.4.12,2.5.11,2.6.22}-compdebug`. It prints
 every tunnelled IP packet in the clear, on both sides of the framing. It is the
@@ -26,9 +34,9 @@ Rules:
 - Patches must apply cleanly to **every** pinned series they are used with. The
   three series are built from the same Dockerfile, so a patch that only applies
   to 2.4 must live in its own `patches-*` directory and be built with an image
-  tag of its own. `patches-compdebug/` is the other case: it is used with all
-  three, and it applies to all three with zero fuzz because `comp_init()` did
-  not change.
+  tag of its own. That is what `patches-prfdebug/` is. `patches-compdebug/` is
+  the other case: it is used with all three, and it applies to all three with
+  zero fuzz because `comp_init()` did not change.
 - `patch -p1 --batch --forward` is used, so a patch that is already applied is
   skipped rather than prompting, but a patch that does not apply fails the
   build. That is intentional: a silently unpatched image would produce vectors

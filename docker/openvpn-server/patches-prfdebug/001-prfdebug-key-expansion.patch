@@ -1,0 +1,73 @@
+--- a/src/openvpn/ssl.c
++++ b/src/openvpn/ssl.c
+@@ -1787,6 +1787,36 @@
+ }
+ 
+ /*
++ * go-openlawsvpn key-derivation instrumentation.
++ *
++ * Dumps, in hex, every input to and the output of the classic OpenVPN
++ * key-method-2 key expansion, so that known-answer vectors can be captured
++ * from a real OpenVPN peer rather than from our own reasoning.
++ *
++ * This exists only in the throwaway "prfdebug" image; it prints long-term
++ * secret-equivalent material and must never be built into anything that
++ * carries real traffic.  See docker/PRF-VECTORS.md.
++ */
++static void
++prfdebug_dump(const char *tag, const uint8_t *data, int len)
++{
++    char hex[2 * 256 + 1];
++    int i;
++
++    if (len < 0 || len > 256)
++    {
++        msg(M_INFO, "PRFDEBUG %s <oversized:%d>", tag, len);
++        return;
++    }
++    for (i = 0; i < len; ++i)
++    {
++        openvpn_snprintf(&hex[i * 2], 3, "%02x", data[i]);
++    }
++    hex[len * 2] = '\0';
++    msg(M_INFO, "PRFDEBUG %s %s", tag, hex);
++}
++
++/*
+  * Using source entropy from local and remote hosts, mix into
+  * master key.
+  */
+@@ -1837,6 +1867,33 @@
+                 (uint8_t *)key2.keys,
+                 sizeof(key2.keys));
+ 
++    /* --- key-derivation instrumentation (prfdebug build only) ----------
++     *
++     * Everything the two-stage OpenVPN key-method-2 derivation consumes and
++     * produces.  On the server, key_src carries both peers' material: the
++     * client's pre_master/random1/random2 arrive in the key-method-2 packet
++     * and land in key_src->client (key_method_2_read), while key_src->server
++     * is filled locally (key_source2_randomize_write).  A capture from the
++     * server alone is therefore complete.
++     */
++    msg(M_INFO, "PRFDEBUG begin role=%s", server ? "server" : "client");
++    prfdebug_dump("client_pre_master", key_src->client.pre_master,
++                  sizeof(key_src->client.pre_master));
++    prfdebug_dump("client_random1", key_src->client.random1,
++                  sizeof(key_src->client.random1));
++    prfdebug_dump("client_random2", key_src->client.random2,
++                  sizeof(key_src->client.random2));
++    prfdebug_dump("server_random1", key_src->server.random1,
++                  sizeof(key_src->server.random1));
++    prfdebug_dump("server_random2", key_src->server.random2,
++                  sizeof(key_src->server.random2));
++    prfdebug_dump("client_sid", client_sid->id, SID_SIZE);
++    prfdebug_dump("server_sid", server_sid->id, SID_SIZE);
++    prfdebug_dump("master", master, sizeof(master));
++    prfdebug_dump("key_block", (const uint8_t *)key2.keys, sizeof(key2.keys));
++    msg(M_INFO, "PRFDEBUG end");
++    /* --- end key-derivation instrumentation --------------------------- */
++
+     key2.n = 2;
+ 
+     key2_print(&key2, key_type, "Master Encrypt", "Master Decrypt");
