@@ -21,6 +21,7 @@ import (
 	"github.com/openlawsvpn/go-openlawsvpn/device/kernel"
 	"github.com/openlawsvpn/go-openlawsvpn/diag"
 	"github.com/openlawsvpn/go-openlawsvpn/dns"
+	"github.com/openlawsvpn/go-openlawsvpn/internal/compress"
 	"github.com/openlawsvpn/go-openlawsvpn/internal/control"
 	"github.com/openlawsvpn/go-openlawsvpn/internal/datachannel"
 	"github.com/openlawsvpn/go-openlawsvpn/internal/framing"
@@ -925,6 +926,17 @@ func (c *Client) startDataChannel(pushOpts *routing.PushOptions, keyMat256 []byt
 	c.dataParams = params
 	c.mu.Unlock()
 
+	// The framing comes from two sources that can disagree: an OpenVPN server
+	// does not push its compression setting, so a comp-lzo profile against a
+	// comp-lzo server settles it in silence and a PUSH_REPLY says nothing.
+	mode, err := c.effectiveCompression(pushOpts)
+	if err != nil {
+		c.rawConn.Close()
+		c.setDisconnected(err)
+		return c.failUnsupported(diag.StageKeys, "allow-compression", err.Error())
+	}
+	c.compression = mode
+
 	// peerID and the wire format params carries were both parsed out of the
 	// PUSH_REPLY by applyPushReply and are connection-scoped, so they
 	// outlive every key epoch.
@@ -941,10 +953,47 @@ func (c *Client) startDataChannel(pushOpts *routing.PushOptions, keyMat256 []byt
 		// OpenVPN default, or an unsupported rekey starts an hour in.
 		RenegSec:   c.prof.RenegSec,
 		RenegBytes: c.prof.RenegBytes,
+		Compress:   mode,
 	})
 	c.completeStage(diag.StageKeys)
 
 	return nil
+}
+
+// effectiveCompression resolves the framing this session must use from the two
+// sources that can name one: the profile's own directive and the server's
+// pushed one, under the profile's allow-compression policy.
+//
+// It is a method rather than an inline call because the report needs the same
+// answer as the data channel, and computing it twice is how they disagree.
+func (c *Client) effectiveCompression(pushOpts *routing.PushOptions) (compress.Mode, error) {
+	pushed := compress.ModeNone
+	if pushOpts != nil {
+		pushed = pushOpts.Compression
+	}
+
+	// The profile says which framing; the peer decides whether there is one.
+	// Letting a profile-declared mode apply whenever the server pushed nothing
+	// is right against a server configured for compression — none of 2.4, 2.5
+	// or 2.6 pushes its setting — and wrong against a server configured for
+	// none, where framing puts a leading byte on every data packet that the
+	// peer discards and the tunnel carries nothing.
+	//
+	// The peer's own options string is the signal, and the only one: it carries
+	// a compression token whenever the peer has a framework enabled. See
+	// compress.PeerDeclaresFraming.
+	profileMode := c.prof.Compression
+	if pushed == compress.ModeNone && !compress.PeerDeclaresFraming(c.serverOptsSeen()) {
+		profileMode = compress.ModeNone
+	}
+	return compress.EffectiveMode(profileMode, pushed, c.prof.AllowCompression)
+}
+
+// serverOptsSeen returns the peer's OCC options string under the lock.
+func (c *Client) serverOptsSeen() string {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.serverOpts
 }
 
 // enterDataStage opens the data stage and settles the two size parameters the
@@ -959,8 +1008,12 @@ func (c *Client) enterDataStage(pushOpts *routing.PushOptions) int {
 	// value remains an upper bound. This prevents a larger PUSH_REPLY value
 	// from undoing a user-selected MTU that avoids path fragmentation.
 	tunMTU := effectiveTunMTU(pushOpts.TunMTU, c.prof.TunMTU)
+	// c.compression, not pushOpts.Compression: the framing byte comes off the
+	// link budget whichever of the two sources asked for it, and for a
+	// profile-declared mode the push says nothing at all.
 	c.mssFix = c.effectiveMSSFix(
-		pushOpts.Mssfix, tunMTU, c.dataParams, c.rawConn.RemoteAddr(),
+		pushOpts.Mssfix, tunMTU, c.dataParams, c.compression,
+		c.rawConn.RemoteAddr(),
 	)
 
 	return tunMTU

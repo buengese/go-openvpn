@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/openlawsvpn/go-openlawsvpn/diag"
+	"github.com/openlawsvpn/go-openlawsvpn/internal/compress"
 	"github.com/openlawsvpn/go-openlawsvpn/internal/control"
 	"github.com/openlawsvpn/go-openlawsvpn/internal/datachannel"
 	"github.com/openlawsvpn/go-openlawsvpn/profile"
@@ -182,7 +183,7 @@ func TestNegotiatedInfoRecordsTheDigest(t *testing.T) {
 			if err != nil {
 				t.Fatalf("datachannel.ResolveParams(%q, %q): %v (%s)", tc.cipher, tc.digest, err, feature)
 			}
-			n := negotiatedInfo(&routing.PushOptions{}, 7, params, "none")
+			n := negotiatedInfo(&routing.PushOptions{}, 7, params, "none", compress.ModeNone)
 			if n.Cipher != tc.wantCipher {
 				t.Errorf("Cipher = %q, want %q", n.Cipher, tc.wantCipher)
 			}
@@ -194,7 +195,7 @@ func TestNegotiatedInfoRecordsTheDigest(t *testing.T) {
 
 	// No push reply, no negotiation. The field stays empty rather than
 	// reporting what the client would have used had it got that far.
-	if n := negotiatedInfo(nil, 0, datachannel.Params{}, "none"); n.Digest != "" {
+	if n := negotiatedInfo(nil, 0, datachannel.Params{}, "none", compress.ModeNone); n.Digest != "" {
 		t.Errorf("Digest = %q with no push reply; nothing was negotiated", n.Digest)
 	}
 }
@@ -395,6 +396,53 @@ func TestPushedTunnelAddressIsRedactedBeforeTheDeviceOpens(t *testing.T) {
 	for _, addr := range []string{v4, v6} {
 		if bytes.Contains(blob, []byte(addr)) {
 			t.Errorf("redacted report discloses the pushed tunnel address %q: %s", addr, blob)
+		}
+	}
+}
+
+// TestPeerCompressionClassifies pins how the peer's own options string is read.
+// The answer decides whether a framing byte goes on every data packet, and it
+// is recorded in the report so that a consumer and the data channel cannot
+// disagree about the same peer.
+func TestPeerCompressionClassifies(t *testing.T) {
+	const occ = "V4,dev-type tun,link-mtu 1558,tun-mtu 1500,proto UDPv4,%scipher AES-256-CBC," +
+		"auth SHA256,keysize 256,key-method 2,tls-server"
+	with := func(comp string) string { return strings.Replace(occ, "%s", comp, 1) }
+
+	for _, tt := range []struct{ name, in, want string }{
+		{"no options string at all", "", ""},
+		{"whitespace only", "   ", ""},
+		{"comp-lzo enabled", with("comp-lzo,"), "framing"},
+		// "comp-lzo no" is compression off and *framing on*: the peer still
+		// expects the leading byte, which is why OpenVPN writes it here at
+		// all. Reading it as "no framing" breaks every server that pushes it.
+		{"comp-lzo explicitly off", with("comp-lzo no,"), "framing"},
+		{"the v2 compress framework", with("compress,"), "framing"},
+		{"no compression declared", with(""), "none"},
+		{"both declared", with("compress,comp-lzo,"), "framing"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := peerCompression(tt.in); got != tt.want {
+				t.Errorf("peerCompression() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+// TestPeerCompressionNeverEchoesPeerText is the property that matters more than
+// any individual verdict: the options string is written by the peer, and the
+// answer reaches a report a caller may write down.
+func TestPeerCompressionNeverEchoesPeerText(t *testing.T) {
+	allowed := map[string]bool{"framing": true, "none": true, "": true}
+	for _, in := range []string{
+		"V4,comp-lzo evil\ninjected: line,cipher AES-256-CBC",
+		"comp-lzo " + string(rune(0)) + "nul",
+		"compress `rm -rf /`",
+		"V4," + string(make([]byte, 4096)),
+		"<script>alert(1)</script>,comp-lzo",
+	} {
+		if got := peerCompression(in); !allowed[got] {
+			t.Errorf("peerCompression(%q) = %q, which is outside the fixed token set", in, got)
 		}
 	}
 }

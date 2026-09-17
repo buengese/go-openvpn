@@ -20,6 +20,7 @@ import (
 
 	"github.com/openlawsvpn/go-openlawsvpn/device"
 	"github.com/openlawsvpn/go-openlawsvpn/diag"
+	"github.com/openlawsvpn/go-openlawsvpn/internal/compress"
 	"github.com/openlawsvpn/go-openlawsvpn/internal/control"
 	"github.com/openlawsvpn/go-openlawsvpn/internal/datachannel"
 	"github.com/openlawsvpn/go-openlawsvpn/internal/keymethod2"
@@ -533,6 +534,9 @@ func (c *Client) recordServerOpts(opts string) {
 	if opts == "" {
 		return
 	}
+	c.mu.Lock()
+	c.serverOpts = opts
+	c.mu.Unlock()
 	c.recorder().edit(func(r *diag.SessionReport) { r.ServerOpts = opts })
 }
 
@@ -545,7 +549,12 @@ func (c *Client) recordPush(raw string, opts *routing.PushOptions, peerID uint32
 	parsed := pushParsedOptions(raw)
 	unknown := pushUnknownOptions(raw)
 	params, _, _ := c.negotiateDataChannel(opts) //nolint:errcheck // an unsupported cipher is reported by its own stage failure
-	negotiated := negotiatedInfo(opts, peerID, params, c.controlWrapper().Name())
+	// The effective mode, not the pushed one: a server that pushes nothing
+	// leaves the profile's directive in force. An allow-compression refusal
+	// yields ModeNone here and its own ClassUnsupported failure at StageKeys.
+	compression, _ := c.effectiveCompression(opts) //nolint:errcheck // reported by startDataChannel's stage failure
+	negotiated := negotiatedInfo(opts, peerID, params, c.controlWrapper().Name(), compression)
+	negotiated.PeerCompression = peerCompression(c.serverOptsSeen())
 	c.recorder().edit(func(r *diag.SessionReport) {
 		r.Push.Raw = raw
 		r.Push.Parsed = parsed
@@ -757,6 +766,30 @@ func pushUnknownOptions(raw string) []string {
 	return out
 }
 
+// compressionName renders a compression mode for the report. compress.Mode
+// names itself with the directive that selects it, which is the vocabulary a
+// config file and a PUSH_REPLY both use.
+func compressionName(m compress.Mode) string {
+	return m.String()
+}
+
+// peerCompression reports what the peer's own options string said about
+// compression framing, as one of three fixed values.
+//
+// The decision is compress.PeerDeclaresFraming's, which the connection path
+// calls to resolve the framing it will use. Recording its answer here is what
+// keeps a consumer of the report from having to ask the question a second time
+// and getting a different answer.
+func peerCompression(serverOpts string) string {
+	if strings.TrimSpace(serverOpts) == "" {
+		return ""
+	}
+	if compress.PeerDeclaresFraming(serverOpts) {
+		return "framing"
+	}
+	return "none"
+}
+
 // negotiatedInfo describes what the two sides settled on for the data channel.
 //
 // params is what the client resolved the two sides down to, so the report
@@ -768,8 +801,14 @@ func pushUnknownOptions(raw string) []string {
 // constant: it reads "tls-auth" for a profile that carries one and "none"
 // otherwise, so a wrapped session can be told from an unwrapped one without
 // re-reading the profile.
-func negotiatedInfo(opts *routing.PushOptions, peerID uint32, params datachannel.Params, tlsWrap string) diag.NegotiatedInfo {
+//
+// compression is the *effective* framing — what compress.EffectiveMode made of
+// the profile's directive, the pushed one and allow-compression — and is
+// passed in because opts carries only what the server pushed, which for a
+// compressed session is very often nothing at all.
+func negotiatedInfo(opts *routing.PushOptions, peerID uint32, params datachannel.Params, tlsWrap string, compression compress.Mode) diag.NegotiatedInfo {
 	n := diag.NegotiatedInfo{PeerID: peerID, TLSWrap: tlsWrap}
+	n.Compression = compressionName(compression)
 	if opts == nil {
 		return n
 	}

@@ -109,13 +109,24 @@ and releases follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   legacy Netscape certificate-type extension with the SSL-server bit set; a
   certificate without the extension fails the check rather than passing it by
   default. Only the `server` form is read.
+- Data-channel compression framing. A server configured for compression frames
+  every data packet and drops what it cannot parse, so the framing decides
+  whether the tunnel carries anything at all, and most provider profiles
+  declare one. All four framings OpenVPN uses are now produced and
+  accepted: `comp-lzo`'s prepended byte, the swapping form that bare `compress`
+  and `compress lz4` use, and the two-byte v2 header of `compress lz4-v2` and
+  `compress stub-v2`. Nothing is ever compressed on send.
 - `Profile.Compression` and `Profile.AllowCompression`: the profile's own
   `comp-lzo`, `compress` and `allow-compression` directives are now read. They
   had no field at all, and an OpenVPN server does not push its compression
   setting, so a `comp-lzo` profile talking to a `comp-lzo` server previously
   agreed on nothing and sent unframed packets the server threw away.
   `allow-compression no` refuses a compressing algorithm from the profile and
-  from the `PUSH_REPLY` alike, and permits a framing stub.
+  from the `PUSH_REPLY` alike, and permits a framing stub. The profile decides
+  which framing is used and the peer decides whether there is one: a peer that
+  declares no compression in its options string gets none, whatever the profile
+  asks for, because the leading byte would otherwise be discarded and the
+  tunnel would carry nothing.
 - Support for the `P_DATA_V1` data-channel wire format, alongside `P_DATA_V2`.
   A server that pushes no peer-id speaks the older format, and the client now
   speaks it back: the format is chosen once, from the absence of a pushed
@@ -262,6 +273,10 @@ and releases follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - A server we cannot authenticate to is reported as a crypto failure at the
   reset stage rather than as a network timeout. A wrapped server and a dead one
   were previously indistinguishable.
+- `diag.NegotiatedInfo.Compression` reports the compression actually in force
+  rather than the pushed directive, and names it as a `.ovpn` file does —
+  `comp-lzo`, `compress`, `compress stub-v2`. It previously reported `none` for
+  every profile-declared mode, because nothing but the `PUSH_REPLY` was read.
 - `redirect-gateway` installs two /1 routes, `0.0.0.0/1` and `128.0.0.0/1`,
   instead of replacing the host's default with its own `0.0.0.0/0`, and covers
   IPv6 with four prefixes rather than a `::/0`. Each wins by longest-prefix
@@ -385,6 +400,11 @@ and releases follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `0x69` — *this payload is LZ4-compressed* — over plaintext on every packet of
   a `compress lz4` session. `0x69` means compressed and `0xFA` means not; both
   are now read from a peer's own captured bytes.
+- A payload a peer genuinely compressed is refused, naming the algorithm,
+  instead of being handed to the tunnel as an IP packet. The client links no
+  codec, so it previously stripped the marker and passed a compressed blob on
+  as though it were a packet: the tunnel came up, the session report was green,
+  and the traffic was garbage.
 - A profile with no usable certificate authority is now a configuration error
   raised before any socket is opened, instead of silently disabling certificate
   verification for that connection.

@@ -46,6 +46,7 @@ import (
 
 	"github.com/openlawsvpn/go-openlawsvpn/device"
 	"github.com/openlawsvpn/go-openlawsvpn/diag"
+	"github.com/openlawsvpn/go-openlawsvpn/internal/compress"
 	"github.com/openlawsvpn/go-openlawsvpn/internal/datachannel"
 	"github.com/openlawsvpn/go-openlawsvpn/internal/prf"
 	"github.com/openlawsvpn/go-openlawsvpn/internal/wrap"
@@ -213,6 +214,10 @@ type Client struct {
 	// applyPushReply from whether a peer-id was pushed. It is connection-scoped
 	// for the reason peerID is: a rekey renegotiates keys, not the format.
 	wire datachannel.WireFormat
+	// serverOpts is the peer's OCC options string from its key-method-2 packet.
+	// The report keeps a copy; this one is on the connection path, because the
+	// peer's expectation of a compression framing is decided from it alone.
+	serverOpts string
 	// dev is the tunnel device the data path moves IP packets through. What it
 	// installed to exist — an interface, routes, DNS — is the backend's
 	// business, and Close is the only thing the core knows about unwinding it.
@@ -222,6 +227,11 @@ type Client struct {
 	// relay goroutine (which owns all reads from rawConn). wireToTun drains
 	// it.
 	dataCh chan []byte
+	// compression is the framing the data channel actually installed: what
+	// compress.EffectiveMode made of the profile's directive, the server's
+	// pushed one and allow-compression. Settled once in startDataChannel. The
+	// report shows this rather than the pushed mode, which is often nothing.
+	compression compress.Mode
 	// mssFix is an explicit maximum-MSS clamp in bytes (0 = not configured).
 	// A server-pushed value takes precedence over a profile value.
 	mssFix int

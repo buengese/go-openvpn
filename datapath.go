@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/openlawsvpn/go-openlawsvpn/diag"
+	"github.com/openlawsvpn/go-openlawsvpn/internal/compress"
 	"github.com/openlawsvpn/go-openlawsvpn/internal/control"
 	"github.com/openlawsvpn/go-openlawsvpn/internal/crypto"
 	"github.com/openlawsvpn/go-openlawsvpn/internal/datachannel"
@@ -105,6 +106,27 @@ func (c *Client) clampMSS(pkt []byte) {
 	mssfix.Clamp(pkt, c.mssFix)
 }
 
+// failCompressedPayload ends the session because the peer sent a payload it
+// genuinely compressed, and no codec is linked to decompress it. It is
+// ClassUnsupported at StageData rather than a dropped packet — passing the
+// blob on as an IP packet produces a tunnel that comes up, reports green and
+// carries garbage — and Feature names the directive that selected the
+// algorithm, as the profile or the PUSH_REPLY spells it.
+func (c *Client) failCompressedPayload(ctx context.Context, cause error) {
+	feature := c.compression.String()
+	var cpe *compress.CompressedPayloadError
+	if errors.As(cause, &cpe) {
+		feature = c.compression.String() + " (" + cpe.Algorithm + ")"
+	}
+	// Recorded rather than returned — the only caller is a data-path goroutine
+	// with nowhere to hand an error — and recorded before the teardown, because
+	// the first failure recorded wins the outcome.
+	c.failUnsupported(diag.StageData, feature, //nolint:errcheck
+		"the peer compressed a data-channel payload and this client links no codec: "+cause.Error())
+	c.emit(Event{Type: EventLog, Message: "vpn: " + cause.Error()})
+	c.endSession(ctx, fmt.Errorf("vpn: wireToTun: %w", cause))
+}
+
 // wireToTun reads data packets — P_DATA_V2 or P_DATA_V1, whichever the session
 // settled on — from dataCh (fed by the relay goroutine inside tlsHandshake,
 // which is the sole reader of rawConn), decrypts them, and writes the plaintext
@@ -134,6 +156,13 @@ func (c *Client) wireToTun(ctx context.Context) {
 		case pkt := <-dataCh:
 			plain, err := c.manager.Decrypt(pkt)
 			if err != nil {
+				// A peer that genuinely compressed is not a dropped packet:
+				// no codec is linked, so nothing it sends can be carried.
+				// End the session, naming the algorithm.
+				if errors.Is(err, compress.ErrCompressed) {
+					c.failCompressedPayload(ctx, err)
+					return
+				}
 				// A replay drop reaches us as an ordinary decrypt error, so
 				// diag.Counters.Replays stays zero and this tally covers both.
 				c.decryptFailures.Add(1)
@@ -376,11 +405,12 @@ const (
 // TCP headers — before clamping (openvpn-2.6.22 src/openvpn/mss.c:286-332),
 // deriving 1336 from `mssfix 1400` rather than 1400. The overhead here is
 // computed from the negotiated cipher, digest and wire format.
-func (c *Client) effectiveMSSFix(pushedMSS, tunMTU int, dcp datachannel.Params, remoteAddr net.Addr) int {
+func (c *Client) effectiveMSSFix(pushedMSS, tunMTU int, dcp datachannel.Params, comp compress.Mode, remoteAddr net.Addr) int {
 	o := mssfix.Overhead{
-		TCPTransport: c.activeProto() == profile.ProtoTCP,
-		PeerID:       dcp.Wire == datachannel.WireDataV2,
-		AEAD:         dcp.Spec.Mode == crypto.ModeAEAD,
+		TCPTransport:       c.activeProto() == profile.ProtoTCP,
+		PeerID:             dcp.Wire == datachannel.WireDataV2,
+		AEAD:               dcp.Spec.Mode == crypto.ModeAEAD,
+		CompressionFraming: comp.Overhead() > 0,
 		// Only the derived defaults below measure the outer headers: an
 		// explicit "mssfix N" measures the tunnel packet alone unless it says
 		// "mtu" (options.c:7318-7335, openvpn3 ssl/proto.hpp:2713).

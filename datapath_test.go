@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/openlawsvpn/go-openlawsvpn/diag"
+	"github.com/openlawsvpn/go-openlawsvpn/internal/compress"
 	"github.com/openlawsvpn/go-openlawsvpn/internal/control"
 	"github.com/openlawsvpn/go-openlawsvpn/internal/datachannel"
 	"github.com/openlawsvpn/go-openlawsvpn/profile"
@@ -518,7 +519,7 @@ func TestEffectiveMSSFixFollowsTheReference(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			c := &Client{prof: tc.prof, dataParams: gcm}
-			if got := c.effectiveMSSFix(tc.pushedMSS, tc.tunMTU, gcm, v4); got != tc.wantMSS {
+			if got := c.effectiveMSSFix(tc.pushedMSS, tc.tunMTU, gcm, compress.ModeNone, v4); got != tc.wantMSS {
 				t.Fatalf("effectiveMSSFix() = %d, want %d", got, tc.wantMSS)
 			}
 		})
