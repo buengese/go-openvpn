@@ -8,6 +8,20 @@ and releases follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- A username and password can now be supplied through a front door that could
+  not take one. The library has driven `auth-user-pass` profiles since
+  `CredentialsFn` was added, but the gomobile binding had no way to pass one
+  across the language boundary, so every provider that asks for a password was
+  unreachable from Android and iOS.
+  - `MobileClient.SetCredentials(username, password)` in the gomobile binding,
+    a method rather than a callback because gomobile cannot bind a function
+    value.
+
+  `Connect` is unchanged, so certificate and SAML profiles are unaffected and
+  existing callers keep working. The credentials answer every attempt, so a
+  reconnect does not prompt again; an empty username or password is refused
+  rather than presented to a server as a blank credential; and both halves are
+  dropped when the session ends.
 - `saml.ACSServer.Close()`: releases the ACS listener on 127.0.0.1:35001 and
   drops any connection still open on it. `NewACSServer` binds the port so the
   caller learns it is unavailable before opening a browser, but a caller that

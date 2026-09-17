@@ -1,4 +1,4 @@
-//go:build android || darwin
+//go:build android || darwin || mobileapi
 
 // The gomobile binding: MobileClient and MobileCallbacks.
 //
@@ -6,19 +6,22 @@
 // xcframework, and GOOS=darwin builds the macOS variant; Go satisfies the
 // darwin constraint under GOOS=ios too, so "android || darwin" is exactly
 // those three. Desktop builds exclude the file to keep MobileClient out of the
-// Linux library's API.
+// Linux library's API, and the mobileapi tag builds the same surface on the
+// host so that it can be tested (`make test-mobileapi`).
 //
 // gomobile bind requires that exported types use only basic types and slices;
 // channels, maps and function values do not cross the language boundary. That
 // is why this file exists: it wraps the Client API into a type that
 // communicates in strings — JSON for structured data, plain error strings for
-// failures.
+// failures — and why credentials arrive through SetCredentials rather than
+// through a callback the way CredentialsFn does in Go.
 package vpn
 
 import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"sync"
 
 	"github.com/openlawsvpn/go-openlawsvpn/device"
 	"github.com/openlawsvpn/go-openlawsvpn/device/fd"
@@ -51,7 +54,12 @@ type MobileCallbacks interface {
 // Which methods a profile needs depends on how it authenticates:
 //
 //	certificate    connect()
+//	user/password  setCredentials(user, pass), then connect()
 //	federated      startSAMLFlow(), open the URL, then completeSAMLFlow(token)
+//
+// A username/password profile that reaches connect() without setCredentials is
+// refused before a socket is opened: no answer a server could give would
+// supply the password.
 //
 // From Android/Kotlin, a federated profile:
 //
@@ -68,6 +76,12 @@ type MobileClient struct {
 	ctx    context.Context
 	cancel context.CancelFunc
 	cb     MobileCallbacks
+
+	// mu guards creds, which SetCredentials writes from the host's UI thread
+	// and the credential callback reads from whichever goroutine is running
+	// the attempt.
+	mu    sync.Mutex
+	creds Credentials
 }
 
 // NewMobileClient creates a MobileClient from the .ovpn profile content string.
@@ -123,9 +137,40 @@ func NewMobileClient(profileContent string, cb MobileCallbacks) *MobileClient {
 	}
 }
 
+// SetCredentials supplies the username and password a profile authenticates
+// with, and must be called before Connect. It is a method rather than the
+// callback the Go API uses because gomobile cannot bind a function value
+// across the language boundary; either way the values are read once per
+// connection attempt, so a reconnect uses them again and a session that
+// outlives several renegotiations never prompts. Both are required, and
+// Disconnect drops them.
+//
+// Returns "" on success, or an error description on failure.
+func (m *MobileClient) SetCredentials(username, password string) string {
+	if username == "" || password == "" {
+		return "vpn: SetCredentials: username and password are both required"
+	}
+	m.mu.Lock()
+	m.creds = Credentials{Username: username, Password: password}
+	m.mu.Unlock()
+
+	// Installed once: the callback reads whatever SetCredentials last stored,
+	// so calling it again replaces the answer without rebuilding the client.
+	m.inner.CredentialsFn = func(context.Context) (Credentials, error) {
+		m.mu.Lock()
+		defer m.mu.Unlock()
+		if m.creds.Username == "" {
+			return Credentials{}, fmt.Errorf("vpn: no credentials set; call SetCredentials before connecting")
+		}
+		return m.creds, nil
+	}
+	return ""
+}
+
 // Connect dials, authenticates, and brings up the VPN tunnel. It is the whole
-// connection for a certificate profile; a federated profile needs a browser in
-// the middle, which the host runs itself.
+// connection for a certificate profile, and for a username/password profile
+// once SetCredentials has supplied them; a federated profile needs a browser
+// in the middle, which the host runs itself.
 //
 // Returns "" on success, or an error description on failure.
 func (m *MobileClient) Connect() string {
@@ -183,6 +228,11 @@ func (m *MobileClient) CompleteSAMLFlow(samlToken string) string {
 // Returns "" on success, or an error description on failure.
 func (m *MobileClient) Disconnect() string {
 	m.cancel()
+	// The session is over: this copy of the password does not outlive the
+	// connection it was given for.
+	m.mu.Lock()
+	m.creds = Credentials{}
+	m.mu.Unlock()
 	if err := m.inner.Disconnect(); err != nil {
 		return err.Error()
 	}

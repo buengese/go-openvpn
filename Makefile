@@ -19,7 +19,7 @@ ifndef ANDROID_NDK_HOME
   endif
 endif
 
-.PHONY: test-mock test-e2e test-privileged test-soak all aar aar-sha256 cli build-macos-cli relay-server run-local-relay check-platforms test lint clean \
+.PHONY: test-mock test-mobileapi test-e2e test-privileged test-soak all aar aar-sha256 cli build-macos-cli relay-server run-local-relay check-platforms test lint clean \
         build-bins test-integration-cli matrix-images matrix-clean prf-vectors \
         tls-wrap-vectors comp-vectors \
 
@@ -81,6 +81,14 @@ check-platforms:
 ## Run the tests that need no tag, no Docker and no root. Fast; the default gate.
 test:
 	go test -race ./...
+	$(MAKE) test-mobileapi
+
+## The gomobile surface. It is excluded from desktop builds so that MobileClient
+## stays out of the Linux library's API, which also keeps it out of every test
+## run. The mobileapi tag builds the same file on the host so it can be tested;
+## gomobile itself never sets it.
+test-mobileapi:
+	go test -race -tags=mobileapi .
 
 ## Mock-server pass: the AWS CRV1 gate. No Docker. See docs/testing.md.
 test-mock:
