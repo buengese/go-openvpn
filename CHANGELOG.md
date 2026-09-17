@@ -62,6 +62,10 @@ and releases follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - `Profile.FileRefs`: which of the `ca`, `cert` and `key` directives named a
   file, and for each whether the file was read or an inline block superseded
   it. The name itself is not recorded.
+- `Profile.VerifyX509NameMatch` and `profile.ParseX509NameMatch`: the
+  directive's match type, which nothing parsed before. A type that is none of
+  the three is refused when the profile is parsed rather than guessed at, as
+  OpenVPN refuses it.
 - `Profile.Compression` and `Profile.AllowCompression`: the profile's own
   `comp-lzo`, `compress` and `allow-compression` directives are now read. They
   had no field at all, and an OpenVPN server does not push its compression

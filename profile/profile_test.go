@@ -803,6 +803,63 @@ func TestParseMalformedTagsAreNeitherBlocksNorDirectives(t *testing.T) {
 	}
 }
 
+// TestParseVerifyX509NameMatchType covers the directive's second field, which
+// decides which of three different checks the same value asks for. The omitted
+// case is the one to get right: OpenVPN's default is "subject", not "name", so
+// a line with no type asks for a whole-DN comparison.
+func TestParseVerifyX509NameMatchType(t *testing.T) {
+	for _, tc := range []struct {
+		line string
+		want profile.X509NameMatch
+	}{
+		{"verify-x509-name Server-1", profile.X509NameSubject},
+		{"verify-x509-name Server-1 subject", profile.X509NameSubject},
+		{"verify-x509-name Server-1 name", profile.X509NameCN},
+		{"verify-x509-name Server-1 name-prefix", profile.X509NameCNPrefix},
+	} {
+		t.Run(tc.line, func(t *testing.T) {
+			p, err := profile.ParseString("remote h 443\n" + tc.line + "\n")
+			if err != nil {
+				t.Fatalf("ParseString: %v", err)
+			}
+			if p.VerifyX509Name != "Server-1" {
+				t.Errorf("VerifyX509Name = %q, want %q", p.VerifyX509Name, "Server-1")
+			}
+			if p.VerifyX509NameMatch != tc.want {
+				t.Errorf("VerifyX509NameMatch = %v, want %v", p.VerifyX509NameMatch, tc.want)
+			}
+		})
+	}
+}
+
+// TestParseVerifyX509NameRejectsAnUnknownMatchType records the deliberate
+// choice not to guess: falling back to "subject" applies a check the profile
+// did not ask for, and falling back to no check at all drops a certificate
+// check silently. OpenVPN refuses the option outright.
+func TestParseVerifyX509NameRejectsAnUnknownMatchType(t *testing.T) {
+	_, err := profile.ParseString("remote h 443\nverify-x509-name Server-1 san\n")
+	if err == nil {
+		t.Fatal("an unrecognised verify-x509-name match type parsed")
+	}
+	if !strings.Contains(err.Error(), "verify-x509-name") {
+		t.Errorf("error does not name the directive: %v", err)
+	}
+}
+
+// TestX509NameMatchRoundTrips keeps String and ParseX509NameMatch agreeing, so
+// that the value the capability registry records is the spelling a profile can
+// actually contain.
+func TestX509NameMatchRoundTrips(t *testing.T) {
+	for _, m := range []profile.X509NameMatch{
+		profile.X509NameSubject, profile.X509NameCN, profile.X509NameCNPrefix,
+	} {
+		got, ok := profile.ParseX509NameMatch(m.String())
+		if !ok || got != m {
+			t.Errorf("ParseX509NameMatch(%q) = %v, %v; want %v, true", m.String(), got, ok, m)
+		}
+	}
+}
+
 // hand-window sets the ceiling on how long a renegotiated key waits before it
 // carries traffic. Unparsed, a profile asking for a shorter one silently gets
 // the reference's 60 and, the capability registry being closed, is graded fatal

@@ -380,8 +380,20 @@ func (a *assembler) directive(d Directive) error {
 			p.ForceSAMLFlow = true
 		}
 	case "verify-x509-name":
+		// The match type is the whole point of the second field: the
+		// same value means three different checks depending on it, and
+		// reading only fields[1] silently picks one of them.
 		if len(fields) >= 2 {
+			var typeArg string
+			if len(fields) >= 3 {
+				typeArg = fields[2]
+			}
+			match, ok := ParseX509NameMatch(typeArg)
+			if !ok {
+				return fmt.Errorf("profile: verify-x509-name: unrecognised match type %q, want subject, name or name-prefix", typeArg)
+			}
 			p.VerifyX509Name = fields[1]
+			p.VerifyX509NameMatch = match
 		}
 	case "dhcp-option":
 		// The same syntax the server pushes, so the same parser reads it.

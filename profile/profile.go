@@ -133,6 +133,67 @@ func ParseProto(s string) (Proto, bool) {
 	}
 }
 
+// X509NameMatch is the match type of the --verify-x509-name directive: which
+// part of the server certificate's subject the directive's value is compared
+// against.
+//
+// It is never a SAN. OpenVPN's verify_cert compares the value against the
+// subject DN, or against the common name taken out of that DN, and no part of
+// the check looks at subjectAltName.
+type X509NameMatch int
+
+const (
+	// X509NameSubject compares the value against the whole subject DN. It is
+	// the zero value because it is also OpenVPN's default: a
+	// --verify-x509-name line with no second argument means this one.
+	X509NameSubject X509NameMatch = iota
+	// X509NameCN compares the value against the certificate's common name,
+	// spelled "name" in the profile.
+	X509NameCN
+	// X509NameCNPrefix requires the certificate's common name to start with
+	// the value, spelled "name-prefix" in the profile.
+	X509NameCNPrefix
+)
+
+// String returns the directive spelling of the match type, so that the value
+// a profile round-trips back to is the text the profile contained.
+func (m X509NameMatch) String() string {
+	switch m {
+	case X509NameSubject:
+		return "subject"
+	case X509NameCN:
+		return "name"
+	case X509NameCNPrefix:
+		return "name-prefix"
+	default:
+		return "unknown"
+	}
+}
+
+// ParseX509NameMatch normalises the optional second argument of
+// --verify-x509-name. The empty string is the default, which is "subject".
+//
+// An unrecognised type is refused rather than defaulted: defaulting to
+// subject applies a stricter check than the profile asked for, and defaulting
+// to no check drops a certificate check on the floor. OpenVPN refuses it too
+// ("Unrecognized --verify-x509-name type" in options.c).
+//
+// The keyword is matched without regard to case, where OpenVPN's streq is
+// exact: a spelling OpenVPN would refuse to start on is accepted here, and
+// the certificate check is the same one either way.
+func ParseX509NameMatch(s string) (X509NameMatch, bool) {
+	switch strings.ToLower(strings.TrimSpace(s)) {
+	case "", "subject":
+		return X509NameSubject, true
+	case "name":
+		return X509NameCN, true
+	case "name-prefix":
+		return X509NameCNPrefix, true
+	default:
+		return 0, false
+	}
+}
+
 // Remote is one --remote line: a host, a port, and optionally a protocol
 // that overrides the profile's own.
 //
@@ -329,6 +390,12 @@ type Profile struct {
 	// issued that set it to the certificate's own CN, which is precisely not
 	// the endpoint they are dialled at.
 	VerifyX509Name string
+
+	// VerifyX509NameMatch is the directive's optional second argument, which
+	// says which part of the subject VerifyX509Name is compared against.
+	// The zero value is X509NameSubject, matching OpenVPN's default for a
+	// line that omits it.
+	VerifyX509NameMatch X509NameMatch
 
 	// ForceSAMLFlow is set when the profile contains 'auth-federate' or
 	// 'x-openlawsvpn-flow saml'. It forces FlowAWSSSO regardless of the remote
