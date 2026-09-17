@@ -23,6 +23,13 @@ and releases follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - A control-channel replay window, separate from the reliable layer's own
   sequence numbers. Replayed and stale-timestamped control packets are rejected
   and counted in `diag.Counters` rather than dropped silently.
+- The `device` package: the tunnel-device seam. `device.Backend` turns the
+  parameters a server pushed into a `device.Device` — raw IP packets, no framing
+  — so the client core no longer knows whether they reach a kernel interface or
+  a descriptor a host handed it, and everything privileged lives behind a
+  backend and is unwound in `Device.Close`. Two ship with it: `device/kernel`, a
+  kernel TUN with netlink routes and host DNS, and `device/fd`, a descriptor
+  whose host owns its addressing; `device.Kind` names which one a session used.
 - `push-continuation` reassembly, in `routing.PushAccumulator`. A server whose
   reply does not fit OpenVPN's 1024-byte bundle splits it across several
   `PUSH_REPLY` messages, each but the last ending `push-continuation 2`; the

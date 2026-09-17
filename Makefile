@@ -88,7 +88,7 @@ integration-test:
 
 ## Privileged pass: needs root. See docs/testing.md.
 test-privileged:
-	sudo OPENLAWSVPN_PRIVILEGED_TESTS=1 go test -v -tags=privileged -timeout 60s ./tun
+	sudo OPENLAWSVPN_PRIVILEGED_TESTS=1 go test -v -tags=privileged -timeout 60s ./tun ./device/kernel
 
 ## Build the pinned OpenVPN 2.4/2.5/2.6 server images for the e2e matrix.
 ## Slow (source builds); run once, then matrix entries start in well under a
