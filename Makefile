@@ -20,7 +20,7 @@ ifndef ANDROID_NDK_HOME
 endif
 
 .PHONY: all aar aar-sha256 cli build-macos-cli relay-server run-local-relay check-platforms test lint clean \
-        build-bins test-integration-cli
+        build-bins test-integration-cli matrix-images matrix-clean \
 
 all: aar
 
@@ -84,6 +84,18 @@ test:
 ## Run integration tests (starts local mock server, no Docker needed)
 integration-test:
 	go test -v -tags=integration -timeout 120s .
+
+## Build the pinned OpenVPN 2.4/2.5/2.6 server images for the e2e matrix.
+## Slow (source builds); run once, then matrix entries start in well under a
+## second. Everything is pinned in docker/openvpn-server/versions.env.
+matrix-images:
+	bash docker/openvpn-server/build.sh
+
+## Remove any matrix containers, networks and images left behind.
+matrix-clean:
+	-docker ps -aq --filter label=com.openlawsvpn.testenv=matrix | xargs -r docker rm -f
+	-docker network ls -q --filter label=com.openlawsvpn.testenv=matrix | xargs -r docker network rm
+	-docker images -q openlawsvpn-test/openvpn-server | xargs -r docker rmi -f
 
 ## Build CLI + mock-server binaries into bin/
 build-bins:
