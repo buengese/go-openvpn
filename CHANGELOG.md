@@ -6,6 +6,19 @@ and releases follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- `diag.ClassServerBusy` and `diag.Error.RetryAfter`: a server that answers
+  `PUSH_REQUEST` with `AUTH_FAILED,TEMP` has declined this attempt and asked us
+  back, which is neither a credential rejection nor a protocol fault. It now has
+  its own class, carries the backoff the server named, and is retried — see
+  Fixed below.
+- New exported `diag` package: the diagnostics vocabulary for connection
+  attempts — typed error classes, connection stages, capability gaps, and a
+  `SessionReport` that redacts credentials, certificates and pushed options
+  before serialisation. Every connection attempt now produces one, on success
+  and on failure alike, reachable through `Client.Report()`.
+
 ### Removed
 
 - The Linux desktop app — the GTK GUI, the D-Bus system daemon and the RPM/AUR
@@ -17,6 +30,8 @@ and releases follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   packages from this module. Nothing in this tree carries a version any more:
   the release tag is the version, and the release workflows no longer check it
   against a spec, a PKGBUILD or a Cargo manifest.
+
+### Fixed
 
 ## [1.2.3] - 2026-08-19
 
