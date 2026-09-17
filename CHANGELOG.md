@@ -24,8 +24,17 @@ and releases follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `SessionReport` that redacts credentials, certificates and pushed options
   before serialisation. Every connection attempt now produces one, on success
   and on failure alike, reachable through `Client.Report()`.
+- Support for stock OpenVPN 2.4 and 2.5 servers. The client now performs the
+  classic OpenVPN key derivation, so it connects to deployments that do not
+  offer the TLS keying-material exporter — which is every OpenVPN server before
+  2.6 and most commercial providers.
 - Data-channel breadth: AES-128, AES-192 and AES-256 in both GCM and CBC, with
   CBC authenticated by HMAC-SHA1, HMAC-SHA256 or HMAC-SHA512.
+- Support for `auth-user-pass` through a new `Client.CredentialsFn` callback.
+  The callback is asked for a username and password once per attempt, before
+  the key-method-2 packet is sent, and may block on a keychain or a user
+  interface. A profile that needs credentials and has none fails before it
+  dials, because dialing cannot help.
 - A control-channel replay window, separate from the reliable layer's own
   sequence numbers. Replayed and stale-timestamped control packets are rejected
   and counted in `diag.Counters` rather than dropped silently.
@@ -50,6 +59,11 @@ and releases follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - `profile.ParseProto`, the single normaliser for both places a profile names a
   transport. The address-family spellings — `udp4`, `tcp6-client` and the rest
   — now parse instead of being rejected, reduced to the transport they name.
+- Remote failover. A profile with several `remote` lines now tries them in
+  order until one completes the handshake, each with its own protocol and port,
+  shuffled first when the profile carries `remote-random`. A `Config` or
+  `Unsupported` failure stops the loop, because a second endpoint cannot help
+  with a profile the client cannot honour; `Network` and `TLS` move on.
 - `netstack.Net.Ping` and `netstack.Net.Gateway`: an ICMP echo through the
   tunnel, and the peer's own tunnel-side address to send it to. The payload is
   chosen by the caller and echoed back verbatim, which makes it a measurement
@@ -72,10 +86,21 @@ and releases follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - `Profile.FileRefs`: which of the `ca`, `cert` and `key` directives named a
   file, and for each whether the file was read or an inline block superseded
   it. The name itself is not recorded.
+- `verify-x509-name` is now checked. The server certificate's subject must
+  match the value, in whichever of OpenVPN's three ways the directive's second
+  argument asks for: `subject` compares the whole distinguished name, `name`
+  compares the common name, and `name-prefix` requires the common name to start
+  with the value. An omitted second argument means `subject`, which is
+  OpenVPN's default. A mismatch is now refused during the TLS handshake instead
+  of connecting.
 - `Profile.VerifyX509NameMatch` and `profile.ParseX509NameMatch`: the
   directive's match type, which nothing parsed before. A type that is none of
   the three is refused when the profile is parsed rather than guessed at, as
   OpenVPN refuses it.
+- `ns-cert-type server` is now checked. The server certificate must carry the
+  legacy Netscape certificate-type extension with the SSL-server bit set; a
+  certificate without the extension fails the check rather than passing it by
+  default. Only the `server` form is read.
 - `Profile.Compression` and `Profile.AllowCompression`: the profile's own
   `comp-lzo`, `compress` and `allow-compression` directives are now read. They
   had no field at all, and an OpenVPN server does not push its compression
@@ -83,6 +108,19 @@ and releases follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   agreed on nothing and sent unframed packets the server threw away.
   `allow-compression no` refuses a compressing algorithm from the profile and
   from the `PUSH_REPLY` alike, and permits a framing stub.
+- An RFC 5705 keying-material exporter for TLS 1.2, used only where Go's own
+  refuses: a peer that pushes `key-derivation tls-ekm` and then negotiates TLS
+  1.2 without RFC 7627 Extended Master Secret. `crypto/tls` declines that
+  combination by policy and OpenSSL performs it, so stock openvpn connects
+  where this client failed `crypto` at `keys`. The refusal is detected from the
+  ServerHello rather than from Go's error text, which is not part of its API and
+  covers a second, unrelated case. `diag.TLSInfo.EMSExportFallback` records when
+  it was used.
+- `Client.Attempts()`: one record per attempt of the current or most recent
+  `Reconnect`, in order, each carrying its own `diag.SessionReport`. `Report()`
+  still answers for the most recent attempt; the reason an earlier attempt
+  failed used to be overwritten by whatever happened next, which is the one
+  thing a caller wanted from a reconnect loop.
 - The `device` package: the tunnel-device seam. `device.Backend` turns the
   parameters a server pushed into a `device.Device` — raw IP packets, no framing
   — so the client core no longer knows whether they reach a kernel interface or
@@ -110,6 +148,13 @@ and releases follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   whatever the profile said. The pushed digest outranks the profile's, as
   OpenVPN does it, and the `auth` case matches the whole keyword so `auth-token`
   cannot land in it.
+- The liveness and handshake directives a profile states are read instead of
+  ignored — `ping`, `ping-restart`, `ping-exit`, `keepalive`, `hand-window` and
+  `mssfix`'s second word — into `Profile.PingInterval`, `PingTimeout`,
+  `PingExit`, `HandWindowSec` and `MSSFixMode`. `keepalive N M` sets both timers
+  and outranks a `ping` or `ping-restart` anywhere in the file, with no
+  server-side doubling. The keepalive loop and the rekey hand-window read them
+  per value, ahead of the pushed figure and the built-in default.
 
 ### Changed
 
@@ -119,6 +164,14 @@ and releases follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   whichever backend needs one and handed back as the second result, because only
   that backend knows whether it made a backup or what it was called.
 
+- **Breaking:** `Client.TUNSetup` is now `Client.Device`, a `device.Backend`.
+  The callback was `func(ifconfigJSON string, mtu int) (*tun.Device, error)`: it
+  returned a descriptor and the client core then did the privileged work itself
+  — addressing, routes, DNS — and unwound it in its own cleanup. A backend owns
+  all of that behind `Open` and unwinds it in `Device.Close`. A host that
+  supplied a `TUNSetup` sets a `fd.Backend{Establish: …}` instead, and a nil
+  `Device` still means the kernel backend.
+
 - **Breaking:** `Profile.ForceSAMLFlow` is now `Profile.Federated`, and
   `Profile.DetectFlow()` is now `Profile.AuthFlow()`. The old names described
   a SAML override bolted onto a client that assumed AWS; the new ones name what
@@ -127,7 +180,10 @@ and releases follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - **Breaking:** `Profile.AuthFlow()` reads the profile and nothing else. It
   used to answer "federated" for a remote whose hostname matched
   `cvpn-endpoint-*.amazonaws.com`, which put one vendor's endpoint naming
-  inside the file-format parser.
+  inside the file-format parser. The rule now lives with the method that needs
+  it, as `saml.IsAWSEndpoint`, and the client applies it when choosing how to
+  authenticate — so an AWS profile missing its `auth-federate` line still
+  connects, and a profile means what it says.
 - **Breaking:** the `profile.AuthFlow` constants are reordered so that
   `FlowCertAuth` is the zero value, followed by `FlowUserPass` and
   `FlowFederated`. A flow variable nobody set now means an ordinary OpenVPN
@@ -140,12 +196,42 @@ and releases follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   any server can carry, and `x-openlawsvpn-flow saml` exists so that one does.
   This completes the rename above — the constant was the last name in the
   package still asserting whose endpoint it was.
+- `Reconnect` now works for every authentication flow. It reconnected only the
+  AWS SSO flow, from a cached SAML assertion, and answered every other profile
+  with `ErrReauthRequired` — a certificate-only profile was told to run a
+  browser flow it does not have. Each flow now resumes from its own state: the
+  AWS flow from the assertion, its CRV1 state id and the Phase 1 IP, and the
+  other two from the credentials already held, so a dropped link does not put a
+  second prompt in front of the user.
+- `Reconnect` retries a failure only when a second attempt could resolve it,
+  reading the class rather than counting: `Network` and `TLS` are retried,
+  `Config` and `Unsupported` are not, and a rejected credential stops the loop
+  unless it came from `CredentialsFn`, which may be asked once for a different
+  one. It previously retried everything but a rejected credential, so an
+  unsupported cipher was dialled again on a doubling backoff until
+  `MaxReconnects` ran out — by default, forever.
+- Server certificates are now verified the way OpenVPN verifies them — the
+  chain against the profile's CA, plus the `serverAuth` extended key usage when
+  the profile carries `remote-cert-tls server`. The endpoint hostname is no
+  longer matched against the certificate's subject alternative names, because
+  OpenVPN performs no such check and it rejected valid provider endpoints that
+  stock openvpn connects to.
+- `verify-x509-name` no longer sets the TLS server name. It matches a subject
+  DN, not a SAN, and using it for SNI conflated the two. Profiles that relied
+  on that coincidence now send their own endpoint hostname as SNI.
 - The `auth` digest now defaults to SHA1, matching OpenVPN, where it previously
   defaulted to SHA256. `Profile.AuthSet` distinguishes a profile that named a
   digest from one that did not.
+- The options string sent to the server, and the advertised `IV_CIPHERS` list,
+  now describe the cipher, digest and key size actually in use. `IV_CIPHERS`
+  previously advertised AES-192-GCM and CHACHA20-POLY1305, neither of which the
+  client could perform.
 - A profile carrying both a client certificate and `auth-user-pass` is now
   treated as needing credentials. It was previously read as certificate-only
   and could never present a password.
+- The AWS Client VPN literals `N/A` and `ACS::35001` are sent only on the AWS
+  SSO flow. Every other flow previously sent them too; a certificate-only
+  profile now sends empty credentials, as stock OpenVPN does.
 - `redirect-gateway` installs two /1 routes, `0.0.0.0/1` and `128.0.0.0/1`,
   instead of replacing the host's default with its own `0.0.0.0/0`, and covers
   IPv6 with four prefixes rather than a `::/0`. Each wins by longest-prefix
@@ -177,9 +263,29 @@ and releases follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   reads it — a nil-safe method rather than a second field, because two ways to
   say one thing are two things that can disagree. A caller that tested the
   field calls the method.
+- `vpn.Client.ResetForTest` and `vpn.Client.ConnectPhase2Reuse`. `ResetForTest`
+  restored the first exchange's state so that a SAML assertion could be
+  presented a second time; nothing in the tree called it, under any build tag,
+  and `Reconnect` now reseeds that state itself from the method's own resumption
+  copy. `ConnectPhase2Reuse` was a second name for `ConnectPhase2`'s one-line
+  body — the two were identical calls to the same bring-up — and had no caller
+  outside the tests. Use `ConnectPhase2`, whose documentation now describes what
+  it does rather than which of the two callers it was written for.
 
 ### Fixed
 
+- A server that ends an established session is noticed on every connection, not
+  only on federated ones. Certificate and username/password profiles — every
+  non-AWS provider — authenticate in one exchange, and that path handed the
+  session monitor a replay of the `PUSH_REPLY` rather than the connection it
+  came off, so the monitor reached end-of-stream before the first data packet
+  and watched nothing for the rest of the session. A mid-session `AUTH_FAILED`,
+  `RESTART` or `HALT` went unread: the tunnel went quiet and the disconnect
+  waited on the keepalive or ping-restart timer, which then reported it as a
+  network fault tens of seconds later. As a consequence `diag.ClassPeerClosed`
+  — the class for a peer that ended a working session on purpose — is now
+  reachable on these profiles, where it previously could not be produced at
+  all, and a revoked session is reported as `auth` rather than `network`.
 - Re-authenticating against an AWS endpoint no longer loses the ACS port to
   itself. `saml.ACSServer.Wait` returned while a separate goroutine was still
   closing the listener, so the next `NewACSServer` — AWS hardcodes the callback
@@ -192,6 +298,38 @@ and releases follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   page had left the connection, so a user who had just authenticated could be
   shown a connection error instead. Measured at roughly 1 round in 1000; clean
   in 2000 now.
+- A temporary rejection is no longer treated as a protocol fault. A server
+  answering `PUSH_REQUEST` with `AUTH_FAILED,TEMP` — what a busy server sends —
+  was classified `protocol`, which got both following decisions wrong at once:
+  the client gave up after one attempt in a few milliseconds against a server
+  that had asked for a five-second backoff, while a multi-remote profile burned
+  every remaining endpoint on it. The server's backoff is now honoured, capped
+  by the existing ceiling.
+- Three crashes and a leak in teardown: `Connect` racing `Disconnect` could
+  panic with "close of closed channel"; a peer still sending data during a
+  teardown could panic with "send on closed channel"; the TLS master secret was
+  read and zeroed without synchronisation; and a `SAMLTokenFn` that returned an
+  error left the connection and four goroutines running, with the client stuck
+  and unable to connect again.
+- `Disconnect` and `WaitForDisconnect` no longer report an error on a tunnel
+  that was carrying traffic when it was closed. A goroutine woken by its own
+  teardown was recording the resulting write failure as the session's outcome:
+  measured at 18 spurious errors in 50 closes under load, and none in 50 idle,
+  which is why no test had seen it. A genuine transport failure is still
+  reported — the rule is stated in terms of the cancelled context and never in
+  terms of the error, because the two produce identical error text.
+- A renegotiation started by the *server* is now answered instead of dropped.
+  A `P_CONTROL_SOFT_RESET_V1` arriving for a key_id with no control session
+  was discarded, so against a server that also renegotiates on a short timer
+  the client lost the race about two times in five and then waited out its own
+  30-second deadline for a packet it had already thrown away. Measured at 8
+  failures in 20 before, and 0 in 20 after.
+- `diag.NegotiatedInfo.Digest` is now filled in. The field was declared and
+  never written, so every session report claimed no data-channel digest had
+  been negotiated — including on CBC connections, where the digest decides the
+  HMAC key length and the tag length on the wire. It now records the digest the
+  connection actually installed, and stays empty for an AEAD cipher, which
+  resolves none.
 - The third field of a `remote` line — OpenVPN's per-remote protocol — is now
   read instead of discarded. A profile whose only statement of transport was
   `remote <host> <port> tcp-client` was dialed over UDP, and the resulting
@@ -204,12 +342,18 @@ and releases follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `0x69` — *this payload is LZ4-compressed* — over plaintext on every packet of
   a `compress lz4` session. `0x69` means compressed and `0xFA` means not; both
   are now read from a peer's own captured bytes.
+- A profile with no usable certificate authority is now a configuration error
+  raised before any socket is opened, instead of silently disabling certificate
+  verification for that connection.
 - Data-channel keys for AES-CBC were taken from the wrong halves of the key
   block, transposing the transmit and receive HMAC keys. The mapping now exists
   in one place and both cipher modes read it.
 - The server's key-method-2 packet is now read field by field instead of being
   drained into a fixed buffer, so a truncated packet is reported as a protocol
   error rather than parsed from whatever had arrived.
+- Key renegotiation derives its keys through the same code as the initial
+  handshake. It previously carried a second copy that would have installed
+  AES-GCM keys on a CBC connection.
 - A `route` line whose gateway is `net_gateway` or `remote_host` no longer fails
   the whole `PUSH_REPLY`. `net.ParseIP` returned nil for the symbolic name and
   the parser raised `invalid gateway`, which ended the session at `StagePush`

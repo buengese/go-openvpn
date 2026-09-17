@@ -1,16 +1,18 @@
-//go:build android
+//go:build android || darwin
 
-// Android-specific wrappers for the go-openlawsvpn client.
+// The gomobile binding: MobileClient and MobileCallbacks.
 //
-// gomobile bind compiles with GOOS=android, which satisfies the "android"
-// build constraint.  This file is therefore included automatically in
-// gomobile builds and excluded from regular Linux/desktop builds.
+// gomobile bind compiles with GOOS=android for the .aar and GOOS=ios for the
+// xcframework, and GOOS=darwin builds the macOS variant; Go satisfies the
+// darwin constraint under GOOS=ios too, so "android || darwin" is exactly
+// those three. Desktop builds exclude the file to keep MobileClient out of the
+// Linux library's API.
 //
 // gomobile bind requires that exported types use only basic types and slices;
-// channels, maps, and function values are not supported across the language
-// boundary.  This file wraps the Client API into a simpler MobileClient type
-// that communicates exclusively via strings (JSON for structured data, plain
-// error strings for failures).
+// channels, maps and function values do not cross the language boundary. That
+// is why this file exists: it wraps the Client API into a type that
+// communicates in strings — JSON for structured data, plain error strings for
+// failures.
 package vpn
 
 import (
@@ -18,25 +20,26 @@ import (
 	"encoding/json"
 	"fmt"
 
+	"github.com/openlawsvpn/go-openlawsvpn/device"
+	"github.com/openlawsvpn/go-openlawsvpn/device/fd"
 	"github.com/openlawsvpn/go-openlawsvpn/profile"
-	"github.com/openlawsvpn/go-openlawsvpn/tun"
 )
 
-// MobileCallbacks is a gomobile interface implemented by the Android/iOS layer.
+// MobileCallbacks is a gomobile interface implemented by the host platform.
 //
-// gomobile generates a Java interface from this; the Kotlin VPN service
-// implements it and passes it to NewMobileClient.
+// gomobile generates a Java interface from this for Android and an Objective-C
+// protocol for iOS and macOS; the implementation is passed to NewMobileClient.
 type MobileCallbacks interface {
-	// Protect excludes the socket identified by fd from VPN routing.
-	// On Android this calls VpnService.protect(fd).
-	// Must return true on success, false on failure.
+	// Protect excludes the socket identified by fd from VPN routing:
+	// VpnService.protect(fd) on Android, NEPacketTunnelProvider.socketProtect
+	// on iOS and macOS. Must return true on success, false on failure.
 	Protect(fd int) bool
 
 	// EstablishTUN is called with the VPN network config as a JSON string
-	// (see buildIfconfigJSON for the schema) and the negotiated MTU.
-	// The implementation must configure VpnService.Builder and call
-	// establish(), then return the resulting file descriptor.
-	// Return -1 on failure.
+	// (see device/fd.IfconfigJSON for the schema) and the negotiated MTU. The
+	// implementation builds the interface — VpnService.Builder and establish()
+	// on Android, setTunnelNetworkSettings and packetFlow on iOS and macOS —
+	// and returns the file descriptor, or -1 on failure.
 	EstablishTUN(ifconfigJSON string, mtu int) int
 
 	// Log receives diagnostic log messages from the Go layer.
@@ -45,19 +48,21 @@ type MobileCallbacks interface {
 
 // MobileClient is a gomobile-compatible VPN client.
 //
-// Usage from Android/Kotlin (AWS SSO profile):
+// Which methods a profile needs depends on how it authenticates:
+//
+//	certificate    connect()
+//	federated      startSAMLFlow(), open the URL, then completeSAMLFlow(token)
+//
+// From Android/Kotlin, a federated profile:
 //
 //	val mc = Vpn.newMobileClient(profile.configContent, callbacks)
-//	// start SAML flow — returns JSON {"saml_url":"...","state_id":"..."} or error
 //	val result = mc.startSAMLFlow()
 //	if (result.startsWith("{")) {
 //	    val samlURL = JSONObject(result).getString("saml_url")
-//	    // open samlURL in browser, collect SAMLResponse via ACS server
+//	    // open samlURL in a browser, collect the SAMLResponse
 //	    val err = mc.completeSAMLFlow(samlToken)
 //	    if (err.isNotEmpty()) { return }
 //	} else if (result.isNotEmpty()) { return }
-//
-// For non-SSO profiles (cert-auth, user-pass) call connect() directly.
 type MobileClient struct {
 	inner  *Client
 	ctx    context.Context
@@ -66,9 +71,8 @@ type MobileClient struct {
 }
 
 // NewMobileClient creates a MobileClient from the .ovpn profile content string.
-// cb may be nil (callbacks are skipped — useful on Linux for testing).
-// Panics (and causes a Java exception via gomobile) if the profile cannot be
-// parsed; callers should validate the content before calling this.
+// cb may be nil (callbacks are skipped — useful on Linux for testing). Panics,
+// which gomobile turns into a Java exception, if the profile cannot be parsed.
 func NewMobileClient(profileContent string, cb MobileCallbacks) *MobileClient {
 	p, err := profile.ParseString(profileContent)
 	if err != nil {
@@ -86,13 +90,15 @@ func NewMobileClient(profileContent string, cb MobileCallbacks) *MobileClient {
 			return nil
 		}
 
-		c.TUNSetup = func(ifconfigJSON string, mtu int) (*tun.Device, error) {
-			cb.Log(fmt.Sprintf("vpn: establishing TUN, config=%s", ifconfigJSON))
-			fd := cb.EstablishTUN(ifconfigJSON, mtu)
-			if fd < 0 {
-				return nil, fmt.Errorf("vpn: EstablishTUN returned fd=%d", fd)
-			}
-			return tun.OpenFd(fd)
+		// The host owns addressing, routes and DNS, so the fd backend installs
+		// nothing. Establish runs once the PUSH_REPLY is parsed — the earliest
+		// point the host has what it needs to build the interface.
+		c.Device = &fd.Backend{
+			Establish: func(_ context.Context, p device.Params) (int, error) {
+				ifconfigJSON := fd.IfconfigJSON(p.Push, p.DNS, p.MTU)
+				cb.Log(fmt.Sprintf("vpn: establishing TUN, config=%s", ifconfigJSON))
+				return cb.EstablishTUN(ifconfigJSON, p.MTU), nil
+			},
 		}
 
 		c.EventFn = func(e Event) {
@@ -117,10 +123,9 @@ func NewMobileClient(profileContent string, cb MobileCallbacks) *MobileClient {
 	}
 }
 
-// Connect dials, authenticates, and brings up the VPN tunnel.
-//
-// For non-SSO profiles (cert auth, user-pass) this is the only call needed.
-// For AWS SSO profiles, use StartSAMLFlow + CompleteSAMLFlow instead.
+// Connect dials, authenticates, and brings up the VPN tunnel. It is the whole
+// connection for a certificate profile; a federated profile needs a browser in
+// the middle, which the host runs itself.
 //
 // Returns "" on success, or an error description on failure.
 func (m *MobileClient) Connect() string {
@@ -130,20 +135,24 @@ func (m *MobileClient) Connect() string {
 	return ""
 }
 
-// StartSAMLFlow dials the server and retrieves the SAML challenge.
+// StartSAMLFlow dials the server and authenticates as far as it can without a
+// browser. A certificate or username/password profile needs none of it: call
+// Connect, which is the same work without the split.
 //
 // Return values:
-//   - JSON object {"saml_url":"...","state_id":"...","remote_ip":"..."}: SAML challenge.
-//     Open saml_url in a browser, collect the SAMLResponse, call CompleteSAMLFlow.
-//   - JSON object {} (empty): no SAML challenge — call CompleteSAMLFlow("") to finish.
-//   - "error: <message>": connection failure.
+//   - JSON object {"saml_url":"...","state_id":"...","remote_ip":"..."}: the
+//     server asked for a federated assertion. Open saml_url, collect the
+//     SAMLResponse, and hand it to CompleteSAMLFlow.
+//   - JSON object {} (empty): no assertion was asked for and authentication is
+//     done. Call CompleteSAMLFlow("") to bring the tunnel up.
+//   - "error: <message>": the attempt failed.
 func (m *MobileClient) StartSAMLFlow() string {
-	challenge, err := m.inner.connectPhase1(m.ctx)
+	challenge, err := m.inner.dialAndAuthenticate(m.ctx)
 	if err != nil {
 		return "error: " + err.Error()
 	}
 	if challenge == nil {
-		// Non-SAML profile: Phase 1 completed without a challenge.
+		// The server asked for no assertion: authentication is done.
 		// Caller must call CompleteSAMLFlow("") to finish.
 		return "{}"
 	}
@@ -158,14 +167,13 @@ func (m *MobileClient) StartSAMLFlow() string {
 	return string(b)
 }
 
-// CompleteSAMLFlow finishes the VPN connection after a SAML challenge.
-//
-// samlToken is the base64-encoded SAMLResponse from the identity provider.
-// Pass an empty string when StartSAMLFlow returned "" (no SAML challenge).
+// CompleteSAMLFlow brings the tunnel up after StartSAMLFlow. samlToken is the
+// base64-encoded SAMLResponse from the identity provider, or "" when
+// StartSAMLFlow returned {} and asked for no assertion.
 //
 // Returns "" on success, or an error description on failure.
 func (m *MobileClient) CompleteSAMLFlow(samlToken string) string {
-	if err := m.inner.connectPhase2(m.ctx, samlToken); err != nil {
+	if err := m.inner.bringUpTunnel(m.ctx, samlToken); err != nil {
 		return err.Error()
 	}
 	return ""

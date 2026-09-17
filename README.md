@@ -1,6 +1,7 @@
 # go-openlawsvpn
 
-Pure-Go OpenVPN3 client protocol implementation — AWS Client VPN + SAML/CRV1 flow.
+Pure-Go implementation of the OpenVPN client protocol — certificate,
+username/password, and AWS Client VPN's federated SAML/CRV1 authentication.
 
 Zero C dependencies. `CGO_ENABLED=0` builds a fully static binary.
 `gomobile bind` produces an `.aar` for Android without NDK or CMake.
@@ -27,6 +28,63 @@ the AUR) are released from openlawsvpn-linux.
 |---|---|
 | `cmd/cli` | `openlawsvpn-cli` — CLI client with SAML flow, reconnect loop, and relay agent mode (`-relay`) |
 | `cmd/relay-server` | Local relay server for dev/testing without hitting production |
+
+## Use as a library
+
+```go
+p, err := profile.ParsePath("/etc/openvpn/client.ovpn")
+if err != nil {
+	log.Fatal(err)
+}
+c := vpn.New(p)
+
+// Whatever the profile authenticates with, supply that and nothing else:
+// a cert-only profile needs no callback at all.
+c.CredentialsFn = func(ctx context.Context) (vpn.Credentials, error) {
+	return vpn.Credentials{Username: user, Password: pass}, nil
+}
+c.SAMLTokenFn = func(ctx context.Context, ch vpn.SAMLChallenge) (string, error) {
+	// open ch.URL in a browser and return the SAMLResponse it posts back
+	return awaitSAMLResponse(ctx, ch.URL)
+}
+
+if err := c.Connect(ctx); err != nil {
+	log.Fatal(err)
+}
+defer c.Disconnect()
+```
+
+With no file to parse, describe the tunnel instead. `Spec.Build` renders the
+directives a profile would have carried and runs them through the same
+assembler the parser uses, so there is no value it can produce that a file
+could not:
+
+```go
+p, err := profile.Spec{
+	Remotes: []profile.Endpoint{{Host: "vpn.example.com", Port: 1194}},
+	Proto:   "udp",
+	CA:      caPEM,
+	Cert:    certPEM,
+	Key:     keyPEM,
+	Cipher:  "AES-256-GCM",
+}.Build()
+if err != nil {
+	log.Fatal(err)
+}
+
+// From here on p is a *profile.Profile like any other, so the rest is the
+// snippet above.
+c := vpn.New(p)
+if err := c.Connect(ctx); err != nil {
+	log.Fatal(err)
+}
+defer c.Disconnect()
+```
+
+However a connection ends, `c.Report()` describes the attempt: the stages it
+reached, the class of the failure that stopped it, and what the peer
+negotiated. `Redacted()` is the only marshallable form — credentials,
+certificates and pushed options are scrubbed before serialisation.
 
 ## Build
 
@@ -95,21 +153,6 @@ PR bumping the pinned AAR version automatically.
 There is no `ANDROID_GO_PAT` PAT.
 
 ## Known limitations
-
-### OpenVPN-PRF key derivation (plain OpenVPN 2.x)
-
-AWS Client VPN always negotiates TLS-EKM (`key-derivation tls-ekm` in
-PUSH_REPLY), so key derivation is fully correct for that use case.
-
-Plain OpenVPN 2.x servers that do **not** push `key-derivation tls-ekm` use
-the OpenVPN-PRF method, which requires the TLS `ServerRandom` (the 32-byte
-random from the server's `ServerHello`). Go's `crypto/tls` does not expose
-this value in `ConnectionState`, so the fallback path substitutes zeros. The
-TLS handshake and authentication succeed, but the derived data-channel keys
-will be wrong — packets fail to decrypt and no traffic flows.
-
-No fix is possible without forking `crypto/tls`. Track the upstream Go
-proposal if plain OpenVPN 2.x support without EKM becomes a requirement.
 
 ### SAML assertion is single-use
 

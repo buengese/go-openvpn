@@ -206,9 +206,9 @@ key_block = TLS1PRF(master,           "OpenVPN key expansion",
 **The 2.6+ alternative:** a server that pushes `key-derivation tls-ekm` (or
 `tls-ekm` inside `protocol-flags`) selects RFC 5705 exported keying material
 instead — `ExportKeyingMaterial` with label `EXPORTER-OpenVPN-datakeys`, same
-256 bytes, same `prf.Split`. `routing/push.go` parses the switch;
-`internal/prf/capture.go` implements it. AWS Client VPN and openvpn3-core 3.x
-use this path. Only known-answer vectors (`internal/prf/testdata/vectors.json`,
+256 bytes, same `prf.Split`. `routing/push.go` parses the switch; `rekey.go` and
+`internal/prf/capture.go` implement it. AWS Client VPN and openvpn3-core 3.x use
+this path. Only known-answer vectors (`internal/prf/testdata/vectors.json`,
 captured from a real OpenVPN 2.4.12 peer) distinguish a correct derivation from
 a convincing wrong one — length and determinism tests do not.
 
