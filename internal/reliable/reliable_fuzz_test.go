@@ -9,9 +9,6 @@ import (
 
 // FuzzRecvWindowReceive feeds random (packetID, payload) pairs to
 // RecvWindow.Receive to verify it never panics or deadlocks.
-//
-// The seed corpus uses the first realistic packet ID (0) and a minimal
-// payload, covering the common case where the window is fresh.
 func FuzzRecvWindowReceive(f *testing.F) {
 	// Seed: packetID=0, small payload.
 	f.Add(uint32(0), []byte("hello"))
