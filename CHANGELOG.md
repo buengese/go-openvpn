@@ -108,6 +108,15 @@ and releases follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   agreed on nothing and sent unframed packets the server threw away.
   `allow-compression no` refuses a compressing algorithm from the profile and
   from the `PUSH_REPLY` alike, and permits a framing stub.
+- Support for the `P_DATA_V1` data-channel wire format, alongside `P_DATA_V2`.
+  A server that pushes no peer-id speaks the older format, and the client now
+  speaks it back: the format is chosen once, from the absence of a pushed
+  peer-id, at the point the cipher and derivation are settled. It is never a
+  preference and never a fallback after a failure, because by the time a data
+  packet is wrong the peer has said nothing and the session is already broken.
+  `diag.NegotiatedInfo.WireFormat` records which one was used. A server that
+  pushes no peer-id had been completing its handshake and carrying nothing,
+  counted as connected because nothing measured the difference.
 - An RFC 5705 keying-material exporter for TLS 1.2, used only where Go's own
   refuses: a peer that pushes `key-derivation tls-ekm` and then negotiates TLS
   1.2 without RFC 7627 Extended Master Secret. `crypto/tls` declines that

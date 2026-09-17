@@ -198,6 +198,10 @@ type Client struct {
 	// data channel
 	manager *datachannel.Manager
 	peerID  uint32 // 24-bit peer_id from PUSH_REPLY, connection-scoped
+	// wire is the data-channel packet format this connection speaks, chosen in
+	// applyPushReply from whether a peer-id was pushed. It is connection-scoped
+	// for the reason peerID is: a rekey renegotiates keys, not the format.
+	wire datachannel.WireFormat
 	// dev is the tunnel device the data path moves IP packets through. What it
 	// installed to exist — an interface, routes, DNS — is the backend's
 	// business, and Close is the only thing the core knows about unwinding it.
@@ -290,6 +294,17 @@ type Client struct {
 	// transitions, log lines and periodic stats. It is called concurrently
 	// from several goroutines, must not block, and is set before Connect.
 	EventFn EventFn
+
+	// DataV2 selects whether the IV_PROTO advertisement claims
+	// IV_PROTO_DATA_V2. The zero value claims it, which is what every
+	// production connection wants: P_DATA_V2 is this client's preferred
+	// data-channel format.
+	//
+	// The format is not a client choice — see datachannel.WireFormat — and a
+	// server decides it from this advertisement alone, so withholding it is
+	// the only way to put a P_DATA_V1 server in front of this client (see
+	// WithholdDataV2). It is read at each key-method-2 packet.
+	DataV2 DataV2Advertisement
 
 	// auth is this attempt's authentication method, nil until an attempt starts
 	// and derived from the profile then. The relay and mobile entry points,

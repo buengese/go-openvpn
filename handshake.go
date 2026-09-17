@@ -263,7 +263,13 @@ func (c *Client) tlsHandshake(ctx context.Context, rawConn net.Conn) (*tls.Conn,
 				}
 
 				switch op {
-				case framing.P_DATA_V2:
+				case framing.P_DATA_V1, framing.P_DATA_V2:
+					// Both data opcodes, because the format is the peer's
+					// choice and this switch runs before the manager can
+					// object. Which one is expected is checked where the key
+					// epoch is selected; dropping the other here would look
+					// exactly like a network fault.
+					//
 					// dataCh is installed after this goroutine starts, so it
 					// is asked for until there is one and then kept; nothing
 					// closes it, so it stays safe to send on.

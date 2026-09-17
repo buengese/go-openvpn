@@ -11,6 +11,7 @@ import (
 
 	"github.com/openlawsvpn/go-openlawsvpn/diag"
 	"github.com/openlawsvpn/go-openlawsvpn/internal/control"
+	"github.com/openlawsvpn/go-openlawsvpn/internal/datachannel"
 	"github.com/openlawsvpn/go-openlawsvpn/internal/prf"
 )
 
@@ -443,6 +444,7 @@ func (c *Client) reset() {
 	c.state = stateNew
 	c.manager = nil
 	c.peerID = 0
+	c.wire = datachannel.WireDataV2
 	c.dev = nil
 	c.dataCh = nil
 	c.pushOpts = nil

@@ -332,7 +332,7 @@ func (c *Client) finishRekey(ctx context.Context, rekey *controlSession, deadlin
 	// A rekey runs a fresh key-method-2 exchange, so this epoch derives from this
 	// epoch's randoms. They stay local: c.keySource is the initial epoch's
 	// contribution, already consumed by deriveDataKeys, and no rekey reads it.
-	rekeyKeySource, err := keymethod2.SendAuth(rekeyTLS, tunnelParams(c.activeProto(), c.prof.TunMTU, rekeyParams), creds.Username, creds.Password, c.method().framing(), keymethod2.IVProtoImplemented)
+	rekeyKeySource, err := keymethod2.SendAuth(rekeyTLS, tunnelParams(c.activeProto(), c.prof.TunMTU, rekeyParams), creds.Username, creds.Password, c.method().framing(), ivProtoFor(c.DataV2))
 	if err != nil {
 		rekeyTLS.Close()
 		return fmt.Errorf("rekey send auth: %w", err)

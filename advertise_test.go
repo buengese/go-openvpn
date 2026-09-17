@@ -240,11 +240,19 @@ func TestPushedValuesOutrankTheProfile(t *testing.T) {
 // carries is the one actually sent, and that the default advertisement is the
 // block every other reader sees.
 func TestAdvertisedInfoMatchesPeerInfo(t *testing.T) {
+	def := peerInfoFor(AdvertiseDataV2)
+	if def != peerInfo {
+		t.Error("the default advertisement is not the block every other reader sees")
+	}
+	if got := ivProtoFromPeerInfo(t, def); got != keymethod2.IVProtoImplemented {
+		t.Errorf("IV_PROTO = %d, want %d", got, keymethod2.IVProtoImplemented)
+	}
+
 	params, _, err := datachannel.ResolveParams("AES-256-GCM", "")
 	if err != nil {
 		t.Fatalf("datachannel.ResolveParams: %v", err)
 	}
-	adv := advertisedInfo(profile.ProtoTCP, 1500, params)
+	adv := advertisedInfo(profile.ProtoTCP, 1500, params, AdvertiseDataV2)
 	if adv.IVProto != 30 {
 		t.Errorf("IV_PROTO: got %d, want 30", adv.IVProto)
 	}
@@ -256,6 +264,56 @@ func TestAdvertisedInfoMatchesPeerInfo(t *testing.T) {
 	}
 	if adv.Options != keymethod2.TunnelOptions(tunnelParams(profile.ProtoTCP, 1500, params)) {
 		t.Error("Options does not match the string that is sent")
+	}
+}
+
+// TestWithholdDataV2AdvertisesNoExtensions covers the lever: it sends
+// IV_PROTO=0 rather than 30-minus-the-bit, because 2.4 and 2.5 push a peer-id
+// whenever the *value* is 2 or more however the DATA_V2 bit is set. Nothing
+// else in the block may move — a lost IV_CIPHERS would make the isolate measure
+// a cipher failure instead of a wire format.
+func TestWithholdDataV2AdvertisesNoExtensions(t *testing.T) {
+	def := peerInfoFor(AdvertiseDataV2)
+	withheld := peerInfoFor(WithholdDataV2)
+
+	got := ivProtoFromPeerInfo(t, withheld)
+	if got != keymethod2.IVProtoNoExtensions {
+		t.Errorf("IV_PROTO = %d, want %d", got, keymethod2.IVProtoNoExtensions)
+	}
+	if got >= 2 {
+		t.Errorf("IV_PROTO = %d, which push.c:prepare_push_reply answers with a peer-id "+
+			"on 2.4 and 2.5 however the DATA_V2 bit is set", got)
+	}
+	if got&keymethod2.IVProtoDataV2 != 0 {
+		t.Error("IV_PROTO_DATA_V2 is still claimed, so 2.6 would assign a peer-id too")
+	}
+
+	// The rest of the block is untouched: same lines, one value different.
+	if strings.Count(withheld, "\n") != strings.Count(def, "\n") {
+		t.Error("the withheld block has a different number of lines")
+	}
+	if !strings.Contains(withheld, "IV_CIPHERS=") {
+		t.Error("the withheld block lost IV_CIPHERS")
+	}
+	if !strings.Contains(withheld, "IV_NCP=2") {
+		t.Error("the withheld block lost IV_NCP, which is what carries cipher negotiation")
+	}
+}
+
+// TestWithholdDataV2IsReportedAsSent keeps the report honest about the
+// advertisement it went out with. A report showing the default block beside a
+// P_DATA_V1 connection would describe a server that does not exist.
+func TestWithholdDataV2IsReportedAsSent(t *testing.T) {
+	params, _, err := datachannel.ResolveParams("AES-256-CBC", "SHA256")
+	if err != nil {
+		t.Fatalf("datachannel.ResolveParams: %v", err)
+	}
+	adv := advertisedInfo(profile.ProtoUDP, 1500, params, WithholdDataV2)
+	if adv.IVProto != keymethod2.IVProtoNoExtensions {
+		t.Errorf("reported IV_PROTO = %d, want %d", adv.IVProto, keymethod2.IVProtoNoExtensions)
+	}
+	if adv.PeerInfo != peerInfoFor(WithholdDataV2) {
+		t.Error("the reported peer-info block is not the one that was sent")
 	}
 }
 
@@ -272,4 +330,24 @@ func ivCiphersFromPeerInfo(t *testing.T) []string {
 	}
 	t.Fatal("peerInfo carries no IV_CIPHERS line")
 	return nil
+}
+
+// ivProtoFromPeerInfo reads IV_PROTO out of a rendered peer-info block, which
+// is where a server reads it from too.
+func ivProtoFromPeerInfo(t *testing.T, block string) uint32 {
+	t.Helper()
+	for line := range strings.SplitSeq(block, "\n") {
+		if after, ok := strings.CutPrefix(line, "IV_PROTO="); ok {
+			var v uint32
+			for _, r := range after {
+				if r < '0' || r > '9' {
+					t.Fatalf("IV_PROTO is not a number: %q", after)
+				}
+				v = v*10 + uint32(r-'0')
+			}
+			return v
+		}
+	}
+	t.Fatal("peer-info block carries no IV_PROTO line")
+	return 0
 }

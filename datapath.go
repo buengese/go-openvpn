@@ -467,3 +467,13 @@ func parsePeerID(pushRaw string) (id uint32, pushed bool) {
 	}
 	return 0, false
 }
+
+// pushedWireFormat maps the presence of a pushed peer-id onto the data-channel
+// packet format the peer speaks: a server that assigned one puts it in every
+// packet and expects one back. Nothing else contributes.
+func pushedWireFormat(peerIDPushed bool) datachannel.WireFormat {
+	if peerIDPushed {
+		return datachannel.WireDataV2
+	}
+	return datachannel.WireDataV1
+}

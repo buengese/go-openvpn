@@ -36,6 +36,12 @@ type Options struct {
 	// auth-user-pass without it ends at StageParse with diag.ClassConfig.
 	CredentialsFn func(ctx context.Context) (vpn.Credentials, error)
 
+	// DataV2 selects whether the IV_PROTO advertisement claims
+	// IV_PROTO_DATA_V2. The zero value claims it: P_DATA_V2 is the preferred
+	// data-channel format. vpn.WithholdDataV2 is not a fallback — the format
+	// itself is still selected from what the server pushes.
+	DataV2 vpn.DataV2Advertisement
+
 	// MaxReconnects caps how many attempts Tunnel.Reconnect makes. The zero
 	// value is unlimited: right for a client holding a tunnel open, wrong for
 	// a consumer that must not block forever. Reconnect retries only failures
@@ -85,6 +91,7 @@ func ConnectWithReport(ctx context.Context, prof *profile.Profile, opts Options)
 	if opts.CredentialsFn != nil {
 		c.CredentialsFn = opts.CredentialsFn
 	}
+	c.DataV2 = opts.DataV2
 
 	if err := c.Connect(ctx); err != nil {
 		// Tear down whatever came up before the failure, then hand back the

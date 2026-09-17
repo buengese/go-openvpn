@@ -438,7 +438,7 @@ func (c *Client) recordAdvertised(username, password string) {
 	// The dialed remote's transport, not the profile's: the tunnel options
 	// string carries a link-mtu that differs by 22 bytes between the two, and
 	// what the report says we advertised has to be what we advertised.
-	adv := advertisedInfo(c.activeProto(), c.prof.TunMTU, c.advertisedDataChannel())
+	adv := advertisedInfo(c.activeProto(), c.prof.TunMTU, c.advertisedDataChannel(), c.DataV2)
 	reported := reportableUsername(username)
 	c.recorder().edit(func(r *diag.SessionReport) {
 		r.Advertised = adv
@@ -522,9 +522,11 @@ func profileFingerprint(p *profile.Profile) string {
 
 // advertisedInfo describes what the client tells the server in its
 // key-method-2 packet: the peer-info block and the tunnel options string, with
-// IV_PROTO and IV_CIPHERS pulled out for aggregation.
-func advertisedInfo(proto profile.Proto, tunMTU int, params datachannel.Params) diag.AdvertisedInfo {
-	block := peerInfo
+// IV_PROTO and IV_CIPHERS pulled out for aggregation. adv is the same
+// advertisement keymethod2.SendAuth is given, so the reported IV_PROTO is the
+// one that went out.
+func advertisedInfo(proto profile.Proto, tunMTU int, params datachannel.Params, adv DataV2Advertisement) diag.AdvertisedInfo {
+	block := peerInfoFor(adv)
 	a := diag.AdvertisedInfo{
 		PeerInfo: block,
 		Options:  keymethod2.TunnelOptions(tunnelParams(proto, tunMTU, params)),
@@ -678,8 +680,8 @@ func pushUnknownOptions(raw string) []string {
 // negotiatedInfo describes what the two sides settled on for the data channel.
 //
 // params is what the client resolved the two sides down to, so the report
-// records the cipher and digest actually installed rather than re-deriving
-// them here and risking a second answer.
+// records the cipher, digest and wire format actually installed rather than
+// re-deriving them here and risking a second answer.
 func negotiatedInfo(opts *routing.PushOptions, peerID uint32, params datachannel.Params) diag.NegotiatedInfo {
 	n := diag.NegotiatedInfo{PeerID: peerID}
 	if opts == nil {
@@ -698,6 +700,12 @@ func negotiatedInfo(opts *routing.PushOptions, peerID uint32, params datachannel
 	if params.Spec.UsesDigest() {
 		n.Digest = params.Digest.String()
 	}
+	// The wire format sits with the rest of what was negotiated rather than
+	// beside the peer-id it is chosen from: PeerID alone cannot carry it,
+	// since 0 is both "the server pushed peer-id 0" and "the server pushed
+	// none", and those are the two formats. It is written only for an attempt
+	// that had a push to read.
+	n.WireFormat = params.Wire.String()
 	switch opts.KeyDerivation {
 	case routing.KeyDerivationTLSEKM:
 		n.KeyDerivation = "tls-ekm"

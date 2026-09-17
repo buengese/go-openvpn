@@ -390,7 +390,7 @@ func (c *Client) runExchange(ctx context.Context, p exchangeParams) (*tls.Conn, 
 	c.recordAdvertised(creds.Username, creds.Password)
 	keySource, err := keymethod2.SendAuth(tlsConn,
 		tunnelParams(c.activeProto(), c.prof.TunMTU, c.advertisedDataChannel()),
-		creds.Username, creds.Password, c.method().framing(), keymethod2.IVProtoImplemented)
+		creds.Username, creds.Password, c.method().framing(), ivProtoFor(c.DataV2))
 	if err != nil {
 		return nil, nil, fail(diag.ClassNetwork, diag.StageAuth, err, "send auth packet")
 	}
@@ -738,12 +738,15 @@ func (c *Client) readPushSecondExchange(ctx context.Context) (string, error) {
 // applyPushReply parses the PUSH_REPLY into routing and DNS options, merges the
 // profile's own DNS settings over the pushed ones, and records the result.
 func (c *Client) applyPushReply(pushRaw string) (*routing.PushOptions, *dns.Config, error) {
-	// The peer-id comes off the raw reply before the routes are parsed: it does
-	// not depend on that parse succeeding. It is stored on the Client so that
-	// startDataChannel and every later rekey build from the same value —
+	// The peer-id, and with it the data-channel wire format, come off the raw
+	// reply before the routes are parsed: they do not depend on that parse
+	// succeeding, and a report claiming P_DATA_V2 for a server that pushed no
+	// peer-id is the wrong answer to give. They are stored on the Client so
+	// that startDataChannel and every later rekey build from the same pair —
 	// openvpn3-core treats remote_peer_id as connection-scoped.
-	peerID, _ := parsePeerID(pushRaw)
+	peerID, peerIDPushed := parsePeerID(pushRaw)
 	c.peerID = peerID
+	c.wire = pushedWireFormat(peerIDPushed)
 
 	// Parse PUSH_REPLY options.
 	pushOpts, err := routing.ParsePushReply(pushRaw)
@@ -853,6 +856,11 @@ func (c *Client) deriveDataKeys(pushOpts *routing.PushOptions) ([]byte, error) {
 // value pushed in PUSH_REPLY outranks the profile's, which is what NCP
 // negotiation means; the profile's own directive applies when the server
 // pushes none.
+//
+// The wire format is settled here with them, from what the same PUSH_REPLY did
+// or did not carry (see pushedWireFormat). By the time a data packet is in the
+// wrong format the session is broken and the peer has said nothing about it, so
+// there is no later point at which this could be a fallback.
 func (c *Client) negotiateDataChannel(pushOpts *routing.PushOptions) (datachannel.Params, string, error) {
 	cipherName := pushOpts.Cipher
 	if cipherName == "" {
@@ -862,7 +870,12 @@ func (c *Client) negotiateDataChannel(pushOpts *routing.PushOptions) (datachanne
 	if digestName == "" {
 		digestName = c.prof.Auth
 	}
-	return datachannel.ResolveParams(cipherName, digestName)
+	params, feature, err := datachannel.ResolveParams(cipherName, digestName)
+	// Set unconditionally, including on the error path: an unsupported cipher
+	// does not make the peer's choice of format unknown, and the report reads
+	// these parameters even when the connection ends at StageKeys.
+	params.Wire = c.wire
+	return params, feature, err
 }
 
 // advertisedDataChannel is what the client tells the server it intends to use,
@@ -896,8 +909,9 @@ func (c *Client) startDataChannel(pushOpts *routing.PushOptions, keyMat256 []byt
 	c.dataParams = params
 	c.mu.Unlock()
 
-	// peerID was parsed out of the PUSH_REPLY by applyPushReply and is
-	// connection-scoped, so it outlives every key epoch.
+	// peerID and the wire format params carries were both parsed out of the
+	// PUSH_REPLY by applyPushReply and are connection-scoped, so they
+	// outlive every key epoch.
 	ch2, err := params.NewChannel(c.peerID, 0, keyMat256)
 	if err != nil {
 		c.rawConn.Close()

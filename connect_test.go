@@ -22,6 +22,7 @@ import (
 
 	"github.com/openlawsvpn/go-openlawsvpn/diag"
 	"github.com/openlawsvpn/go-openlawsvpn/internal/control"
+	"github.com/openlawsvpn/go-openlawsvpn/internal/datachannel"
 	"github.com/openlawsvpn/go-openlawsvpn/internal/framing"
 	"github.com/openlawsvpn/go-openlawsvpn/profile"
 	"github.com/openlawsvpn/go-openlawsvpn/routing"
@@ -450,3 +451,148 @@ func TestPushFailureClassSeparatesBusyFromBroken(t *testing.T) {
 }
 
 // ---- the wire format the push settles -------------------------------------
+
+// The data-channel wire format is the peer's choice, taken from whether a
+// peer-id directive is present, not from what it says: some servers push
+// "peer-id 0" explicitly and some push no directive, and both leave the
+// numeric value 0 while speaking different formats.
+
+// pushWithPeerIDZero is a PUSH_REPLY naming peer-id 0 explicitly.
+const pushWithPeerIDZero = "PUSH_REPLY,route-gateway 10.8.0.1,topology subnet,ping 10," +
+	"ping-restart 60,ifconfig 10.8.0.2 255.255.255.0,peer-id 0,cipher AES-256-GCM"
+
+// pushWithoutPeerID is the same reply with the peer-id directive absent, which
+// is also the shape a server sends when the client withholds its IV_PROTO
+// advertisement.
+const pushWithoutPeerID = "PUSH_REPLY,route-gateway 10.8.0.1,topology subnet,ping 10," +
+	"ping-restart 60,ifconfig 10.8.0.2 255.255.255.0,cipher AES-256-CBC"
+
+// TestParsePeerIDDistinguishesZeroFromAbsent is the distinction the format
+// selection rests on, as an assertion. A single uint32 return cannot make it.
+func TestParsePeerIDDistinguishesZeroFromAbsent(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		push       string
+		wantID     uint32
+		wantPushed bool
+	}{
+		{"explicit zero", pushWithPeerIDZero, 0, true},
+		{"absent", pushWithoutPeerID, 0, false},
+		{"a real value", "PUSH_REPLY,peer-id 7,ifconfig 10.8.0.2 255.255.255.0", 7, true},
+		{"out of range", "PUSH_REPLY,peer-id 16777215,ifconfig 10.8.0.2 255.255.255.0", 0, false},
+		{"unparseable", "PUSH_REPLY,peer-id banana,ifconfig 10.8.0.2 255.255.255.0", 0, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			id, pushed := parsePeerID(tc.push)
+			if id != tc.wantID || pushed != tc.wantPushed {
+				t.Errorf("parsePeerID = (%d, %t), want (%d, %t)", id, pushed, tc.wantID, tc.wantPushed)
+			}
+			want := datachannel.WireDataV2
+			if !tc.wantPushed {
+				want = datachannel.WireDataV1
+			}
+			if got := pushedWireFormat(pushed); got != want {
+				t.Errorf("pushedWireFormat(%t) = %v, want %v", pushed, got, want)
+			}
+		})
+	}
+}
+
+// TestPushedPeerIDDecidesTheWireFormat drives the whole client-side selection
+// without a socket: the push settles the format, the data channel is built
+// with it, and the packets the manager produces carry a peer-id or do not. It
+// asserts on the encrypted bytes because that is the only place the difference
+// exists — a client with the format backwards produces well-formed packets,
+// reports every stage green, and moves nothing.
+func TestPushedPeerIDDecidesTheWireFormat(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		push       string
+		wantWire   datachannel.WireFormat
+		wantOpcode uint8
+		wantName   string
+	}{
+		{
+			name: "no peer-id pushed selects P_DATA_V1", push: pushWithoutPeerID,
+			wantWire: datachannel.WireDataV1, wantOpcode: framing.P_DATA_V1, wantName: "P_DATA_V1",
+		},
+		{
+			name: "an explicit peer-id 0 still selects P_DATA_V2", push: pushWithPeerIDZero,
+			wantWire: datachannel.WireDataV2, wantOpcode: framing.P_DATA_V2, wantName: "P_DATA_V2",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			c := newPushTestClient(t)
+			pushOpts, _, err := c.applyPushReply(tc.push)
+			if err != nil {
+				t.Fatalf("applyPushReply: %v", err)
+			}
+			if c.wire != tc.wantWire {
+				t.Fatalf("wire format = %v, want %v", c.wire, tc.wantWire)
+			}
+			if err := c.startDataChannel(pushOpts, make([]byte, 256)); err != nil {
+				t.Fatalf("startDataChannel: %v", err)
+			}
+
+			pkt, err := c.manager.Encrypt([]byte{0x45, 0x00, 0x00, 0x1c})
+			if err != nil {
+				t.Fatalf("Encrypt: %v", err)
+			}
+			if got := framing.OpcodeFromByte(pkt[0]); got != tc.wantOpcode {
+				t.Errorf("opcode = %d, want %d", got, tc.wantOpcode)
+			}
+			if tc.wantWire == datachannel.WireDataV2 && (pkt[1] != 0 || pkt[2] != 0 || pkt[3] != 0) {
+				t.Errorf("peer-id bytes = % x, want 00 00 00", pkt[1:4])
+			}
+			if got := c.Report().Negotiated.WireFormat; got != tc.wantName {
+				t.Errorf("Negotiated.WireFormat = %q, want %q — a format nobody can see "+
+					"in a report is how this went unnoticed for so long", got, tc.wantName)
+			}
+		})
+	}
+}
+
+// TestRekeyParametersKeepTheWireFormat pins the property doRekey depends on: a
+// rekey renegotiates keys, not the format, and it builds its channel from the
+// parameters settled at the first push.
+func TestRekeyParametersKeepTheWireFormat(t *testing.T) {
+	c := newPushTestClient(t)
+	pushOpts, _, err := c.applyPushReply(pushWithoutPeerID)
+	if err != nil {
+		t.Fatalf("applyPushReply: %v", err)
+	}
+	if err := c.startDataChannel(pushOpts, make([]byte, 256)); err != nil {
+		t.Fatalf("startDataChannel: %v", err)
+	}
+
+	// This is what doRekey does with c.dataParams for the next key epoch.
+	rekeyParams := c.dataParams
+	if rekeyParams.Wire != datachannel.WireDataV1 {
+		t.Fatalf("rekey parameters carry %v, want %v", rekeyParams.Wire, datachannel.WireDataV1)
+	}
+	ch, err := rekeyParams.NewChannel(c.peerID, 1, make([]byte, 256))
+	if err != nil {
+		t.Fatalf("NewChannel for key epoch 1: %v", err)
+	}
+	pkt, err := ch.Encrypt([]byte{0x45, 0x00, 0x00, 0x1c})
+	if err != nil {
+		t.Fatalf("Encrypt: %v", err)
+	}
+	if got := framing.OpcodeFromByte(pkt[0]); got != framing.P_DATA_V1 {
+		t.Errorf("the second key epoch sends opcode %d, want P_DATA_V1 (%d)", got, framing.P_DATA_V1)
+	}
+	if got := framing.KeyIDFromByte(pkt[0]); got != 1 {
+		t.Errorf("key_id = %d, want 1", got)
+	}
+}
+
+// newPushTestClient is a client with enough profile to resolve a data channel
+// and no socket at all: the push parse, the format selection, the channel
+// build and the report all run before a byte would be written.
+func newPushTestClient(t *testing.T) *Client {
+	t.Helper()
+	return New(&profile.Profile{
+		Remote: "vpn.example.com", Port: 1194, Proto: profile.ProtoUDP,
+		Cipher: "AES-256-CBC", Auth: "SHA256", AuthSet: true, CA: testCAPEM(t),
+	})
+}
