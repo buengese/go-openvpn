@@ -95,37 +95,46 @@ func generateSelfSigned(t *testing.T) (serverTLS *tls.Config, clientTLS *tls.Con
 	return serverTLS, clientTLS
 }
 
-// TestHandshakeOverNetPipe verifies that ctls.Dial + ctls.Accept complete a
-// TLS handshake when both transports are backed by net.Pipe.
-func TestHandshakeOverNetPipe(t *testing.T) {
+// handshakePair completes one TLS handshake over an in-process pipe and returns
+// both ends, closed on cleanup. The two Close calls run concurrently: net.Pipe
+// is unbuffered, so a close_notify written by one side with nobody reading the
+// other end blocks forever.
+func handshakePair(t *testing.T) (client, server *tls.Conn) {
+	t.Helper()
 	serverCfg, clientCfg := generateSelfSigned(t)
 
-	clientTransport, serverTransport := ctls.NewPipeConnPair()
+	clientPipe, serverPipe := net.Pipe()
 
 	type result struct {
-		conn *ctls.Conn
+		conn *tls.Conn
 		err  error
 	}
 	serverRes := make(chan result, 1)
 	go func() {
-		c, err := ctls.Accept(serverTransport, serverCfg)
-		serverRes <- result{c, err}
+		c := tls.Server(serverPipe, serverCfg)
+		serverRes <- result{c, c.Handshake()}
 	}()
 
-	clientConn, err := ctls.Dial(clientTransport, clientCfg)
-	if err != nil {
-		t.Fatalf("Dial: %v", err)
+	client = tls.Client(clientPipe, clientCfg)
+	if err := client.Handshake(); err != nil {
+		t.Fatalf("client handshake: %v", err)
 	}
 
 	res := <-serverRes
 	if res.err != nil {
-		t.Fatalf("Accept: %v", res.err)
+		t.Fatalf("server handshake: %v", res.err)
 	}
-	// Close both concurrently to avoid close_notify deadlock on net.Pipe.
 	t.Cleanup(func() {
-		go clientConn.Close() //nolint:errcheck
-		res.conn.Close()      //nolint:errcheck
+		go client.Close() //nolint:errcheck
+		res.conn.Close()  //nolint:errcheck
 	})
+	return client, res.conn
+}
+
+// TestHandshakeOverNetPipe verifies that a TLS handshake completes when both
+// ends are backed by net.Pipe.
+func TestHandshakeOverNetPipe(t *testing.T) {
+	clientConn, _ := handshakePair(t)
 
 	// Verify TLS version negotiated.
 	cs := clientConn.ConnectionState()
@@ -137,34 +146,7 @@ func TestHandshakeOverNetPipe(t *testing.T) {
 
 // TestSendReceive verifies that data written on one side is readable on the other.
 func TestSendReceive(t *testing.T) {
-	serverCfg, clientCfg := generateSelfSigned(t)
-
-	clientTransport, serverTransport := ctls.NewPipeConnPair()
-
-	srvReady := make(chan *ctls.Conn, 1)
-	go func() {
-		c, err := ctls.Accept(serverTransport, serverCfg)
-		if err != nil {
-			t.Errorf("Accept: %v", err)
-			srvReady <- nil
-			return
-		}
-		srvReady <- c
-	}()
-
-	clientConn, err := ctls.Dial(clientTransport, clientCfg)
-	if err != nil {
-		t.Fatalf("Dial: %v", err)
-	}
-
-	srvConn := <-srvReady
-	if srvConn == nil {
-		t.Fatal("server conn nil")
-	}
-	t.Cleanup(func() {
-		go clientConn.Close() //nolint:errcheck
-		srvConn.Close()       //nolint:errcheck
-	})
+	clientConn, srvConn := handshakePair(t)
 
 	// Client writes concurrently with server read — net.Pipe has no buffer.
 	msg := []byte("hello openvpn ctls")

@@ -10,7 +10,7 @@
 //	Application
 //	    │
 //	    ▼
-//	ctls.Conn  (crypto/tls.Conn wrapping a ControlTransport)
+//	crypto/tls.Conn  (run directly over the transport below)
 //	    │
 //	    ▼
 //	ControlTransport  (net.Conn; goroutine pairs raw TLS bytes with OpenVPN framing)
@@ -22,7 +22,6 @@
 package ctls
 
 import (
-	"crypto/tls"
 	"fmt"
 	"io"
 	"net"
@@ -35,8 +34,8 @@ import (
 // inside OpenVPN control-channel packets.
 //
 // Use NewControlTransport to create one, then pass it to tls.Client or
-// tls.Server.  The caller is responsible for running the packet I/O loop
-// (see ReadPacket / WritePacket) on the underlying OpenVPN connection.
+// tls.Server. The caller runs the packet I/O loop on the underlying OpenVPN
+// connection, feeding InjectInbound and draining DrainOutbound.
 type ControlTransport struct {
 	// inbound delivers reassembled TLS payload bytes to Read callers.
 	inbound chan []byte
@@ -46,12 +45,19 @@ type ControlTransport struct {
 	closedCh chan struct{}
 
 	mu         sync.Mutex
-	closed     bool
 	closeOnce  sync.Once
 	localAddr  net.Addr
 	remoteAddr net.Addr
 
-	// readBuf holds a partial read from the current inbound chunk.
+	// readMu serialises Read, and is the only thing that may touch readBuf.
+	//
+	// It is separate from mu because Read blocks — on a chunk, on the deadline,
+	// on Close — and mu is taken by SetReadDeadline, which a caller is entitled
+	// to invoke *while* a Read is outstanding. One mutex covering both would
+	// deadlock the first time a deadline was set on a blocked reader.
+	readMu sync.Mutex
+	// readBuf holds a partial read from the current inbound chunk. Guarded by
+	// readMu.
 	readBuf []byte
 
 	readDeadline  time.Time
@@ -76,31 +82,29 @@ func NewControlTransport(local, remote net.Addr, bufSize int) *ControlTransport 
 // InjectInbound delivers a reassembled TLS payload chunk to waiting Read calls.
 // Called by the OpenVPN framing layer when a complete control packet arrives.
 func (t *ControlTransport) InjectInbound(data []byte) error {
-	t.mu.Lock()
-	closed := t.closed
-	t.mu.Unlock()
-	if closed {
-		return fmt.Errorf("ctls: transport closed")
-	}
 	chunk := make([]byte, len(data))
 	copy(chunk, data)
-	t.inbound <- chunk
-	return nil
+	// Selecting on closedCh rather than checking a flag first is the whole
+	// point: a flag read under the mutex is stale the instant it is released.
+	// A lost race delivers one more chunk to a transport that is going away.
+	select {
+	case t.inbound <- chunk:
+		return nil
+	case <-t.closedCh:
+		return fmt.Errorf("ctls: transport closed")
+	}
 }
 
-// DrainOutbound returns the next chunk written by TLS to send over the wire.
-// Returns (nil, io.EOF) when the transport is closed.
+// DrainOutbound returns the next chunk written by TLS to send over the wire, and
+// (nil, io.EOF) once the transport is closed. It is the only way to consume
+// them: the channel is never closed, so ranging over it raw would never finish.
 func (t *ControlTransport) DrainOutbound() ([]byte, error) {
-	chunk, ok := <-t.outbound
-	if !ok {
+	select {
+	case chunk := <-t.outbound:
+		return chunk, nil
+	case <-t.closedCh:
 		return nil, io.EOF
 	}
-	return chunk, nil
-}
-
-// OutboundChan returns the raw outbound channel for use in select statements.
-func (t *ControlTransport) OutboundChan() <-chan []byte {
-	return t.outbound
 }
 
 // ClosedChan returns a channel that is closed when Close is called.
@@ -110,7 +114,16 @@ func (t *ControlTransport) ClosedChan() <-chan struct{} {
 }
 
 // Read implements net.Conn. It blocks until TLS bytes arrive via InjectInbound.
+//
+// Concurrent Reads are serialised rather than merely tolerated: net.Conn
+// promises a Conn's methods may be called from several goroutines at once, and
+// the remainder of an oversized chunk lives in readBuf between calls, so two
+// unsynchronised readers would hand TLS a record stream with bytes duplicated
+// or missing. tls.Conn serialises its own reads, so nothing here exercises it.
 func (t *ControlTransport) Read(b []byte) (int, error) {
+	t.readMu.Lock()
+	defer t.readMu.Unlock()
+
 	for {
 		// Serve from leftover buffer first.
 		if len(t.readBuf) > 0 {
@@ -133,10 +146,9 @@ func (t *ControlTransport) Read(b []byte) (int, error) {
 		}
 
 		select {
-		case chunk, ok := <-t.inbound:
-			if !ok {
-				return 0, io.EOF
-			}
+		case <-t.closedCh:
+			return 0, io.EOF
+		case chunk := <-t.inbound:
 			n := copy(b, chunk)
 			if n < len(chunk) {
 				t.readBuf = chunk[n:]
@@ -151,12 +163,8 @@ func (t *ControlTransport) Read(b []byte) (int, error) {
 // Write implements net.Conn. It queues TLS bytes for pickup by DrainOutbound.
 func (t *ControlTransport) Write(b []byte) (int, error) {
 	t.mu.Lock()
-	closed := t.closed
 	wd := t.writeDeadline
 	t.mu.Unlock()
-	if closed {
-		return 0, fmt.Errorf("ctls: transport closed")
-	}
 
 	chunk := make([]byte, len(b))
 	copy(chunk, b)
@@ -169,23 +177,26 @@ func (t *ControlTransport) Write(b []byte) (int, error) {
 		select {
 		case t.outbound <- chunk:
 			return len(b), nil
+		case <-t.closedCh:
+			return 0, fmt.Errorf("ctls: transport closed")
 		case <-time.After(d):
 			return 0, &timeoutError{}
 		}
 	}
 
-	t.outbound <- chunk
-	return len(b), nil
+	select {
+	case t.outbound <- chunk:
+		return len(b), nil
+	case <-t.closedCh:
+		return 0, fmt.Errorf("ctls: transport closed")
+	}
 }
 
 // Close implements net.Conn.
 func (t *ControlTransport) Close() error {
 	t.closeOnce.Do(func() {
-		t.mu.Lock()
-		t.closed = true
-		t.mu.Unlock()
-		close(t.inbound)
-		close(t.outbound)
+		// Only closedCh is closed. Closing inbound or outbound would race
+		// every sender that had already passed its own closed check.
 		close(t.closedCh)
 	})
 	return nil
@@ -220,67 +231,6 @@ func (t *ControlTransport) SetWriteDeadline(tm time.Time) error {
 	defer t.mu.Unlock()
 	t.writeDeadline = tm
 	return nil
-}
-
-// Conn is a TLS connection running over a ControlTransport.
-// It wraps crypto/tls.Conn and exposes the underlying transport for packet I/O.
-type Conn struct {
-	*tls.Conn
-	transport *ControlTransport
-}
-
-// Transport returns the underlying ControlTransport, or nil when the inner
-// net.Conn is not a *ControlTransport (e.g. in tests using net.Pipe).
-func (c *Conn) Transport() *ControlTransport { return c.transport }
-
-// Dial performs a TLS client handshake over inner (any net.Conn, typically a
-// *ControlTransport). cfg must supply the server CA for verification.
-func Dial(inner net.Conn, cfg *tls.Config) (*Conn, error) {
-	var ct *ControlTransport
-	if t, ok := inner.(*ControlTransport); ok {
-		ct = t
-	}
-	tc := tls.Client(inner, cfg)
-	if err := tc.Handshake(); err != nil {
-		return nil, fmt.Errorf("ctls: client handshake: %w", err)
-	}
-	return &Conn{Conn: tc, transport: ct}, nil
-}
-
-// Accept performs a TLS server handshake over inner (any net.Conn, typically a
-// *ControlTransport). cfg must supply the server certificate.
-func Accept(inner net.Conn, cfg *tls.Config) (*Conn, error) {
-	var ct *ControlTransport
-	if t, ok := inner.(*ControlTransport); ok {
-		ct = t
-	}
-	tc := tls.Server(inner, cfg)
-	if err := tc.Handshake(); err != nil {
-		return nil, fmt.Errorf("ctls: server handshake: %w", err)
-	}
-	return &Conn{Conn: tc, transport: ct}, nil
-}
-
-// TLSState returns the TLS ConnectionState after the handshake completes.
-// Callers use this to extract the negotiated cipher suite, peer certificates,
-// and (via reflection or a custom crypto/tls build) the TLS master secret for
-// OpenVPN key derivation via prf.ExpandKeys.
-func (c *Conn) TLSState() tls.ConnectionState {
-	return c.ConnectionState()
-}
-
-// NewPipeConnPair returns two ControlTransports wired together via net.Pipe.
-// Data written to one is readable from the other, with proper EOF/close
-// propagation. Use this for unit tests.
-func NewPipeConnPair() (*netPipeTransport, *netPipeTransport) {
-	c1, c2 := net.Pipe()
-	return &netPipeTransport{c1}, &netPipeTransport{c2}
-}
-
-// netPipeTransport wraps net.Pipe's net.Conn with the same interface contract
-// as ControlTransport (both implement net.Conn). For tests only.
-type netPipeTransport struct {
-	net.Conn
 }
 
 // timeoutError is a net.Error indicating a deadline exceeded.

@@ -1592,7 +1592,11 @@ func (c *Client) tlsHandshake(ctx context.Context, rawConn net.Conn, capture io.
 	// Each session gets its own goroutine so rekey sessions are independent.
 	startSendGoroutine := func(sess *controlSession) {
 		go func() {
-			for chunk := range sess.transport.OutboundChan() {
+			for {
+				chunk, err := sess.transport.DrainOutbound()
+				if err != nil {
+					return
+				}
 				for len(chunk) > 0 {
 					seg := chunk
 					if len(seg) > 1024 {

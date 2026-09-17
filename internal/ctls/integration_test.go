@@ -29,13 +29,12 @@ import (
 	"time"
 
 	"github.com/openlawsvpn/go-openlawsvpn/internal/ctls"
-	"github.com/openlawsvpn/go-openlawsvpn/internal/prf"
 	"github.com/openlawsvpn/go-openlawsvpn/testenv"
 )
 
-// TestTLSHandshakeAgainstMockServer dials the mock server, completes the
-// OpenVPN HARD_RESET exchange, runs TLS via ctls, and derives keys via
-// prf.ExpandKeys. This exercises the full Phase 2 stack end-to-end.
+// TestTLSHandshakeAgainstMockServer dials the mock server, completes the OpenVPN
+// HARD_RESET exchange, runs TLS over ctls.ControlTransport and reads the
+// server's first control message.
 func TestTLSHandshakeAgainstMockServer(t *testing.T) {
 	binPath := os.Getenv("MOCK_SERVER_BIN")
 	if binPath == "" {
@@ -100,10 +99,9 @@ func TestTLSHandshakeAgainstMockServer(t *testing.T) {
 	copy(serverSID[:], serverPkt[1:9])
 	t.Logf("got HARD_RESET_SERVER_V2 server_session_id=%x", serverSID)
 
-	// Now set up the ctls bridge:
-	//   - a ControlTransport receives TLS bytes from InjectInbound /
-	//     sends TLS bytes via DrainOutbound.
-	//   - We run two goroutines that pump control packets to/from the TCP conn.
+	// The ctls bridge: a ControlTransport receives TLS bytes from InjectInbound
+	// and sends them via DrainOutbound, with two goroutines pumping control
+	// packets to and from the TCP conn.
 	tr := ctls.NewControlTransport(&testNetAddr{srv.TCPAddr}, &testNetAddr{srv.TCPAddr}, 64)
 
 	sendSeq := uint32(0)
@@ -148,9 +146,13 @@ func TestTLSHandshakeAgainstMockServer(t *testing.T) {
 		}
 	}()
 
-	// Goroutine: drain TLS bytes from tr.OutboundChan() → wrap in P_CONTROL_V1 → TCP.
+	// Goroutine: drain TLS bytes from the transport → wrap in P_CONTROL_V1 → TCP.
 	go func() {
-		for chunk := range tr.OutboundChan() {
+		for {
+			chunk, err := tr.DrainOutbound()
+			if err != nil {
+				return
+			}
 			// Fragment at 1024 bytes.
 			for len(chunk) > 0 {
 				seg := chunk
@@ -191,32 +193,16 @@ func TestTLSHandshakeAgainstMockServer(t *testing.T) {
 		InsecureSkipVerify:     true, // server cert CN is "mock-server", IP SANs may vary
 	}
 
-	// Run TLS handshake over the ControlTransport.
-	tlsConn, err := ctls.Dial(tr, tlsCfg)
-	if err != nil {
-		t.Fatalf("ctls.Dial: %v", err)
+	// Run TLS handshake over the ControlTransport, exactly as the client does
+	// it: tls.Client straight onto the transport.
+	tlsConn := tls.Client(tr, tlsCfg)
+	if err := tlsConn.Handshake(); err != nil {
+		t.Fatalf("TLS handshake: %v", err)
 	}
-	defer tlsConn.Close()
+	defer tlsConn.Close() //nolint:errcheck
 
-	cs := tlsConn.TLSState()
+	cs := tlsConn.ConnectionState()
 	t.Logf("TLS handshake OK: version=0x%04x cipher=0x%04x", cs.Version, cs.CipherSuite)
-
-	// Derive OpenVPN data-channel keys using the TLS master secret.
-	// In TLS 1.2, the master secret is accessible via ConnectionState.
-	// We use placeholder randoms here; a full implementation extracts them
-	// via a patched crypto/tls or by recording them during the handshake.
-	// The test verifies that prf.ExpandKeys runs without error.
-	masterSecret := make([]byte, 48)
-	clientRandom := make([]byte, 32)
-	serverRandom := make([]byte, 32)
-	// Use the session nonce as a stand-in so the test is deterministic.
-	copy(masterSecret, cs.TLSUnique)
-	keys, err := prf.ExpandKeys(masterSecret, clientRandom, serverRandom)
-	if err != nil {
-		t.Fatalf("prf.ExpandKeys: %v", err)
-	}
-	t.Logf("derived keys: client_cipher=%x... server_cipher=%x...",
-		keys.ClientCipher[:4], keys.ServerCipher[:4])
 
 	// Read PUSH_REPLY from the server.
 	buf := make([]byte, 4096)
@@ -268,7 +254,7 @@ func writeTCPPkt(w io.Writer, data []byte) error {
 
 func buildHardResetClient(clientSID [8]byte) []byte {
 	var b []byte
-	b = append(b, byte(0x07<<3)|0) // P_CONTROL_HARD_RESET_CLIENT_V2, key_id=0
+	b = append(b, byte(0x07<<3)) // P_CONTROL_HARD_RESET_CLIENT_V2, key_id=0
 	b = append(b, clientSID[:]...)
 	b = append(b, 0)          // ack_array_len = 0
 	b = append(b, 0, 0, 0, 0) // packet_id = 0
@@ -277,7 +263,7 @@ func buildHardResetClient(clientSID [8]byte) []byte {
 
 func buildAckPkt(senderSID, remoteSID [8]byte, ackIDs []uint32) []byte {
 	var b []byte
-	b = append(b, byte(0x05<<3)|0) // P_ACK_V1
+	b = append(b, byte(0x05<<3)) // P_ACK_V1
 	b = append(b, senderSID[:]...)
 	b = append(b, byte(len(ackIDs)))
 	for _, id := range ackIDs {
@@ -289,7 +275,7 @@ func buildAckPkt(senderSID, remoteSID [8]byte, ackIDs []uint32) []byte {
 
 func buildControlV1Pkt(senderSID, remoteSID [8]byte, packetID uint32, ackIDs []uint32, payload []byte) []byte {
 	var b []byte
-	b = append(b, byte(0x04<<3)|0) // P_CONTROL_V1
+	b = append(b, byte(0x04<<3)) // P_CONTROL_V1
 	b = append(b, senderSID[:]...)
 	if len(ackIDs) > 0 {
 		b = append(b, byte(len(ackIDs)))
