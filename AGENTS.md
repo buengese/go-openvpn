@@ -323,6 +323,7 @@ go-openlawsvpn/
     framing/        — wire format, opcodes, 2-byte length prefix
     reliable/       — control channel reliable transport (sliding window)
     ctls/           — TLS over control channel (crypto/tls via net.Pipe)
+    control/        — control-channel messages after TLS: PUSH_REPLY, AUTH_FAILED, RESTART/HALT, session monitor
     prf/            — OpenVPN key derivation PRF (HMAC-SHA256) + TLS-EKM
     crypto/         — data channel cipher suite (AES-256-GCM / CBC)
     datachannel/    — encrypt/decrypt pipeline, replay window, key rotation
