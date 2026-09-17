@@ -718,11 +718,7 @@ func (c *Client) connectPhase2(ctx context.Context, samlToken string) error {
 		c.setDisconnected(err)
 		return fmt.Errorf("vpn: parse PUSH_REPLY DNS: %w", err)
 	}
-	dnsOpts = dns.Merge(dnsOpts, &dns.Config{
-		Servers:       c.prof.DNSServers,
-		SearchDomains: c.prof.DNSSearchDomains,
-		RouteDomains:  c.prof.DNSRouteDomains,
-	})
+	dnsOpts = dns.Merge(dnsOpts, &c.prof.DNS)
 	c.pushOpts = pushOpts
 	c.dnsOpts = dnsOpts
 

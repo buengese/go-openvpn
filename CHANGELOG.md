@@ -29,6 +29,12 @@ and releases follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - A control-channel replay window, separate from the reliable layer's own
   sequence numbers. Replayed and stale-timestamped control packets are rejected
   and counted in `diag.Counters` rather than dropped silently.
+- `Profile.Remotes`: every `remote` line is now retained, in file order, as a
+  host, a port and an optional per-remote protocol. `Profile.Remote`, `Port`
+  and `Proto` remain and are the first entry.
+- `profile.ParseProto`, the single normaliser for both places a profile names a
+  transport. The address-family spellings — `udp4`, `tcp6-client` and the rest
+  — now parse instead of being rejected, reduced to the transport they name.
 - `netstack.Net.Ping` and `netstack.Net.Gateway`: an ICMP echo through the
   tunnel, and the peer's own tunnel-side address to send it to. The payload is
   chosen by the caller and echoed back verbatim, which makes it a measurement
@@ -71,6 +77,9 @@ and releases follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   whichever backend needs one and handed back as the second result, because only
   that backend knows whether it made a backup or what it was called.
 
+- The `auth` digest now defaults to SHA1, matching OpenVPN, where it previously
+  defaulted to SHA256. `Profile.AuthSet` distinguishes a profile that named a
+  digest from one that did not.
 - `redirect-gateway` installs two /1 routes, `0.0.0.0/1` and `128.0.0.0/1`,
   instead of replacing the host's default with its own `0.0.0.0/0`, and covers
   IPv6 with four prefixes rather than a `::/0`. Each wins by longest-prefix
@@ -117,6 +126,14 @@ and releases follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   page had left the connection, so a user who had just authenticated could be
   shown a connection error instead. Measured at roughly 1 round in 1000; clean
   in 2000 now.
+- The third field of a `remote` line — OpenVPN's per-remote protocol — is now
+  read instead of discarded. A profile whose only statement of transport was
+  `remote <host> <port> tcp-client` was dialed over UDP, and the resulting
+  failure was indistinguishable from a dead endpoint. Such a profile had never
+  established a session; sampled endpoints now connect.
+- The endpoint dialed from a profile carrying several `remote` lines is now the
+  first, as in OpenVPN, rather than the last. Each line used to overwrite the
+  one above it.
 - The compression framing bytes were inverted, and the client announced
   `0x69` — *this payload is LZ4-compressed* — over plaintext on every packet of
   a `compress lz4` session. `0x69` means compressed and `0xFA` means not; both

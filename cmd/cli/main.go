@@ -295,7 +295,7 @@ RELAY ENDPOINTS
 		remoteDesc = "<random>." + p.Remote
 	}
 	fmt.Fprintf(os.Stderr, "openlawsvpn-cli: connecting to %s:%d (%s)...\n",
-		remoteDesc, p.Port, protoName(p.Proto))
+		remoteDesc, p.Port, p.Proto.String())
 
 	// Wire up the SAML token callback for AWS SSO profiles.
 	preSuppliedToken := resolvedSAMLToken
@@ -788,16 +788,4 @@ func notifyReady(readyFD int, localIP string) {
 	f := os.NewFile(uintptr(readyFD), "ready-pipe")
 	fmt.Fprintf(f, "ok local=%s\n", localIP)
 	f.Close()
-}
-
-// protoName returns a human-readable protocol string.
-func protoName(proto profile.Proto) string {
-	switch proto {
-	case profile.ProtoTCP:
-		return "tcp"
-	case profile.ProtoUDP:
-		return "udp"
-	default:
-		return "unknown"
-	}
 }

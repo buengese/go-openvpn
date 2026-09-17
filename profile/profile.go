@@ -1,8 +1,13 @@
 // Package profile parses OpenVPN .ovpn configuration files.
 //
 // It handles the directives that go-openlawsvpn needs: remote, port, proto,
-// inline PEM blocks (<ca>, <cert>, <key>), cipher, auth, rekey timing, and
-// common extra options such as comp-lzo / compress.
+// inline PEM blocks (<ca>, <cert>, <key>), cipher, auth and rekey timing.
+//
+// Inline <tag>...</tag> blocks are recognised generically, so a block the
+// client has no field for is consumed as a block rather than having its body
+// parsed as directives. Every directive line is recorded on
+// Profile.Directives, and every block tag on Profile.InlineBlocks, for the
+// capability preflight in the caps package.
 package profile
 
 import (
@@ -10,11 +15,45 @@ import (
 	"bytes"
 	"fmt"
 	"io"
-	"net"
 	"os"
-	"strconv"
 	"strings"
+
+	"github.com/openlawsvpn/go-openlawsvpn/dns"
 )
+
+// Directive is one directive line exactly as the parser saw it, recorded
+// whether or not ParseFile acts on it. It lets the capability registry
+// answer what a profile asks for without re-reading the file; nothing on the
+// connection path reads it.
+type Directive struct {
+	// Name is the directive keyword, lowercased.
+	Name string
+	// Args are the whitespace-separated arguments after the keyword.
+	// It is nil for a bare directive such as "nobind".
+	Args []string
+	// Line is the 1-based line number the directive appeared on.
+	Line int
+}
+
+// String renders the directive back into its source form, keyword first.
+func (d Directive) String() string {
+	if len(d.Args) == 0 {
+		return d.Name
+	}
+	return d.Name + " " + strings.Join(d.Args, " ")
+}
+
+// InlineBlock records that an inline <tag>...</tag> block was present.
+//
+// Only the tag name and its opening line are kept. Block bodies are
+// certificates, private keys and tls-auth keys; they are never copied into
+// this record, so an InlineBlock is always safe to log.
+type InlineBlock struct {
+	// Tag is the block's tag name, verbatim, for example "ca" or "tls-auth".
+	Tag string
+	// Line is the 1-based line number of the opening tag.
+	Line int
+}
 
 // Proto is the transport protocol for the VPN tunnel.
 type Proto int
@@ -26,6 +65,57 @@ const (
 	ProtoUDP
 )
 
+// String is the profile spelling of the transport: "tcp" or "udp".
+func (p Proto) String() string {
+	if p == ProtoTCP {
+		return "tcp"
+	}
+	return "udp"
+}
+
+// ParseProto normalises one of OpenVPN's transport spellings. It serves both
+// places a profile can name a transport — the --proto directive and the third
+// field of a --remote line — which accept the same vocabulary in OpenVPN.
+//
+// The address-family spellings (udp4, tcp6-client) are reduced to their
+// transport. The family half restricts which addresses the name may resolve
+// to; the client does not implement that, and the capability registry reports
+// the directive as degraded rather than supported.
+//
+// The -server spellings are refused: they ask this process to listen, and a
+// client that quietly dialed instead would not be doing what the config said.
+func ParseProto(s string) (Proto, bool) {
+	switch strings.ToLower(strings.TrimSpace(s)) {
+	case "udp", "udp4", "udp6":
+		return ProtoUDP, true
+	case "tcp", "tcp4", "tcp6",
+		"tcp-client", "tcp4-client", "tcp6-client":
+		return ProtoTCP, true
+	default:
+		return 0, false
+	}
+}
+
+// Remote is one --remote line: a host, a port, and optionally a protocol
+// that overrides the profile's own.
+//
+// Port and Proto are always resolved: a line that named neither carries the
+// profile's --port and --proto, which is what OpenVPN dials. ProtoSet is what
+// records whether the file said so.
+type Remote struct {
+	// Host is the hostname or address as written in the profile.
+	Host string
+	// Port is the port to dial.
+	Port int
+	// Proto is the per-remote protocol from the third field. Absent means
+	// the profile's --proto applies, which is what OpenVPN does.
+	Proto Proto
+	// ProtoSet reports whether the remote line named a protocol itself. It
+	// distinguishes a remote that inherited the profile's transport from one
+	// that chose the same transport explicitly.
+	ProtoSet bool
+}
+
 // Profile holds the parsed contents of an .ovpn file.
 type Profile struct {
 	// Remote is the VPN server hostname or IP.
@@ -35,17 +125,33 @@ type Profile struct {
 	// Proto is the transport protocol.
 	Proto Proto
 
-	// CA is the PEM-encoded certificate authority bundle.
+	// Remotes is every --remote line, in file order. It is never empty in a
+	// parsed profile: a file with no remote is refused.
+	//
+	// Remote, Port and Proto above are Remotes[0] — the compatibility
+	// surface, not the model. Anything that has to know there were others
+	// reads this. The client dials them in turn, in file order or shuffled
+	// when --remote-random asks for it, until one completes a handshake.
+	Remotes []Remote
+
+	// CA is the PEM-encoded certificate authority bundle, from an inline
+	// <ca> block.
 	CA []byte
-	// Cert is the PEM-encoded client certificate.
+	// Cert is the PEM-encoded client certificate, from a <cert> block.
 	Cert []byte
-	// Key is the PEM-encoded client private key.
+	// Key is the PEM-encoded client private key, from a <key> block.
 	Key []byte
 
 	// Cipher is the negotiated data-channel cipher name, e.g. "AES-256-GCM".
 	Cipher string
-	// Auth is the HMAC digest, e.g. "SHA256" (unused for GCM).
+	// Auth is the HMAC digest, e.g. "SHA256" (unused for GCM). A profile
+	// with no 'auth' directive gets OpenVPN's built-in default of SHA1; see
+	// the default in ParseFile for why that is not SHA256.
 	Auth string
+	// AuthSet reports whether the profile carried an explicit 'auth'
+	// directive. It distinguishes "auth SHA1" from an omitted directive,
+	// which yields the same SHA1 but says nothing about what was asked for.
+	AuthSet bool
 	// Verb controls optional diagnostic logging. It follows OpenVPN's 0–11
 	// verbosity scale; the default is 3. Verbosity 4 logs the verified server
 	// certificate during each TLS handshake.
@@ -70,19 +176,39 @@ type Profile struct {
 	// MSSFix is the maximum segment size clamp value, from the 'mssfix' directive.
 	// A zero value with MSSFixSet true explicitly disables MSS clamping.
 	MSSFix int
+	// MSSFixMode is how the MSSFix number is measured, from the directive's
+	// optional second word.
+	MSSFixMode MSSFixMode
 	// MSSFixSet reports whether the profile explicitly set a numeric mssfix
 	// value. It distinguishes "mssfix 0" from an omitted directive, for which
 	// OpenVPN applies its default MSS clamp.
 	MSSFixSet bool
 
+	// RemoteRandom reports that the profile carried '--remote-random'. When
+	// true, the client shuffles Remotes before trying them, so that a fleet
+	// of clients sharing one config does not converge on the first endpoint.
+	//
+	// Remotes itself stays in file order: the shuffle is the dialer's, made
+	// per attempt. Writing it back into the parsed profile would make a
+	// second attempt against the same profile start from the first attempt's
+	// permutation.
+	RemoteRandom bool
+
 	// RandomHostname indicates the 'remote-random-hostname' directive was present.
 	// When true, the client must prepend a random subdomain to Remote before dialing.
-	// AWS Client VPN requires this — the bare endpoint hostname has no DNS record.
+	// It is not cosmetic: a deployment that carries the directive may have no
+	// DNS record for the bare hostname at all, so the label is what makes the
+	// endpoint resolvable. The dialer applies it on both paths.
 	RandomHostname bool
 
-	// VerifyX509Name is the expected CN or SAN from the 'verify-x509-name' directive.
-	// When non-empty, it overrides the TLS ServerName used for certificate verification.
-	// AWS Client VPN profiles typically set this to the actual certificate CN (e.g. "mtlab.ai").
+	// VerifyX509Name is the value of the 'verify-x509-name' directive: the
+	// subject DN or common name the server certificate must present. It is
+	// empty when the profile carries no such directive, which is what the
+	// verifier reads to decide whether to make the check at all.
+	//
+	// It is not a hostname and it is not matched against a SAN. Profiles are
+	// issued that set it to the certificate's own CN, which is precisely not
+	// the endpoint they are dialled at.
 	VerifyX509Name string
 
 	// ForceSAMLFlow is set when the profile contains 'auth-federate' or
@@ -91,11 +217,27 @@ type Profile struct {
 	// CRV1/SAML two-phase flow.
 	ForceSAMLFlow bool
 
-	// DNSServers, DNSSearchDomains, and DNSRouteDomains are static DNS options
-	// from the profile. They are combined with options pushed by the server.
-	DNSServers       []net.IP
-	DNSSearchDomains []string
-	DNSRouteDomains  []string
+	// DNS is the static resolver configuration the profile's dhcp-option
+	// directives asked for. It is merged with what the server pushes, which
+	// wins where the two overlap.
+	DNS dns.Config
+
+	// Directives records every directive line the parser encountered, in
+	// file order, including directives it does not act on. Lines inside an
+	// inline <tag>...</tag> block are never recorded here.
+	//
+	// This is diagnostic data for the capability preflight; the connection
+	// path uses the typed fields above.
+	Directives []Directive
+
+	// InlineBlocks records the inline <tag>...</tag> blocks the profile
+	// contained, in file order — tag names and line numbers only, never the
+	// bodies. The parser loads the bodies of <ca>, <cert> and <key>; any
+	// other tag, <tls-auth> among them, is recognised as a block so that its
+	// contents are not mistaken for directives, but is otherwise unused. This
+	// list is the input to the capability preflight, so it describes what the
+	// file said whether or not the client has anywhere to put it.
+	InlineBlocks []InlineBlock
 }
 
 // AuthFlow describes which authentication mechanism the profile uses.
@@ -129,22 +271,22 @@ func (p *Profile) DetectFlow() AuthFlow {
 
 // ParseFile parses an .ovpn profile from the provided reader.
 func ParseFile(r io.Reader) (*Profile, error) {
-	p := &Profile{
-		Port:   1194,
-		Proto:  ProtoUDP,
-		Cipher: "AES-256-GCM",
-		Auth:   "SHA256",
-		Verb:   3,
-		// openvpn3-core ssl/proto.hpp starts with this default, then lets an
-		// explicit reneg-sec directive (including zero) override it.
-		RenegSec: 3600,
-	}
+	return parse(r)
+}
+
+// parse is the parser proper: it turns lines into directives and inline
+// blocks and hands them to the assembler, which holds every rule about what
+// they mean.
+func parse(r io.Reader) (*Profile, error) {
+	a := newAssembler()
 
 	scanner := bufio.NewScanner(r)
 	var inlineTag string
 	var inlineBuf bytes.Buffer
+	lineNo := 0
 
 	for scanner.Scan() {
+		lineNo++
 		line := strings.TrimSpace(scanner.Text())
 
 		// Skip blank lines and comments.
@@ -152,16 +294,14 @@ func ParseFile(r io.Reader) (*Profile, error) {
 			continue
 		}
 
-		// Closing inline block tag.
+		// Inside an inline block: the body is opaque to the directive parser.
+		// An unterminated block is not an error, here or in OpenVPN — the body
+		// is consumed to end of file and closeBlock never runs, so nothing is
+		// loaded from it.
 		if inlineTag != "" {
 			if line == "</"+inlineTag+">" {
-				switch inlineTag {
-				case "ca":
-					p.CA = append([]byte{}, inlineBuf.Bytes()...)
-				case "cert":
-					p.Cert = append([]byte{}, inlineBuf.Bytes()...)
-				case "key":
-					p.Key = append([]byte{}, inlineBuf.Bytes()...)
+				if err := a.closeBlock(inlineTag, inlineBuf.Bytes()); err != nil {
+					return nil, err
 				}
 				inlineTag = ""
 				inlineBuf.Reset()
@@ -172,176 +312,67 @@ func ParseFile(r io.Reader) (*Profile, error) {
 			continue
 		}
 
-		// Opening inline block tag.
-		if strings.HasPrefix(line, "<") && strings.HasSuffix(line, ">") {
-			tag := line[1 : len(line)-1]
-			switch tag {
-			case "ca", "cert", "key":
-				inlineTag = tag
-				inlineBuf.Reset()
-				continue
-			}
+		// Opening inline block tag, for any tag name.
+		if tag, ok := inlineOpenTag(line); ok {
+			inlineTag = tag
+			inlineBuf.Reset()
+			a.openBlock(tag, lineNo)
+			continue
+		}
+
+		// Markup, not a directive: a well-formed opening tag was consumed
+		// above, so a line still starting with '<' is a stray closing tag or
+		// malformed markup. No OpenVPN directive begins with '<', and
+		// recording one would collide with the inline-block names the
+		// capability registry uses.
+		if strings.HasPrefix(line, "<") {
+			continue
 		}
 
 		fields := strings.Fields(line)
 		if len(fields) == 0 {
 			continue
 		}
-		directive := strings.ToLower(fields[0])
-
-		switch directive {
-		case "remote":
-			if len(fields) < 2 {
-				return nil, fmt.Errorf("profile: remote: missing hostname")
-			}
-			p.Remote = fields[1]
-			if len(fields) >= 3 {
-				port, err := strconv.Atoi(fields[2])
-				if err != nil || port < 1 || port > 65535 {
-					return nil, fmt.Errorf("profile: remote: invalid port %q", fields[2])
-				}
-				p.Port = port
-			}
-		case "port":
-			if len(fields) < 2 {
-				return nil, fmt.Errorf("profile: port: missing value")
-			}
-			port, err := strconv.Atoi(fields[1])
-			if err != nil || port < 1 || port > 65535 {
-				return nil, fmt.Errorf("profile: port: invalid %q", fields[1])
-			}
-			p.Port = port
-		case "proto":
-			if len(fields) < 2 {
-				return nil, fmt.Errorf("profile: proto: missing value")
-			}
-			switch strings.ToLower(fields[1]) {
-			case "tcp", "tcp-client":
-				p.Proto = ProtoTCP
-			case "udp":
-				p.Proto = ProtoUDP
-			default:
-				return nil, fmt.Errorf("profile: proto: unknown %q", fields[1])
-			}
-		case "cipher":
-			if len(fields) < 2 {
-				return nil, fmt.Errorf("profile: cipher: missing value")
-			}
-			p.Cipher = strings.ToUpper(fields[1])
-		case "auth":
-			if len(fields) < 2 {
-				return nil, fmt.Errorf("profile: auth: missing value")
-			}
-			p.Auth = strings.ToUpper(fields[1])
-		case "verb":
-			if len(fields) < 2 {
-				return nil, fmt.Errorf("profile: verb: missing value")
-			}
-			n, err := strconv.Atoi(fields[1])
-			if err != nil || n < 0 || n > 11 {
-				return nil, fmt.Errorf("profile: verb: invalid %q", fields[1])
-			}
-			p.Verb = n
-		case "reneg-sec":
-			if len(fields) < 2 {
-				return nil, fmt.Errorf("profile: reneg-sec: missing value")
-			}
-			n, err := strconv.Atoi(fields[1])
-			if err != nil || n < 0 {
-				return nil, fmt.Errorf("profile: reneg-sec: invalid %q", fields[1])
-			}
-			p.RenegSec = n
-		case "reneg-bytes":
-			if len(fields) < 2 {
-				return nil, fmt.Errorf("profile: reneg-bytes: missing value")
-			}
-			n, err := strconv.ParseInt(fields[1], 10, 64)
-			if err != nil || n < 0 {
-				return nil, fmt.Errorf("profile: reneg-bytes: invalid %q", fields[1])
-			}
-			p.RenegBytes = n
-		case "become-primary":
-			if len(fields) < 2 {
-				return nil, fmt.Errorf("profile: become-primary: missing value")
-			}
-			n, err := strconv.Atoi(fields[1])
-			if err != nil || n < 0 {
-				return nil, fmt.Errorf("profile: become-primary: invalid %q", fields[1])
-			}
-			p.BecomePrimarySec = n
-		case "tun-mtu":
-			if len(fields) < 2 {
-				return nil, fmt.Errorf("profile: tun-mtu: missing value")
-			}
-			n, err := strconv.Atoi(fields[1])
-			if err != nil || n < 68 || n > 65535 {
-				return nil, fmt.Errorf("profile: tun-mtu: invalid %q", fields[1])
-			}
-			p.TunMTU = n
-		case "mssfix":
-			// OpenVPN accepts a bare "mssfix" and applies its default. Keep
-			// MSSFixSet false in that case, exactly as when the directive is
-			// omitted. A numeric zero is an explicit opt-out.
-			if len(fields) >= 2 {
-				n, err := strconv.Atoi(fields[1])
-				if err != nil || n < 0 {
-					return nil, fmt.Errorf("profile: mssfix: invalid %q", fields[1])
-				}
-				p.MSSFix = n
-				p.MSSFixSet = true
-			}
-		case "remote-random-hostname":
-			p.RandomHostname = true
-		case "auth-federate":
-			// AWS Client VPN profiles use this OpenVPN directive to request
-			// federated (SAML) authentication. Treat it as the standard spelling
-			// of the existing explicit SAML-flow override.
-			p.ForceSAMLFlow = true
-		case "x-openlawsvpn-flow":
-			if len(fields) >= 2 && strings.ToLower(fields[1]) == "saml" {
-				p.ForceSAMLFlow = true
-			}
-		case "verify-x509-name":
-			if len(fields) >= 2 {
-				p.VerifyX509Name = fields[1]
-			}
-		case "dhcp-option":
-			if len(fields) < 3 {
-				continue
-			}
-			switch strings.ToUpper(fields[1]) {
-			case "DNS":
-				ip := net.ParseIP(fields[2])
-				if ip == nil {
-					return nil, fmt.Errorf("profile: dhcp-option DNS: invalid IP %q", fields[2])
-				}
-				p.DNSServers = append(p.DNSServers, ip)
-			case "DOMAIN":
-				p.DNSSearchDomains = append(p.DNSSearchDomains, fields[2])
-			case "DOMAIN-ROUTE":
-				p.DNSRouteDomains = append(p.DNSRouteDomains, fields[2])
-			}
-		case "ca":
-			// Inline file reference: ca /path/to/ca.crt — not supported here.
-			// Users must use <ca>...</ca> inline blocks.
-		case "cert":
-			// Same — use <cert>...</cert>.
-		case "key":
-			// Same — use <key>...</key>.
+		d := Directive{Name: strings.ToLower(fields[0]), Line: lineNo}
+		if len(fields) > 1 {
+			d.Args = append([]string(nil), fields[1:]...)
 		}
-		// Unrecognised directives are silently ignored (forward-compat).
+		if err := a.directive(d); err != nil {
+			return nil, err
+		}
 	}
 	if err := scanner.Err(); err != nil {
 		return nil, fmt.Errorf("profile: read: %w", err)
 	}
 
-	if p.Remote == "" {
-		return nil, fmt.Errorf("profile: missing 'remote' directive")
-	}
-	return p, nil
+	return a.finish()
 }
 
-// ParseString is a convenience wrapper around ParseFile for in-memory profiles.
+// inlineOpenTag reports whether line is an opening inline block tag such as
+// "<tls-auth>", returning the tag name.
+//
+// A tag name is a non-empty run of letters, digits, '-' and '_'. Anything
+// else — "<", "<>", "< ca >", "</ca>" — is not a tag, so a stray angle
+// bracket cannot swallow the rest of the file.
+func inlineOpenTag(line string) (string, bool) {
+	if len(line) < 3 || line[0] != '<' || line[len(line)-1] != '>' {
+		return "", false
+	}
+	tag := line[1 : len(line)-1]
+	for i := 0; i < len(tag); i++ {
+		c := tag[i]
+		switch {
+		case c >= 'a' && c <= 'z', c >= 'A' && c <= 'Z',
+			c >= '0' && c <= '9', c == '-', c == '_':
+		default:
+			return "", false
+		}
+	}
+	return tag, true
+}
+
+// ParseString is a convenience wrapper around ParseFile for in-memory
+// profiles.
 func ParseString(s string) (*Profile, error) {
 	return ParseFile(strings.NewReader(s))
 }
@@ -353,5 +384,34 @@ func ParsePath(path string) (*Profile, error) {
 		return nil, fmt.Errorf("profile: open %s: %w", path, err)
 	}
 	defer f.Close()
-	return ParseFile(f)
+	return parse(f)
+}
+
+// MSSFixMode says how a numeric mssfix value is measured. It is the directive's
+// optional second word, and the three modes subtract different things before
+// the result becomes an MSS.
+type MSSFixMode int
+
+const (
+	// MSSFixLink counts the tunnel encapsulation — transport prefix, opcode,
+	// packet id and crypto — but not the outer IP and UDP/TCP headers. This is
+	// what a bare "mssfix N" means.
+	MSSFixLink MSSFixMode = iota
+	// MSSFixEncap counts the outer IP and UDP/TCP headers as well: "mssfix N mtu".
+	MSSFixEncap
+	// MSSFixFixed counts no encapsulation at all. The value is the payload
+	// budget, less only the inner IPv4 and TCP headers: "mssfix N fixed".
+	MSSFixFixed
+)
+
+// String names the mode as the directive spells it.
+func (m MSSFixMode) String() string {
+	switch m {
+	case MSSFixEncap:
+		return "mtu"
+	case MSSFixFixed:
+		return "fixed"
+	default:
+		return "link"
+	}
 }
