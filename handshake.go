@@ -145,7 +145,9 @@ func (c *Client) tlsHandshake(ctx context.Context, rawConn net.Conn) (*tls.Conn,
 	var sessionsMu sync.Mutex
 	sessions := map[uint8]*controlSession{0: primSess}
 
-	maxSeg := controlSegmentBudget
+	// Resolve the control-channel MTU budget once, before any session starts:
+	// the wrap is fixed for the connection, so the budget is too.
+	maxSeg := c.controlSegmentSize()
 
 	// startSendGoroutine spawns a goroutine that drains one session's outbound
 	// TLS bytes, fragments into segments of at most maxSeg bytes and writes to

@@ -48,6 +48,7 @@ import (
 	"github.com/openlawsvpn/go-openlawsvpn/diag"
 	"github.com/openlawsvpn/go-openlawsvpn/internal/datachannel"
 	"github.com/openlawsvpn/go-openlawsvpn/internal/prf"
+	"github.com/openlawsvpn/go-openlawsvpn/internal/wrap"
 	"github.com/openlawsvpn/go-openlawsvpn/profile"
 	"github.com/openlawsvpn/go-openlawsvpn/routing"
 )
@@ -181,6 +182,16 @@ type Client struct {
 	// used only before tlsHandshake runs. After that, recvWindow in each
 	// controlSession owns receive sequencing.
 	recvExp uint32
+	// wrapper is the control-channel wrapping in force for this connection,
+	// fixed for its life because tls-auth and tls-crypt both authenticate the
+	// opening HARD_RESET. Read it through controlWrapper, which supplies the
+	// identity wrapper when this is nil, and write it through setControlWrapper.
+	//
+	// It is atomic because failover replaces it while the previous remote's
+	// goroutines may still be draining: tlsHandshake leaves a raw reader and a
+	// send goroutine behind, and neither is joined before the attempt returns.
+	wrapper atomic.Pointer[wrap.Wrapper]
+
 	// active is the remote this attempt is dialing: its host, its port and its
 	// own transport. Read it through activeRemote and activeProto.
 	//
@@ -353,10 +364,19 @@ type Client struct {
 	retransmits     atomic.Uint64
 	rekeys          atomic.Uint64
 
-	// controlForeignSession tallies control packets that named another session:
-	// the packet belonged to somebody else, which is a forgery attempt or a
-	// stale peer. It is kept out of decryptFailures and Replays, which are the
-	// data channel's.
+	// controlAuthFailures, controlReplays and controlStaleTimestamps tally the
+	// control packets the wrap refused, kept out of decryptFailures and
+	// Replays: a data-channel failure is a derivation mismatch in keys both
+	// peers negotiated, a control-channel one means the profile's static key
+	// does not match the server's.
+	controlAuthFailures    atomic.Uint64
+	controlReplays         atomic.Uint64
+	controlStaleTimestamps atomic.Uint64
+
+	// controlForeignSession tallies control packets that named another session.
+	// Apart from controlAuthFailures on purpose: an auth failure says our
+	// static key is wrong, this says the key was right — or absent — and the
+	// packet belonged to somebody else. A forgery attempt or a stale peer.
 	controlForeignSession atomic.Uint64
 
 	// rec accumulates the diag.SessionReport for the current attempt. It is an
@@ -428,6 +448,10 @@ func New(p *profile.Profile) *Client {
 		peerRekeyCh:    make(chan *controlSession, 1),
 		nextKeyID:      1, // key_id 0 is the initial session; rekey starts at 1
 	}
+	// No profile yet selects a wrap, so every connection runs the identity
+	// wrapper. Setting it here rather than leaving it nil means the seam is
+	// exercised by every connection this client makes.
+	c.setControlWrapper(wrap.Plain())
 	// Report must be callable before Connect, so the recorder exists from the
 	// start rather than being created by the first stage transition.
 	c.rec.Store(newSessionRecorder())

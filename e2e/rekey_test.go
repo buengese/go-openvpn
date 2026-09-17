@@ -24,11 +24,19 @@ import (
 	"github.com/openlawsvpn/go-openlawsvpn/testenv"
 )
 
+// The three renegotiation vehicles, one per direction and format.
 const (
 	// clientRekeyEntry is the ladder's plain classic-derivation isolate with
 	// reneg-sec 30. The matrix's other reneg entries wrap their control
 	// channel, so this is the only one with nothing in front of it.
 	clientRekeyEntry = "v24-gcm256-sha256-plain-udp-reneg30"
+
+	// serverRekeyEntry is the only vehicle there will ever be for a
+	// renegotiation the *server* starts. The entry is what makes the
+	// direction attributable: the server carries `reneg-sec 30` and the
+	// client carries `reneg-sec 0`, so Manager.NeedsRekey can never fire on
+	// this side and a renegotiation observed here cannot have been ours.
+	serverRekeyEntry = "v26-gcm256-sha256-tlscrypt-udp-reneg-server"
 
 	// datav1RekeyEntry is the P_DATA_V1 isolate with reneg-sec 30 on both
 	// ends, so across a run either side may start the renegotiation.
@@ -108,6 +116,10 @@ func startRekeyTunnel(t *testing.T, entry string) *rekeyTunnel {
 // saw reports whether any log line contains substr, and returns the first that
 // does.
 func (r *rekeyTunnel) saw(substr string) (string, bool) { return r.log.saw(substr) }
+
+// dump returns every log line, for a failure that has to show what the client
+// did instead.
+func (r *rekeyTunnel) dump() string { return r.log.dump("\n      ") }
 
 // rekeys is how many renegotiations have completed so far.
 func (r *rekeyTunnel) rekeys() uint64 { return r.tun.Report().Counters.Rekeys }
@@ -191,6 +203,63 @@ func TestRekeyReDerivesAndKeepsCarryingData(t *testing.T) {
 	}
 	t.Logf("%s: rekeys=%d sent=%d recv=%d decrypt_failures=%d",
 		clientRekeyEntry, rep.Counters.Rekeys, rep.Counters.BytesSent,
+		rep.Counters.BytesRecv, rep.Counters.DecryptFailures)
+}
+
+// TestServerInitiatedRekeyKeepsCarryingData holds a tunnel open across a
+// renegotiation the server starts, and fetches through it afterwards. The
+// second fetch is the assertion, for the reason the file comment gives.
+func TestServerInitiatedRekeyKeepsCarryingData(t *testing.T) {
+	r := startRekeyTunnel(t, serverRekeyEntry)
+
+	// The client's own reneg-sec must be 0, or the entry is not the isolate
+	// it claims to be and a completed rekey proves nothing about the
+	// direction.
+	if r.prof.RenegSec != 0 {
+		t.Fatalf("%s generated a client profile with reneg-sec %d; the entry "+
+			"exists to make the server the only end that can renegotiate",
+			serverRekeyEntry, r.prof.RenegSec)
+	}
+
+	r.serve(t, 8085, "after-the-server-rekey")
+
+	r.fetch(t, "before the rekey")
+	before := r.rekeys()
+
+	// The server's reneg-sec is 30, and the promotion delay follows.
+	r.awaitRekey(t, before, 120*time.Second, func() {
+		if line, ok := r.saw(serverRekeyLog); ok {
+			t.Fatalf("the server's renegotiation was adopted but never completed.\n"+
+				"    client log: %s\n"+
+				"    rekeys=%d", line, r.rekeys())
+		}
+		t.Fatalf("no renegotiation completed within 120s against a server-initiated "+
+			"reneg-sec 30 entry (rekeys=%d), and the client never logged %q — the "+
+			"peer's SOFT_RESET is still not reaching a control session",
+			r.rekeys(), serverRekeyLog)
+	})
+
+	// It must have been the server's. On this entry nothing else is possible,
+	// but assert it rather than inferring it: a change to the entry that
+	// reintroduced a client reneg-sec would otherwise go unnoticed.
+	line, ok := r.saw(serverRekeyLog)
+	if !ok {
+		t.Fatalf("a renegotiation completed but the client never logged %q, so it was "+
+			"not adopted through the server-initiated path.\n"+
+			"    client log:\n      %s", serverRekeyLog, r.dump())
+	}
+	t.Logf("adopted: %s", line)
+
+	time.Sleep(rekeyPromotionSettle)
+	r.fetch(t, "after the rekey")
+
+	rep := r.tun.Report()
+	if rep.Counters.DecryptFailures > 0 {
+		t.Errorf("decrypt failures = %d; a rekey must not drop a packet, and a new "+
+			"epoch derived wrongly shows up here", rep.Counters.DecryptFailures)
+	}
+	t.Logf("%s: rekeys=%d sent=%d recv=%d decrypt_failures=%d",
+		serverRekeyEntry, rep.Counters.Rekeys, rep.Counters.BytesSent,
 		rep.Counters.BytesRecv, rep.Counters.DecryptFailures)
 }
 

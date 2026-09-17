@@ -414,7 +414,9 @@ func isCredentialsRejected(cm *control.Message) bool {
 // no field at all.
 //
 // Both key sources are secrets: an old epoch's material would derive keys from
-// bytes the peer never saw.
+// bytes the peer never saw. The control-channel tallies are what
+// resetFailureClass reads to tell a silent server from a static key that does
+// not match.
 func (c *Client) rewindConnectionLocked() {
 	c.rawConn = nil
 	c.tlsConn = nil
@@ -428,6 +430,9 @@ func (c *Client) rewindConnectionLocked() {
 	c.backendIP = ""
 	c.keySource = prf.KeySource{}
 	c.serverKeySource = prf.KeySource{}
+	c.controlAuthFailures.Store(0)
+	c.controlReplays.Store(0)
+	c.controlStaleTimestamps.Store(0)
 	c.controlForeignSession.Store(0)
 }
 

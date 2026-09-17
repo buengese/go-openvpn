@@ -235,7 +235,12 @@ func (c *Client) counters() diag.Counters {
 		// internal/datachannel and reports a replay as an ordinary decrypt
 		// error, so the two cannot be told apart from here.
 
-		ControlForeignSession: c.controlForeignSession.Load(),
+		// The control-channel tallies can be told apart, because the wrap
+		// returns a distinct sentinel for each reason it refuses a packet.
+		ControlAuthFailures:    c.controlAuthFailures.Load(),
+		ControlReplays:         c.controlReplays.Load(),
+		ControlStaleTimestamps: c.controlStaleTimestamps.Load(),
+		ControlForeignSession:  c.controlForeignSession.Load(),
 	}
 }
 
@@ -340,6 +345,25 @@ func (c *Client) beginAttempt() error {
 		rec.mu.Unlock()
 		return derr
 	}
+
+	// The control-channel wrap is chosen here, before any socket exists,
+	// because tls-auth authenticates the opening HARD_RESET and cannot be
+	// installed after it. A profile whose wrap cannot be built is refused:
+	// dialing anyway would report a ClassNetwork silence instead of the
+	// config error it is.
+	if err := c.selectWrapper(); err != nil {
+		derr := c.failStage(diag.ClassConfig, diag.StageParse, err,
+			"control-channel wrap")
+		rec.mu.Lock()
+		rec.startErr = derr
+		rec.mu.Unlock()
+		return derr
+	}
+	// Recorded here and not only at PUSH_REPLY: the wrap is configured rather
+	// than negotiated, and an attempt that ends at reset never reaches the
+	// push stage.
+	wrapName := c.controlWrapper().Name()
+	rec.edit(func(r *diag.SessionReport) { r.Negotiated.TLSWrap = wrapName })
 
 	// A profile whose method has nothing to present is refused: there is
 	// nothing to put in the key-method-2 packet. It is ClassConfig, not
@@ -465,7 +489,7 @@ func (c *Client) recordPush(raw string, opts *routing.PushOptions, peerID uint32
 	parsed := pushParsedOptions(raw)
 	unknown := pushUnknownOptions(raw)
 	params, _, _ := c.negotiateDataChannel(opts) //nolint:errcheck // an unsupported cipher is reported by its own stage failure
-	negotiated := negotiatedInfo(opts, peerID, params)
+	negotiated := negotiatedInfo(opts, peerID, params, c.controlWrapper().Name())
 	c.recorder().edit(func(r *diag.SessionReport) {
 		r.Push.Raw = raw
 		r.Push.Parsed = parsed
@@ -682,8 +706,14 @@ func pushUnknownOptions(raw string) []string {
 // params is what the client resolved the two sides down to, so the report
 // records the cipher, digest and wire format actually installed rather than
 // re-deriving them here and risking a second answer.
-func negotiatedInfo(opts *routing.PushOptions, peerID uint32, params datachannel.Params) diag.NegotiatedInfo {
-	n := diag.NegotiatedInfo{PeerID: peerID}
+//
+// tlsWrap is the name of the control-channel wrapping that carried this
+// session, taken from the Wrapper the client installed rather than from a
+// constant: it reads "tls-auth" for a profile that carries one and "none"
+// otherwise, so a wrapped session can be told from an unwrapped one without
+// re-reading the profile.
+func negotiatedInfo(opts *routing.PushOptions, peerID uint32, params datachannel.Params, tlsWrap string) diag.NegotiatedInfo {
+	n := diag.NegotiatedInfo{PeerID: peerID, TLSWrap: tlsWrap}
 	if opts == nil {
 		return n
 	}

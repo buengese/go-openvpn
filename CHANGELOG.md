@@ -30,6 +30,10 @@ and releases follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   2.6 and most commercial providers.
 - Data-channel breadth: AES-128, AES-192 and AES-256 in both GCM and CBC, with
   CBC authenticated by HMAC-SHA1, HMAC-SHA256 or HMAC-SHA512.
+- Support for `tls-auth` and `tls-crypt`. Both wraps authenticate every control
+  packet including the opening reset, so a server using either previously
+  dropped the client's first packet and never replied. Most commercial provider
+  profiles require one or the other.
 - Support for `auth-user-pass` through a new `Client.CredentialsFn` callback,
   also on `netstack.Options`. The callback is asked for a username and password
   once per attempt, before the key-method-2 packet is sent, and may block on a
@@ -251,6 +255,9 @@ and releases follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - The AWS Client VPN literals `N/A` and `ACS::35001` are sent only on the AWS
   SSO flow. Every other flow previously sent them too; a certificate-only
   profile now sends empty credentials, as stock OpenVPN does.
+- A server we cannot authenticate to is reported as a crypto failure at the
+  reset stage rather than as a network timeout. A wrapped server and a dead one
+  were previously indistinguishable.
 - `redirect-gateway` installs two /1 routes, `0.0.0.0/1` and `128.0.0.0/1`,
   instead of replacing the host's default with its own `0.0.0.0/0`, and covers
   IPv6 with four prefixes rather than a `::/0`. Each wins by longest-prefix
@@ -386,6 +393,9 @@ and releases follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Key renegotiation derives its keys through the same code as the initial
   handshake. It previously carried a second copy that would have installed
   AES-GCM keys on a CBC connection.
+- A control packet that fails authentication is dropped and counted instead of
+  ending the session. On UDP the previous behaviour let any packet from any
+  source tear down an established connection.
 - A `route` line whose gateway is `net_gateway` or `remote_host` no longer fails
   the whole `PUSH_REPLY`. `net.ParseIP` returned nil for the symbolic name and
   the parser raised `invalid gateway`, which ended the session at `StagePush`

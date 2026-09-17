@@ -136,6 +136,13 @@ func (l *eventLog) saw(substr string) (string, bool) {
 	return "", false
 }
 
+// dump joins every line with sep, for a failure message.
+func (l *eventLog) dump(sep string) string {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return strings.Join(l.lines, sep)
+}
+
 // getThroughTunnel fetches url over tun and compares the body with want. when
 // names the moment for a failure message, so a test that fetches more than
 // once says which fetch failed.

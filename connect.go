@@ -141,7 +141,11 @@ func (c *Client) dialAndAuthenticate(ctx context.Context) (*SAMLChallenge, error
 	var last *diag.Error
 	for i, target := range order {
 		if i > 0 {
-			c.rewindForNextRemote()
+			if err := c.rewindForNextRemote(); err != nil {
+				last = c.failStage(diag.ClassConfig, diag.StageDial, err,
+					"control-channel wrap for the next remote")
+				break
+			}
 		}
 		c.setActiveRemote(target.Remote)
 
@@ -234,15 +238,22 @@ func (c *Client) abandonAttempt(err error) {
 // rewindForNextRemote clears what one failed remote left behind, so that the
 // next one is dialed from the state the first one was.
 //
+// The control-channel wrap is rebuilt rather than reused. It owns
+// connection-scoped state — a replay window and a packet-id counter — and the
+// next remote has never sent us a control packet, so a window carried across
+// would drop its HARD_RESET as a replay and make failover impossible on every
+// wrapped profile. See selectWrapper.
+//
 // The session report is not cleared: the stage timeline keeps every stage of
 // every remote, in order, and only the outcome the failed remote wrote is
 // rewound, so the next remote can write its own.
-func (c *Client) rewindForNextRemote() {
+func (c *Client) rewindForNextRemote() error {
 	c.mu.Lock()
 	c.rewindConnectionLocked()
 	c.mu.Unlock()
 
 	c.recorder().rewind()
+	return c.selectWrapper()
 }
 
 // ---- One exchange --------------------------------------------------------
@@ -336,7 +347,8 @@ func (c *Client) runExchange(ctx context.Context, p exchangeParams) (*tls.Conn, 
 	srvReset, err := c.sendWithRetry(rawConn, framing.BuildHardReset(c.clientSID),
 		framing.P_CONTROL_HARD_RESET_SERVER_V2, 2*time.Second, 8)
 	if err != nil {
-		return nil, nil, fail(diag.ClassNetwork, diag.StageReset, err, "HARD_RESET exchange")
+		class, detail := c.resetFailureClass()
+		return nil, nil, fail(class, diag.StageReset, err, "HARD_RESET exchange"+detail)
 	}
 	// No opcode check: sendWithRetry returns only a packet whose opcode is the
 	// one asked for, and keeps reading until the deadline otherwise.

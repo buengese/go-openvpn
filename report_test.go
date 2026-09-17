@@ -182,7 +182,7 @@ func TestNegotiatedInfoRecordsTheDigest(t *testing.T) {
 			if err != nil {
 				t.Fatalf("datachannel.ResolveParams(%q, %q): %v (%s)", tc.cipher, tc.digest, err, feature)
 			}
-			n := negotiatedInfo(&routing.PushOptions{}, 7, params)
+			n := negotiatedInfo(&routing.PushOptions{}, 7, params, "none")
 			if n.Cipher != tc.wantCipher {
 				t.Errorf("Cipher = %q, want %q", n.Cipher, tc.wantCipher)
 			}
@@ -194,7 +194,7 @@ func TestNegotiatedInfoRecordsTheDigest(t *testing.T) {
 
 	// No push reply, no negotiation. The field stays empty rather than
 	// reporting what the client would have used had it got that far.
-	if n := negotiatedInfo(nil, 0, datachannel.Params{}); n.Digest != "" {
+	if n := negotiatedInfo(nil, 0, datachannel.Params{}, "none"); n.Digest != "" {
 		t.Errorf("Digest = %q with no push reply; nothing was negotiated", n.Digest)
 	}
 }

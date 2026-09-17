@@ -6,8 +6,9 @@
 // every negotiated shape the client has to speak.
 //
 // OpenVPN 2.4 and 2.5 have no TLS keying-material exporter, so the classic key
-// derivation is the only one available there. Each entry differs from a
-// neighbour by exactly one axis, which
+// derivation is the only one available there; a tls-auth or tls-crypt server
+// wraps *every* control packet, the opening HARD_RESET included. Each entry
+// differs from a neighbour by exactly one axis, which
 // testenv.TestLadderIsolatesDifferByExactlyOneAxis asserts.
 package e2e
 
@@ -22,7 +23,7 @@ const ladderPort = 8081
 // ladderEntries is the ladder, in the order it isolates things. wantWrap is the
 // load-bearing column: a wrap is configured rather than negotiated, so a bug
 // that failed to install one would leave a working plain tunnel and a green
-// test.
+// test. The plain rows are the "−" half of each ± pair.
 var ladderEntries = []struct {
 	entry     string
 	step      string
@@ -97,6 +98,49 @@ var ladderEntries = []struct {
 		isolates:  "credentials, and nothing else, against v24-gcm256-sha256-plain-udp",
 		wantWrap:  "none",
 		wantDeriv: "prf", wantCiph: "AES-256-GCM",
+	},
+
+	// --- ±tls-auth, both key directions -----------------------------------
+	// The direction selects which half of the 256-byte static key signs and
+	// which verifies, and getting it backwards only shows against a real peer.
+	{
+		entry: "v24-gcm256-sha256-tlsauth-kd0-udp", step: "+tls-auth, kd0",
+		isolates:  "the tls-auth wrap at key-direction 0, one axis from v24-gcm256-sha256-plain-udp",
+		wantWrap:  "tls-auth",
+		wantDeriv: "prf", wantCiph: "AES-256-GCM",
+	},
+	{
+		entry: "v24-cbc256-sha512-tlsauth-kd1-udp", step: "+tls-auth, kd1",
+		isolates:  "the tls-auth wrap at key-direction 1, one axis from v24-cbc256-sha512-plain-udp",
+		wantWrap:  "tls-auth",
+		wantDeriv: "prf", wantCiph: "AES-256-CBC",
+	},
+
+	// --- ±tls-crypt --------------------------------------------------------
+	// Two rows rather than one: the 2.6 entry alone would exercise tls-crypt
+	// only over EKM and only over UDP.
+	{
+		entry: "v26-gcm256-sha256-tlscrypt-udp", step: "+tls-crypt",
+		isolates:  "the tls-crypt wrap, and nothing else, against v26-gcm256-sha256-plain-udp",
+		wantWrap:  "tls-crypt",
+		wantDeriv: "tls-ekm", wantCiph: "AES-256-GCM",
+	},
+	{
+		entry: "v24-cbc256-sha256-tlscrypt-tcp", step: "+tls-crypt, breadth",
+		isolates: "tls-crypt over TCP and over the classic derivation; " +
+			"three axes from the pair above, so it isolates nothing and covers a lot",
+		wantWrap:  "tls-crypt",
+		wantDeriv: "prf", wantCiph: "AES-256-CBC",
+	},
+
+	// --- credentials and a wrap, jointly ----------------------------------
+	{
+		entry: "v24-cbc256-sha512-tlsauth-kd1-udp-userpass", step: "credentials behind a wrap",
+		isolates: "what the wrapped providers actually ship: credentials behind a wrap. " +
+			"One Auth axis from v24-cbc256-sha512-tlsauth-kd1-udp, so when the joint " +
+			"result fails, the pair says whether the credentials moved or the wrap did",
+		wantWrap:  "tls-auth",
+		wantDeriv: "prf", wantCiph: "AES-256-CBC",
 	},
 }
 
