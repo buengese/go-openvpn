@@ -290,6 +290,19 @@ and releases follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   body — the two were identical calls to the same bring-up — and had no caller
   outside the tests. Use `ConnectPhase2`, whose documentation now describes what
   it does rather than which of the two callers it was written for.
+- Six exported functions from `auth/saml` that encoded the AWS second exchange
+  as though it were the only one: `BuildPhase2Username`, `CompletePhase2`,
+  `ParsePhase2Credential`, `WrapAuthFailed`, `WritePhase2Credential` and
+  `WritePhase2Credentials`. What they did is now the authentication method's,
+  reached through `vpn.Client` rather than by assembling packets by hand.
+- The stock control-channel vocabulary from `auth/saml`: `MsgKind` and its four
+  `MsgKind*` constants, `ControlMessage`, `SessionExpiredError`,
+  `SessionMonitor`, `ClassifyMsg`, `ParseControlMsg`, `ReadControlMsg`,
+  `HandlePhase1` and `NewSessionMonitor`. None of it is SAML-specific — it is
+  how any OpenVPN server talks on the control channel — and it now lives in
+  `internal/control`, which cannot be imported from outside this module. A
+  consumer that needs any of this reaches for the root package's API —
+  `vpn.Client`'s event stream and `Report()` carry what these reported.
 
 ### Fixed
 

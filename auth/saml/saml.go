@@ -135,13 +135,6 @@ func BuildPhase2Password(stateID, samlToken string) string {
 	return "CRV1::" + stateID + "::" + samlToken
 }
 
-// BuildPhase2Username is retained for source compatibility.
-// Deprecated: use BuildPhase2Password; production AWS key-method-2 framing
-// carries the CRV1 credential in the password field, not the username field.
-func BuildPhase2Username(stateID, samlToken string) string {
-	return BuildPhase2Password(stateID, samlToken)
-}
-
 // normalizeAndValidateResponse canonicalises and validates a SAMLResponse value
 // received from a browser POST.
 //
