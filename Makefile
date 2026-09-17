@@ -19,7 +19,7 @@ ifndef ANDROID_NDK_HOME
   endif
 endif
 
-.PHONY: test-mock test-privileged all aar aar-sha256 cli build-macos-cli relay-server run-local-relay check-platforms test lint clean \
+.PHONY: test-mock test-e2e test-privileged test-soak all aar aar-sha256 cli build-macos-cli relay-server run-local-relay check-platforms test lint clean \
         build-bins test-integration-cli matrix-images matrix-clean prf-vectors \
         tls-wrap-vectors comp-vectors \
 
@@ -78,17 +78,27 @@ check-platforms:
 	GOOS=darwin  GOARCH=arm64  go build ./...
 	GOOS=darwin  GOARCH=arm64  go build -tags ios ./...
 
-## Run unit tests
+## Run the tests that need no tag, no Docker and no root. Fast; the default gate.
 test:
 	go test -race ./...
 
 ## Mock-server pass: the AWS CRV1 gate. No Docker. See docs/testing.md.
 test-mock:
-	go test -v -tags=mockserver -timeout 300s ./internal/ctls
+	go test -v -tags=mockserver -timeout 300s ./e2e ./auth/saml ./internal/ctls
+
+## Docker end-to-end pass. Needs Docker and `make matrix-images`.
+## -p 1 is required, not a preference. See docs/testing.md.
+test-e2e:
+	go test -v -p 1 -tags=docker -timeout 900s ./e2e ./testenv
 
 ## Privileged pass: needs root. See docs/testing.md.
 test-privileged:
 	sudo OPENLAWSVPN_PRIVILEGED_TESTS=1 go test -v -tags=privileged -timeout 60s ./tun ./device/kernel
+
+## Soak: `make test-soak SOAK=1h`. See docs/testing.md.
+SOAK ?= 1h
+test-soak:
+	OPENLAWSVPN_SOAK=$(SOAK) go test -tags=soak -timeout 150m -run TestSoak ./e2e
 
 ## Build the pinned OpenVPN 2.4/2.5/2.6 server images for the e2e matrix.
 ## Slow (source builds); run once, then matrix entries start in well under a
