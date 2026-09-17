@@ -62,6 +62,13 @@ and releases follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - `Profile.FileRefs`: which of the `ca`, `cert` and `key` directives named a
   file, and for each whether the file was read or an inline block superseded
   it. The name itself is not recorded.
+- `Profile.Compression` and `Profile.AllowCompression`: the profile's own
+  `comp-lzo`, `compress` and `allow-compression` directives are now read. They
+  had no field at all, and an OpenVPN server does not push its compression
+  setting, so a `comp-lzo` profile talking to a `comp-lzo` server previously
+  agreed on nothing and sent unframed packets the server threw away.
+  `allow-compression no` refuses a compressing algorithm from the profile and
+  from the `PUSH_REPLY` alike, and permits a framing stub.
 - The `device` package: the tunnel-device seam. `device.Backend` turns the
   parameters a server pushed into a `device.Device` — raw IP packets, no framing
   — so the client core no longer knows whether they reach a kernel interface or

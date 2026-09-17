@@ -17,6 +17,7 @@ import (
 
 	"github.com/openlawsvpn/go-openlawsvpn/diag"
 	"github.com/openlawsvpn/go-openlawsvpn/dns"
+	"github.com/openlawsvpn/go-openlawsvpn/internal/compress"
 	"github.com/openlawsvpn/go-openlawsvpn/internal/crypto"
 )
 
@@ -213,6 +214,31 @@ func (a *assembler) directive(d Directive) error {
 			return fmt.Errorf("profile: become-primary: invalid %q", fields[1])
 		}
 		p.BecomePrimarySec = n
+	case "comp-lzo", "compress":
+		// The framing is decided by the directive and the option flags it
+		// sets, not by the algorithm it names: bare 'compress' and
+		// 'comp-lzo no' both select COMP_ALG_STUB, yet only the first
+		// carries COMP_F_SWAP and they put different bytes on the wire.
+		// compress.ModeForDirective is the single place that table lives,
+		// so the profile and the PUSH_REPLY cannot disagree about it.
+		arg := ""
+		if len(fields) > 1 {
+			arg = fields[1]
+		}
+		mode, ok := compress.ModeForDirective(directive, arg)
+		if !ok {
+			return fmt.Errorf("profile: %s: unknown compression %q", directive, arg)
+		}
+		p.Compression = mode
+	case "allow-compression":
+		if len(fields) < 2 {
+			return fmt.Errorf("profile: allow-compression: missing value")
+		}
+		allow, ok := compress.ParseAllowCompression(fields[1])
+		if !ok {
+			return fmt.Errorf("profile: allow-compression: invalid %q", fields[1])
+		}
+		p.AllowCompression = allow
 	case "tun-mtu":
 		if len(fields) < 2 {
 			return fmt.Errorf("profile: tun-mtu: missing value")

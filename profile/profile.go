@@ -2,7 +2,8 @@
 //
 // It handles the directives that go-openlawsvpn needs: remote, port, proto,
 // inline PEM blocks (<ca>, <cert>, <key>), the static-key blocks <tls-auth>
-// and <tls-crypt>, cipher, auth and rekey timing.
+// and <tls-crypt>, cipher, auth, rekey timing, and common extra options such
+// as comp-lzo / compress.
 //
 // Inline <tag>...</tag> blocks are recognised generically, so a block the
 // client has no field for is consumed as a block rather than having its body
@@ -29,6 +30,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	"github.com/openlawsvpn/go-openlawsvpn/internal/compress"
 
 	"github.com/openlawsvpn/go-openlawsvpn/dns"
 )
@@ -225,6 +228,20 @@ type Profile struct {
 	// BecomePrimarySec is the optional delay before a negotiated rekey becomes
 	// the primary send key. 0 uses the OpenVPN default derived from reneg-sec.
 	BecomePrimarySec int
+
+	// Compression is the data-channel framing the profile itself asked for,
+	// from 'comp-lzo' or 'compress [algo]', independent of what the server
+	// later pushes. compress.EffectiveMode reconciles the two.
+	//
+	// It matters more than a client-side preference usually would, because
+	// OpenVPN's server does not push its compression setting at all: a
+	// comp-lzo config talking to a comp-lzo server agrees by silence, and a
+	// client that reads only the PUSH_REPLY concludes there is no framing and
+	// sends unframed packets that the peer drops.
+	Compression compress.Mode
+	// AllowCompression is the '--allow-compression' policy. 'no' refuses a
+	// compressing algorithm from either source and permits a framing stub.
+	AllowCompression compress.AllowCompression
 
 	// TunMTU is the MTU for the TUN interface, from the 'tun-mtu' directive.
 	// 0 means use the default (1500).
