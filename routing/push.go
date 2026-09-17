@@ -1,19 +1,38 @@
-// Package routing parses OpenVPN PUSH_REPLY routing options and applies
-// them to the Linux kernel via netlink.
+// Package routing parses OpenVPN PUSH_REPLY routing options and applies them
+// to the host routing table: Linux and Android through rtnetlink(7)
+// (netlink.go), macOS through route(8) (netlink_darwin.go), and on iOS not at
+// all — the OS applies them from NEPacketTunnelNetworkSettings (netlink_ios.go).
 //
-// Options parsed from PUSH_REPLY:
+// ParsePushReply recognises the directives below and skips every other one.
 //
-//   - topology <subnet|net30>            — determines how ifconfig is interpreted
-//   - ifconfig <local> <peer|mask>       — TUN interface IPv4 address
-//   - ifconfig-ipv6 <addr/prefix> <gw>  — TUN interface IPv6 address
-//   - route-gateway <gw>                — default gateway for IPv4 route directives
-//   - route <net> <mask> [gateway]       — explicit IPv4 network routes
-//   - route-ipv6 <net/prefix> [gateway] — explicit IPv6 network routes
-//   - redirect-gateway [def1] [...]      — default-route replacement (IPv4)
-//   - redirect-gateway ipv6 [...]        — default-route replacement (IPv6)
+// # Addressing and routes
 //
-// Parsing is pure Go and requires no special privileges.
-// Applying routes requires CAP_NET_ADMIN (root on most systems).
+//   - topology <subnet|net30> — how ifconfig's second argument reads
+//   - ifconfig <local> <mask|peer> — TUN interface IPv4 address
+//   - ifconfig-ipv6 <addr/prefix> [gw] — TUN interface IPv6 address
+//   - route-gateway <gw|vpn_gateway|dhcp> — next hop for IPv4 route directives
+//   - route <net> [<mask> [gw]] — explicit IPv4 network route
+//   - route-ipv6 <net/prefix> [gw] — explicit IPv6 network route
+//   - redirect-gateway [flags...] — default-route replacement, per family
+//
+// # Data channel
+//
+//   - cipher <name> — negotiated data-channel cipher
+//   - auth <digest> — data-channel HMAC digest
+//   - compress [alg], comp-lzo [mode] — compression framing
+//   - protocol-flags <flags...> — tls-ekm and the flags beside it
+//   - key-derivation tls-ekm — the same flag, spelled on its own
+//
+// # Session and timers
+//
+//   - ping <n>, ping-restart <n> — keepalive interval and dead-link timeout
+//   - inactive <n> [bytes] — idle disconnect
+//   - tun-mtu <n> — tunnel MTU
+//   - mssfix <n> — TCP MSS clamp
+//   - auth-token <token> — credential for later renegotiations
+//
+// Parsing is pure Go and requires no special privileges. Applying routes
+// requires CAP_NET_ADMIN on Linux and root on macOS.
 //
 // Reference: openvpn3-core tun/client/tunprop.hpp
 package routing
@@ -21,6 +40,7 @@ package routing
 import (
 	"fmt"
 	"net"
+	"strconv"
 	"strings"
 
 	"github.com/openlawsvpn/go-openlawsvpn/internal/compress"
@@ -70,6 +90,67 @@ type Route struct {
 	// Gateway is the next-hop address.
 	// If nil, Ifconfig.Gateway is used.
 	Gateway net.IP
+	// Symbolic is the gateway the server named symbolically, when it did.
+	// OpenVPN lets a pushed route say vpn_gateway, net_gateway or
+	// remote_host instead of an address, and resolves each at install time
+	// (openvpn-2.6.22 src/openvpn/route.c:236-300; options.c:7034-7038
+	// admits them through is_special_addr). net_gateway is how a server says
+	// "this destination goes around the tunnel, not through it" — the
+	// standard LAN or split-exclude push.
+	Symbolic SymbolicGateway
+}
+
+// SymbolicGateway is a next hop a server named rather than addressed.
+type SymbolicGateway int
+
+const (
+	// SymbolicNone means Gateway holds an address, or the route takes the
+	// tunnel's own gateway.
+	SymbolicNone SymbolicGateway = iota
+	// SymbolicVPNGateway is the tunnel's remote endpoint — the same next hop
+	// an omitted gateway selects.
+	SymbolicVPNGateway
+	// SymbolicNetGateway is the host's pre-existing default gateway: this
+	// destination is to be reached around the tunnel.
+	SymbolicNetGateway
+	// SymbolicRemoteHost is the VPN server's own address, which likewise must
+	// stay reachable outside the tunnel.
+	SymbolicRemoteHost
+)
+
+// String returns a stable lowercase token for reports and logs.
+func (g SymbolicGateway) String() string {
+	switch g {
+	case SymbolicVPNGateway:
+		return "vpn_gateway"
+	case SymbolicNetGateway:
+		return "net_gateway"
+	case SymbolicRemoteHost:
+		return "remote_host"
+	default:
+		return ""
+	}
+}
+
+// AroundTunnel reports whether this next hop means the destination must not be
+// routed through the tunnel.
+func (g SymbolicGateway) AroundTunnel() bool {
+	return g == SymbolicNetGateway || g == SymbolicRemoteHost
+}
+
+// parseSymbolicGateway recognises the three names OpenVPN accepts in place of
+// a gateway address.
+func parseSymbolicGateway(s string) (SymbolicGateway, bool) {
+	switch s {
+	case "vpn_gateway":
+		return SymbolicVPNGateway, true
+	case "net_gateway":
+		return SymbolicNetGateway, true
+	case "remote_host":
+		return SymbolicRemoteHost, true
+	default:
+		return SymbolicNone, false
+	}
 }
 
 // Route6 represents a single IPv6 network route pushed by the server.
@@ -130,9 +211,18 @@ type PushOptions struct {
 	// This means all IPv4 traffic (0.0.0.0/0) should be routed through the tunnel.
 	RedirectGateway bool
 
-	// RedirectGateway6 is true when the server pushed "redirect-gateway ipv6".
-	// This means all IPv6 traffic (::/0) should be routed through the tunnel.
-	RedirectGateway6 bool
+	// RedirectFlags is the set of flag words the pushed redirect-gateway
+	// carried. "ipv6" and "!ipv4" have already been folded into
+	// RedirectGateway and RedirectsIPv6; what a backend does with the rest is
+	// the backend's business, and RedirectFlags.ParsedAndIgnored names the
+	// ones no backend acts on, so that a client can report them.
+	RedirectFlags RedirectFlags
+
+	// RedirectUnknownFlags holds redirect-gateway flag words this client did
+	// not recognise. The reference refuses the whole option on one
+	// (options.c:7242-7246); a pushed option gets the rest of the directive
+	// honoured and the word reported instead.
+	RedirectUnknownFlags []string
 
 	// Cipher is the data-channel cipher negotiated with the server (e.g. "AES-256-GCM").
 	// Empty means the server did not push a cipher directive; the client falls back
@@ -142,9 +232,24 @@ type PushOptions struct {
 	// line ~753: parses "cipher <name>" and validates it against IV_NCP.
 	Cipher string
 
-	// Compression is the compression mode negotiated with the server.
-	// Most servers (including AWS Client VPN) push no compression directive,
-	// so this defaults to compress.ModeNone.
+	// Auth is the data-channel HMAC digest pushed by the server (e.g. "SHA512").
+	// Empty means the server did not push one; the client falls back to the
+	// profile's digest, which is SHA1 when the profile is silent too (see
+	// profile.Profile.Auth). A pushed digest outranks it: the server names the
+	// digest it will actually compute packet HMACs with, so a client that keeps
+	// its own authenticates with the wrong algorithm and, for a differing digest
+	// length, the wrong number of key bytes. Unused for AEAD ciphers, and kept
+	// verbatim as Cipher is.
+	//
+	// Reference: openvpn3-core ssl/proto.hpp parse_pushed_data_channel_options()
+	// line ~753 takes the pushed cipher off this same option list.
+	Auth string
+
+	// Compression is the compression framing the server pushed, and only that.
+	// Most servers push none — OpenVPN 2's server does not push its own setting
+	// at all — so this is ModeNone far more often than the session is
+	// uncompressed, and it is not the mode the data channel installs:
+	// compress.EffectiveMode reconciles it with Profile.Compression.
 	//
 	// Reference: openvpn3-core ssl/proto.hpp parse_pushed_compression() line ~875:
 	//   parses "compress lz4[-v2]" and "comp-lzo" from the PUSH_REPLY option list.
@@ -170,6 +275,11 @@ type PushOptions struct {
 	//
 	// Reference: openvpn3-core ssl/proto.hpp parse_pushed_mssfix() line ~925.
 	Mssfix int
+
+	// TunMTU is the tunnel MTU the server pushed, from "tun-mtu N". 0 means
+	// it pushed none. A value outside 68..65535 is treated as none, the way
+	// the profile parser treats one.
+	TunMTU int
 
 	// InactiveTimeout is the maximum idle time in seconds before disconnecting (from "inactive N [bytes]").
 	// 0 means no inactive timeout.
@@ -207,11 +317,10 @@ type PushOptions struct {
 //
 // ParsePushReply silently skips directives it does not recognise (forward
 // compatibility). It returns an error only when a recognised directive is
-// syntactically malformed.
+// syntactically malformed. The result does not depend on the order the
+// directives arrive in: directives that only make sense together are collected
+// in the loop and interpreted in the second pass after it.
 func ParsePushReply(msg string) (*PushOptions, error) {
-	// Strip the leading "PUSH_REPLY," prefix and any trailing null byte.
-	msg = strings.TrimPrefix(msg, "PUSH_REPLY,")
-	msg = strings.TrimRight(msg, "\x00")
 
 	// Default to legacy PRF; switched to EKM when "protocol-flags tls-ekm" or
 	// "key-derivation tls-ekm" is parsed below.
@@ -220,15 +329,26 @@ func ParsePushReply(msg string) (*PushOptions, error) {
 	// does not, so the absence of the flag means legacy PRF.
 	opts := &PushOptions{KeyDerivation: KeyDerivationOpenVPNPRF}
 
-	// routeGateway holds the explicit route-gateway value; applied to Ifconfig
-	// after all directives are parsed.
-	var routeGateway net.IP
+	// Directives whose meaning is settled by another directive are held here
+	// and interpreted in the second pass after the loop, because the one they
+	// depend on may still be ahead of them in the reply and nothing in the
+	// protocol fixes the order a server sends its directives in.
+	//
+	// routeGateway overrides the gateway ifconfig would otherwise imply;
+	// ifcLocal and ifcSecond are the two ifconfig arguments, whose second is a
+	// subnet mask or the P2P peer address according to topology, and
+	// ifcSecondRaw keeps it as the server wrote it for the error message. The
+	// reference splits it the same way: add_option() (openvpn-2.6.22
+	// src/openvpn/options.c) records the arguments as strings and init_tun()
+	// (src/openvpn/tun.c) is where the two finally meet.
+	var (
+		routeGateway net.IP
+		ifcLocal     net.IP
+		ifcSecond    net.IP
+		ifcSecondRaw string
+	)
 
-	for _, field := range strings.Split(msg, ",") {
-		field = strings.TrimSpace(field)
-		if field == "" {
-			continue
-		}
+	for _, field := range PushFields(msg) {
 		parts := strings.Fields(field)
 		if len(parts) == 0 {
 			continue
@@ -252,9 +372,14 @@ func ParsePushReply(msg string) (*PushOptions, error) {
 			if len(parts) < 2 {
 				return nil, fmt.Errorf("routing: route-gateway: expected argument")
 			}
-			// "vpn_gateway" is an OpenVPN symbolic value meaning "use the
-			// ifconfig gateway". We resolve it after parsing all directives.
-			if strings.ToLower(parts[1]) != "vpn_gateway" {
+			// Two symbolic values are legal here and neither is an address.
+			// "vpn_gateway" means the ifconfig gateway, resolved after all
+			// directives are parsed. "dhcp" asks the platform for the gateway
+			// its DHCP lease named (openvpn-2.6.22 src/openvpn/options.c:7072,
+			// route_gateway_via_dhcp) — a Windows TAP notion with no meaning
+			// for a tun device, so it falls back to the ifconfig gateway
+			// rather than failing the whole reply.
+			if v := strings.ToLower(parts[1]); v != "vpn_gateway" && v != "dhcp" {
 				gw := net.ParseIP(parts[1])
 				if gw == nil {
 					return nil, fmt.Errorf("routing: route-gateway: invalid IP %q", parts[1])
@@ -270,29 +395,14 @@ func ParsePushReply(msg string) (*PushOptions, error) {
 			if local == nil {
 				return nil, fmt.Errorf("routing: ifconfig: invalid local IP %q", parts[1])
 			}
-			// parts[2] is either the subnet mask (topology subnet) or the P2P peer (net30).
-			// We store it as Mask; for net30 the P2P peer also becomes the gateway.
+			// parts[2] is either the subnet mask (topology subnet) or the P2P
+			// peer (net30). Which it is belongs to topology, so both arguments
+			// are only checked for being addresses here.
 			second := net.ParseIP(parts[2])
 			if second == nil {
 				return nil, fmt.Errorf("routing: ifconfig: invalid second arg %q", parts[2])
 			}
-			if opts.Topology == TopologySubnet {
-				mask4 := second.To4()
-				if mask4 == nil {
-					return nil, fmt.Errorf("routing: ifconfig: subnet mask must be IPv4, got %q", parts[2])
-				}
-				opts.Ifconfig = &Ifconfig{
-					Local: local.To4(),
-					Mask:  net.IPMask(mask4),
-				}
-			} else {
-				// Net30: second arg is the P2P peer; mask is /30.
-				opts.Ifconfig = &Ifconfig{
-					Local:   local.To4(),
-					Mask:    net.CIDRMask(30, 32),
-					Gateway: second.To4(),
-				}
-			}
+			ifcLocal, ifcSecond, ifcSecondRaw = local, second, parts[2]
 
 		case "route":
 			// route <network> [<mask> [gateway]]
@@ -324,11 +434,15 @@ func ParsePushReply(msg string) (*PushOptions, error) {
 				Mask:    routeMask,
 			}
 			if len(parts) >= 4 {
-				gw := net.ParseIP(parts[3])
-				if gw == nil {
-					return nil, fmt.Errorf("routing: route: invalid gateway %q", parts[3])
+				if sym, ok := parseSymbolicGateway(parts[3]); ok {
+					r.Symbolic = sym
+				} else {
+					gw := net.ParseIP(parts[3])
+					if gw == nil {
+						return nil, fmt.Errorf("routing: route: invalid gateway %q", parts[3])
+					}
+					r.Gateway = gw.To4()
 				}
-				r.Gateway = gw.To4()
 			}
 			opts.Routes = append(opts.Routes, r)
 
@@ -340,23 +454,32 @@ func ParsePushReply(msg string) (*PushOptions, error) {
 				opts.Cipher = parts[1]
 			}
 
-		case "compress":
-			// Reference: openvpn3-core ssl/proto.hpp parse_pushed_compression()
-			// line ~875: opts "compress lz4" and "compress lz4-v2" map to ModeLZ4.
+		case "auth":
+			// The pushed digest outranks the profile's; see PushOptions.Auth.
+			// This switch matches the whole keyword, so "auth-token" below
+			// cannot land here and set the digest.
 			if len(parts) >= 2 {
-				switch strings.ToLower(parts[1]) {
-				case "lz4", "lz4-v2":
-					opts.Compression = compress.ModeLZ4
-				case "stub-v2":
-					opts.Compression = compress.ModeLZ4 // same framing as lz4
-				}
+				opts.Auth = parts[1]
 			}
 
-		case "comp-lzo":
-			// Reference: openvpn3-core ssl/proto.hpp parse_pushed_compression()
-			// line ~908: "comp-lzo no" maps to LZO_STUB (ModeLZO in Go).
-			// Any comp-lzo value triggers ModeLZO (we don't compress, just flag it).
-			opts.Compression = compress.ModeLZO
+		case "compress", "comp-lzo":
+			// Which framing a directive selects is decided by the option
+			// flags it sets rather than by the algorithm it names, and
+			// compress.ModeForDirective is the single place that table
+			// lives — the same one the profile parser goes through, so the
+			// profile and the reply cannot disagree about it. "compress
+			// stub-v2" and "compress lz4" are not one mode: stub-v2 puts no
+			// byte on the wire and lz4 replaces the payload's first byte
+			// with one (docker/COMPRESSION-VECTORS.md §6). A value OpenVPN
+			// would refuse leaves Compression alone rather than failing the
+			// whole push.
+			arg := ""
+			if len(parts) >= 2 {
+				arg = parts[1]
+			}
+			if mode, ok := compress.ModeForDirective(parts[0], arg); ok {
+				opts.Compression = mode
+			}
 
 		case "ifconfig-ipv6":
 			// ifconfig-ipv6 <addr/prefix> <gateway>
@@ -368,7 +491,6 @@ func ParsePushReply(msg string) (*PushOptions, error) {
 			if err != nil {
 				return nil, fmt.Errorf("routing: ifconfig-ipv6: invalid addr/prefix %q: %w", parts[1], err)
 			}
-			_ = prefix6
 			ones, _ := prefix6.Mask.Size()
 			ifc6 := &Ifconfig6{Local: ip6, Prefix: ones}
 			if len(parts) >= 3 {
@@ -402,15 +524,24 @@ func ParsePushReply(msg string) (*PushOptions, error) {
 			opts.Routes6 = append(opts.Routes6, r6)
 
 		case "redirect-gateway":
-			// redirect-gateway may be followed by flags (def1, bypass-dhcp, ipv6, etc.)
-			for _, flag := range parts[1:] {
-				if strings.EqualFold(flag, "ipv6") {
-					opts.RedirectGateway6 = true
-				}
-			}
-			// Any redirect-gateway directive (with or without ipv6 flag) enables IPv4 redirect,
-			// unless it's ipv6-only (no def1/default4 flag check needed — set both to be safe).
+			// The flag words decide what "redirect" means: "!ipv4" inverts
+			// the IPv4 half of the directive outright.
+			//
+			// Reference: openvpn-2.6.22 src/openvpn/options.c:7202-7250.
+			// The bare directive sets RG_REROUTE_GW on the IPv4 list;
+			// "ipv6" adds it to the IPv6 list without taking it off IPv4,
+			// so "redirect-gateway ipv6" redirects both and only
+			// "redirect-gateway ipv6 !ipv4" is IPv6-only.
+			flags, unknown := parseRedirectFlags(parts[1:])
+			opts.RedirectFlags |= flags
+			opts.RedirectUnknownFlags = append(opts.RedirectUnknownFlags, unknown...)
+
 			opts.RedirectGateway = true
+			// "!ipv4" clears RG_REROUTE_GW and RG_ENABLE on the IPv4 route
+			// list (options.c:7236-7239), whatever order it appears in.
+			if flags.Has(RedirectNoIPv4) {
+				opts.RedirectGateway = false
+			}
 
 		case "ping":
 			// keepalive send interval — openvpn3-core ssl/proto.hpp
@@ -431,6 +562,13 @@ func ParsePushReply(msg string) (*PushOptions, error) {
 				var v int
 				if _, err := fmt.Sscanf(parts[1], "%d", &v); err == nil && v > 0 {
 					opts.PingRestart = v
+				}
+			}
+
+		case "tun-mtu":
+			if len(parts) >= 2 {
+				if v, err := strconv.Atoi(parts[1]); err == nil && v >= 68 && v <= 65535 {
+					opts.TunMTU = v
 				}
 			}
 
@@ -484,7 +622,31 @@ func ParsePushReply(msg string) (*PushOptions, error) {
 				opts.AuthToken = parts[1]
 			}
 		}
-		// All other directives (dhcp-option, cipher, peer-id, etc.) are ignored.
+		// All other directives (dhcp-option, peer-id, route-metric, etc.) are
+		// ignored.
+	}
+
+	// Second pass, now that topology is final whichever end of the reply the
+	// server put it at. The IPv4 addressing goes first, because route-gateway
+	// below amends it.
+	if ifcLocal != nil {
+		if opts.Topology == TopologySubnet {
+			mask4 := ifcSecond.To4()
+			if mask4 == nil {
+				return nil, fmt.Errorf("routing: ifconfig: subnet mask must be IPv4, got %q", ifcSecondRaw)
+			}
+			opts.Ifconfig = &Ifconfig{
+				Local: ifcLocal.To4(),
+				Mask:  net.IPMask(mask4),
+			}
+		} else {
+			// Net30: second arg is the P2P peer; mask is /30.
+			opts.Ifconfig = &Ifconfig{
+				Local:   ifcLocal.To4(),
+				Mask:    net.CIDRMask(30, 32),
+				Gateway: ifcSecond.To4(),
+			}
+		}
 	}
 
 	// Apply the explicit route-gateway to subnet-topology Ifconfig.
@@ -493,4 +655,25 @@ func ParsePushReply(msg string) (*PushOptions, error) {
 	}
 
 	return opts, nil
+}
+
+// RedirectsIPv6 reports whether the pushed redirect-gateway asked for the IPv6
+// cover, which is the "ipv6" flag word. It is read from the flags rather than
+// kept beside them, which two ways to say one thing would let disagree.
+func (o *PushOptions) RedirectsIPv6() bool {
+	return o != nil && o.RedirectFlags.Has(RedirectIPv6)
+}
+
+// PushFields splits a PUSH_REPLY into its raw directives, without interpreting
+// any of them: it strips the "PUSH_REPLY," prefix, the trailing NUL, the comma
+// separators and the whitespace around each field.
+func PushFields(msg string) []string {
+	body := strings.TrimPrefix(strings.TrimRight(msg, "\x00"), "PUSH_REPLY,")
+	var out []string
+	for _, field := range strings.Split(body, ",") {
+		if field = strings.TrimSpace(field); field != "" {
+			out = append(out, field)
+		}
+	}
+	return out
 }

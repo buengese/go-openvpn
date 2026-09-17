@@ -61,6 +61,13 @@ func ApplyRoutes(opts *PushOptions, ifIndex int) error {
 	}
 
 	for _, r := range opts.Routes {
+		if r.Symbolic.AroundTunnel() {
+			// net_gateway and remote_host mean the opposite of every other
+			// pushed route: this destination is to be reached *without* the
+			// tunnel, and the nil-Gateway fallback below would send it to the
+			// tunnel's own gateway.
+			continue
+		}
 		gw := r.Gateway
 		if gw == nil {
 			gw = defaultGW
@@ -98,7 +105,7 @@ func ApplyRoutes(opts *PushOptions, ifIndex int) error {
 		}
 	}
 
-	if opts.RedirectGateway6 {
+	if opts.RedirectsIPv6() {
 		if err := addRoute6(ifIndex, net.IPv6zero, 0, defaultGW6); err != nil {
 			if !errors.Is(err, syscall.EEXIST) {
 				return fmt.Errorf("routing: add IPv6 default route: %w", err)
@@ -133,6 +140,13 @@ func DeleteRoutes(opts *PushOptions, ifIndex int) error {
 		save(delRoute(ifIndex, opts.Ifconfig.Gateway, net.CIDRMask(32, 32), nil))
 	}
 	for _, r := range opts.Routes {
+		if r.Symbolic.AroundTunnel() {
+			// net_gateway and remote_host mean the opposite of every other
+			// pushed route: this destination is to be reached *without* the
+			// tunnel, and the nil-Gateway fallback below would send it to the
+			// tunnel's own gateway.
+			continue
+		}
 		gw := r.Gateway
 		if gw == nil {
 			gw = defaultGW
@@ -154,7 +168,7 @@ func DeleteRoutes(opts *PushOptions, ifIndex int) error {
 		}
 		save(delRoute6(ifIndex, r.Network, r.Prefix, gw))
 	}
-	if opts.RedirectGateway6 {
+	if opts.RedirectsIPv6() {
 		save(delRoute6(ifIndex, net.IPv6zero, 0, defaultGW6))
 	}
 

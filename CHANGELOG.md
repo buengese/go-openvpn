@@ -23,6 +23,12 @@ and releases follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - A control-channel replay window, separate from the reliable layer's own
   sequence numbers. Replayed and stale-timestamped control packets are rejected
   and counted in `diag.Counters` rather than dropped silently.
+- Pushed `tun-mtu` and pushed `auth` are read: `routing.PushOptions.TunMTU` and
+  `routing.PushOptions.Auth`. Both were discarded before, so a server that sized
+  the tunnel or chose the data-channel digest for the session was overruled by
+  whatever the profile said. The pushed digest outranks the profile's, as
+  OpenVPN does it, and the `auth` case matches the whole keyword so `auth-token`
+  cannot land in it.
 
 ### Changed
 
@@ -45,6 +51,11 @@ and releases follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   packages from this module. Nothing in this tree carries a version any more:
   the release tag is the version, and the release workflows no longer check it
   against a spec, a PKGBUILD or a Cargo manifest.
+- **Breaking:** `routing.PushOptions.RedirectGateway6`. The `ipv6` flag word is
+  now one bit of `PushOptions.RedirectFlags`, and `PushOptions.RedirectsIPv6()`
+  reads it — a nil-safe method rather than a second field, because two ways to
+  say one thing are two things that can disagree. A caller that tested the
+  field calls the method.
 
 ### Fixed
 
@@ -58,6 +69,13 @@ and releases follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - The server's key-method-2 packet is now read field by field instead of being
   drained into a fixed buffer, so a truncated packet is reported as a protocol
   error rather than parsed from whatever had arrived.
+- A `route` line whose gateway is `net_gateway` or `remote_host` no longer fails
+  the whole `PUSH_REPLY`. `net.ParseIP` returned nil for the symbolic name and
+  the parser raised `invalid gateway`, which ended the session at `StagePush`
+  with a protocol error — one route the client could not place cost the whole
+  configuration. The names are parsed into `Route.Symbolic`, and a route that
+  asks to go around the tunnel is left out of the plan rather than sent to the
+  tunnel's own gateway.
 - The macOS utun labelled every packet AF_INET. A utun prepends a four-byte
   address family and injects by it rather than by reading the packet, so an
   IPv6 packet labelled AF_INET is dropped on its version nibble: with a pushed

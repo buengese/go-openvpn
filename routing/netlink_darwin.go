@@ -52,6 +52,13 @@ func ApplyRoutes(opts *PushOptions, ifIndex int) error {
 
 	// Explicit routes from PUSH_REPLY.
 	for _, r := range opts.Routes {
+		if r.Symbolic.AroundTunnel() {
+			// net_gateway and remote_host name a destination the server wants
+			// reached without the tunnel, and a nil Gateway here would send it
+			// to the tunnel's own gateway — the one outcome asked against. The
+			// netlink backend skips these for the same reason.
+			continue
+		}
 		gw := r.Gateway
 		if gw == nil {
 			gw = defaultGW
@@ -100,6 +107,10 @@ func DeleteRoutes(opts *PushOptions, ifIndex int) error {
 		save(routeDel(defaultGW, net.CIDRMask(32, 32), nil, ifName))
 	}
 	for _, r := range opts.Routes {
+		if r.Symbolic.AroundTunnel() {
+			// Never added — see ApplyRoutes.
+			continue
+		}
 		gw := r.Gateway
 		if gw == nil {
 			gw = defaultGW
