@@ -86,7 +86,7 @@ func TestDoneIsClosedOnceWhateverOrderTeardownAndFailureArriveIn(t *testing.T) {
 		go func() {
 			defer done.Done()
 			start.Wait()
-			_ = c.teardown(false)
+			_ = c.teardown(false, true)
 		}()
 		go func() {
 			defer done.Done()

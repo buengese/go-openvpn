@@ -149,6 +149,15 @@ and releases follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   failure it recovered from. For a consumer holding a tunnel open rather than
   measuring a handshake — a session whose renegotiations have been failing
   reads as healthy on every other counter.
+- Support for `explicit-exit-notify`, and `Profile.ExplicitExitNotify` behind
+  it. A deliberate `Disconnect` over UDP now sends the OCC exit notification —
+  once per the directive's optional retry count, defaulting to one — so the
+  server frees the session immediately instead of holding it to its own
+  keepalive timeout. Nothing is sent on a transport failure, over TCP, or from
+  a profile that did not ask. It also matters for a measurement run: an
+  endpoint left holding a dead session per attempt is one that starts
+  rate-limiting.
+
 - `Client.Attempts()`: one record per attempt of the current or most recent
   `Reconnect`, in order, each carrying its own `diag.SessionReport`. `Report()`
   still answers for the most recent attempt; the reason an earlier attempt

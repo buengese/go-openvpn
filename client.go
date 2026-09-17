@@ -470,20 +470,24 @@ func New(p *profile.Profile) *Client {
 
 // Disconnect initiates a graceful teardown of the VPN tunnel. It signals the
 // background goroutines to stop and begins cleaning up; call WaitForDisconnect
-// to block until it completes.
+// to block until it completes. It is the client's only deliberate teardown, and
+// so the only one that sends an explicit-exit-notify.
 func (c *Client) Disconnect() error {
-	return c.teardown(false)
+	return c.teardown(false, true)
 }
 
 // disconnect tears down the active transport after something went wrong.
 // Internal transient-failure paths may preserve credentials for Reconnect;
-// public Disconnect never does.
+// public Disconnect never does. preserveCredentials does not mean
+// "deliberate" — that is the separate flag teardown takes.
 func (c *Client) disconnect(preserveCredentials bool) error {
-	return c.teardown(preserveCredentials)
+	return c.teardown(preserveCredentials, false)
 }
 
 // teardown is the single teardown path behind Disconnect and disconnect.
-func (c *Client) teardown(preserveCredentials bool) error {
+// deliberate says the caller chose to end a working session rather than react
+// to one that had stopped working; exitNotifyCopies turns on it.
+func (c *Client) teardown(preserveCredentials, deliberate bool) error {
 	c.mu.Lock()
 	if !preserveCredentials {
 		c.clearCredentialsOnCleanup = true
@@ -500,6 +504,13 @@ func (c *Client) teardown(preserveCredentials bool) error {
 	c.mu.Unlock()
 
 	c.emit(Event{Type: EventStateChanged, State: StateDisconnecting})
+
+	// Before anything below is closed: the notification is a data packet, so it
+	// needs the key and the socket that cancelFn and rawConn.Close are about to
+	// take away. The state swap above makes it happen exactly once.
+	if n := c.exitNotifyCopies(deliberate); n > 0 {
+		c.sendExitNotify(n)
+	}
 
 	if c.cancelFn != nil {
 		c.cancelFn()

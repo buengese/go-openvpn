@@ -319,6 +319,23 @@ func TestWithholdDataV2IsReportedAsSent(t *testing.T) {
 
 // ---- what is deliberately not advertised -----------------------------------
 
+// TestExitNotifyIsNotOnTheControlChannelAdvertisement guards the constraint the
+// implementation rests on: the older OCC form is used *because* IV_PROTO does
+// not claim CC_EXIT_NOTIFY. Adding bit 7 (128) to the advertisement would let a
+// server select the control-channel form and stop reading the OCC message,
+// while the teardown still looked clean.
+func TestExitNotifyIsNotOnTheControlChannelAdvertisement(t *testing.T) {
+	const ivProtoCCExitNotify = 1 << 7
+
+	advertised := ivProtoFromPeerInfo(t, peerInfo)
+	if advertised&ivProtoCCExitNotify != 0 {
+		t.Fatalf("IV_PROTO=%d sets CC_EXIT_NOTIFY (%d): a server may select the "+
+			"control-channel exit form, which this client does not implement, and "+
+			"stop acting on sendExitNotify's OCC message",
+			advertised, ivProtoCCExitNotify)
+	}
+}
+
 // ivCiphersFromPeerInfo pulls the advertised cipher list out of the peer-info
 // block that is actually sent, rather than out of the table it is built from.
 func ivCiphersFromPeerInfo(t *testing.T) []string {

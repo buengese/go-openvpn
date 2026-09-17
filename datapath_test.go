@@ -26,6 +26,115 @@ import (
 
 // ---- the exit notification ------------------------------------------------
 
+// TestExitNotifyCopies covers the whole of the decision, because every arm is a
+// required behaviour rather than a defensive guard: send on a deliberate UDP
+// disconnect that asked for it, and nowhere else. Disconnect passes
+// deliberate=true; disconnect hard-codes false for every internal failure path.
+func TestExitNotifyCopies(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		// config is the profile text, which supplies both the transport and
+		// the directive.
+		config string
+		// deliberate is what teardown was called with: true only from
+		// Disconnect, false from every internal failure path.
+		deliberate bool
+		want       int
+	}{
+		{
+			name:       "udp bare directive sends one",
+			config:     "remote vpn.example.com 1194\nproto udp\nexplicit-exit-notify\n",
+			deliberate: true,
+			want:       1,
+		},
+		{
+			name:       "udp explicit count sends that many",
+			config:     "remote vpn.example.com 1194\nproto udp\nexplicit-exit-notify 5\n",
+			deliberate: true,
+			want:       5,
+		},
+		{
+			name:       "no directive sends none",
+			config:     "remote vpn.example.com 1194\nproto udp\n",
+			deliberate: true,
+			want:       0,
+		},
+		{
+			name:       "explicit zero sends none",
+			config:     "remote vpn.example.com 1194\nproto udp\nexplicit-exit-notify 0\n",
+			deliberate: true,
+			want:       0,
+		},
+		{
+			name:       "tcp sends none however the profile asks",
+			config:     "remote vpn.example.com 443\nproto tcp-client\nexplicit-exit-notify 5\n",
+			deliberate: true,
+			want:       0,
+		},
+		{
+			name:       "a transport failure sends none",
+			config:     "remote vpn.example.com 1194\nproto udp\nexplicit-exit-notify 5\n",
+			deliberate: false,
+			want:       0,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			p, err := profile.ParseString(tc.config)
+			if err != nil {
+				t.Fatalf("ParseString: %v", err)
+			}
+			c := New(p)
+			if got := c.exitNotifyCopies(tc.deliberate); got != tc.want {
+				t.Fatalf("exitNotifyCopies(%v) = %d, want %d", tc.deliberate, got, tc.want)
+			}
+		})
+	}
+}
+
+// TestExitNotifyCopiesFollowsTheActiveRemote checks that the transport comes
+// from the remote being dialed rather than from Profile.Proto: a --remote
+// line's third field overrides --proto for that remote alone.
+func TestExitNotifyCopiesFollowsTheActiveRemote(t *testing.T) {
+	p, err := profile.ParseString(
+		"proto udp\nremote a.example.com 1194 udp\nremote b.example.com 443 tcp\n" +
+			"explicit-exit-notify 2\n")
+	if err != nil {
+		t.Fatalf("ParseString: %v", err)
+	}
+	if len(p.Remotes) != 2 {
+		t.Fatalf("profile has %d remotes, want 2", len(p.Remotes))
+	}
+
+	c := New(p)
+	c.setActiveRemote(p.Remotes[0])
+	if got := c.exitNotifyCopies(true); got != 2 {
+		t.Fatalf("udp remote: exitNotifyCopies(true) = %d, want 2", got)
+	}
+	c.setActiveRemote(p.Remotes[1])
+	if got := c.exitNotifyCopies(true); got != 0 {
+		t.Fatalf("tcp remote: exitNotifyCopies(true) = %d, want 0", got)
+	}
+}
+
+// TestSendExitNotifyWithoutASessionIsSilent checks that a deliberate Disconnect
+// of a client that never connected cannot fail: there is no key and no socket,
+// so the send has to notice that rather than dereference either.
+func TestSendExitNotifyWithoutASessionIsSilent(t *testing.T) {
+	p, err := profile.ParseString(
+		"remote vpn.example.com 1194\nproto udp\nexplicit-exit-notify 5\n")
+	if err != nil {
+		t.Fatalf("ParseString: %v", err)
+	}
+	c := New(p)
+	if got := c.exitNotifyCopies(true); got != 5 {
+		t.Fatalf("exitNotifyCopies(true) = %d, want 5; the send below would not be reached", got)
+	}
+	c.sendExitNotify(5)
+	if err := c.Disconnect(); err != nil {
+		t.Fatalf("Disconnect() = %v, want nil", err)
+	}
+}
+
 // ---- keepalive ------------------------------------------------------------
 
 // TestKeepaliveDefaultsFollowOpenVPN3 pins the numbers a session falls back to

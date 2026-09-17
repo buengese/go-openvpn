@@ -57,21 +57,23 @@ func TestDisconnectUnderTrafficTearsDownCleanly(t *testing.T) {
 	defer func() { _ = srv.Stop() }()
 
 	for _, tc := range []struct {
-		name  string
-		proto profile.Proto
-		addr  string
+		name       string
+		proto      profile.Proto
+		addr       string
+		exitNotify int
 	}{
-		{"tcp", profile.ProtoTCP, srv.TCPAddr},
-		{"udp", profile.ProtoUDP, srv.UDPAddr},
+		{"tcp", profile.ProtoTCP, srv.TCPAddr, 0},
+		{"udp", profile.ProtoUDP, srv.UDPAddr, 2},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			host, port := splitAddr(t, tc.addr)
 			for cycle := range teardownCycles {
 				c := vpn.New(&profile.Profile{
-					Remote: host,
-					Port:   port,
-					Proto:  tc.proto,
-					CA:     pki.CAPEM,
+					Remote:             host,
+					Port:               port,
+					Proto:              tc.proto,
+					CA:                 pki.CAPEM,
+					ExplicitExitNotify: tc.exitNotify,
 				})
 				c.Device = netstack.NewBackend()
 				c.CredentialsFn = func(context.Context) (vpn.Credentials, error) {
@@ -116,6 +118,19 @@ func TestDisconnectUnderTrafficTearsDownCleanly(t *testing.T) {
 					t.Logf("cycle 0: packets_recv=%d bytes_recv=%d decrypt_failures=%d",
 						rep.Counters.PacketsRecv, rep.Counters.BytesRecv, rep.Counters.DecryptFailures)
 				}
+			}
+
+			if tc.exitNotify == 0 {
+				return
+			}
+			// Every cycle announced, so every cycle should be there: "at least
+			// one" would pass with nine silent teardowns. Waited for rather than
+			// read, because the last cycle's event is still somewhere in an
+			// asynchronous pipeline when WaitForDisconnect returns.
+			if got := srv.WaitForEvents("occ_exit", teardownCycles, 5*time.Second); got != teardownCycles {
+				t.Errorf("server saw %d occ_exit events, want %d — a teardown that reached "+
+					"the server as a dead session rather than a deliberate exit",
+					got, teardownCycles)
 			}
 		})
 	}

@@ -106,6 +106,80 @@ func (c *Client) clampMSS(pkt []byte) {
 	mssfix.Clamp(pkt, c.mssFix)
 }
 
+// exitNotifyCopies returns how many exit notifications this teardown should
+// put on the wire. Zero means send nothing, and three things have to hold for
+// it to be anything else.
+//
+//   - The teardown is deliberate. A session that ended because the transport
+//     died has nothing left to send down, and attempting the write is how a
+//     clean teardown acquires an error that never happened.
+//   - The transport is UDP. A TCP session ends when the socket closes, which
+//     the peer sees without being told, and stock openvpn refuses to start
+//     with the combination at all (2.4.12 options.c line 2181).
+//   - The profile asked for it. The count is the directive's optional
+//     argument, and 0 covers both the absent directive and an explicit
+//     "explicit-exit-notify 0", which openvpn also treats as "send none"
+//     (sig.c line 355).
+func (c *Client) exitNotifyCopies(deliberate bool) int {
+	if !deliberate || c.prof == nil || c.activeProto() != profile.ProtoUDP {
+		return 0
+	}
+	if c.prof.ExplicitExitNotify <= 0 {
+		return 0
+	}
+	return c.prof.ExplicitExitNotify
+}
+
+// sendExitNotify tells the peer this client is leaving, so the server frees
+// the session now rather than holding it until its own keepalive timeout
+// expires; an endpoint left holding a dead session per attempt starts
+// rate-limiting the next one.
+//
+// The message goes out on the data channel, encrypted under the current key
+// like any other data packet: the control-channel form needs
+// IV_PROTO_CC_EXIT_NOTIFY (1<<7), which this client does not advertise because
+// it does not implement it (see peerInfo). Copies are encrypted separately
+// rather than encrypted once and written twice — identical wire bytes are a
+// replay, and the peer's replay window drops every copy after the first.
+//
+// Wire format, from OpenVPN 2.4.12 src/openvpn/occ.c
+// check_send_occ_msg_dowork() — buf_write of occ_magic at line 227,
+// buf_write_u8(OCC_EXIT) at line 333, encrypt_sign() at line 348. That is 17
+// plaintext bytes:
+//
+//	occ_magic (16 bytes) || OCC_EXIT (0x06)
+//
+// encrypt_sign is the ordinary outgoing data path, so the compression framing
+// applies exactly as Manager.Encrypt applies it here. The copies leave back to
+// back; 2.4's one-second spacing is the granularity of the coarse timer it
+// hangs the retry off (sig.c line 340, drained at line 348). There is no write
+// deadline, unlike keepaliveLoop, because this path only ever runs on UDP, and
+// errors are dropped: nothing acknowledges the message and the session is
+// going away whatever happens to it.
+func (c *Client) sendExitNotify(copies int) {
+	mgr, conn := c.manager, c.rawConn
+	if mgr == nil || conn == nil {
+		return
+	}
+
+	msg := occ.ExitMessage()
+
+	sent := 0
+	for range copies {
+		wire, err := mgr.Encrypt(msg)
+		if err != nil {
+			break
+		}
+		if err := c.writePacket(conn, wire); err != nil {
+			break
+		}
+		sent++
+	}
+
+	c.emit(Event{Type: EventLog, Message: fmt.Sprintf(
+		"vpn: explicit-exit-notify: sent %d of %d exit notification(s)", sent, copies)})
+}
+
 // failCompressedPayload ends the session because the peer sent a payload it
 // genuinely compressed, and no codec is linked to decompress it. It is
 // ClassUnsupported at StageData rather than a dropped packet — passing the
