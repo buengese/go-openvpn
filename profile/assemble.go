@@ -27,7 +27,8 @@ const defaultPort = 1194
 // assembler builds a Profile from directives and inline blocks. Its zero value
 // is not usable; start from newAssembler.
 type assembler struct {
-	p *Profile
+	p    *Profile
+	refs []pendingFileRef
 }
 
 // newAssembler returns an assembler holding the defaults a profile starts
@@ -108,6 +109,7 @@ func (a *assembler) directive(d Directive) error {
 	// fields[0] is the keyword and the arguments start at fields[1].
 	fields := append([]string{d.Name}, d.Args...)
 	directive := d.Name
+	lineNo := d.Line
 	switch directive {
 	case "remote":
 		// remote <host> [port] [proto]. Every line is retained, in file
@@ -281,13 +283,21 @@ func (a *assembler) directive(d Directive) error {
 		if err := dns.ParseDHCPOption(&p.DNS, fields); err != nil {
 			return fmt.Errorf("profile: %w", err)
 		}
+	case "ca", "cert", "key":
+		// A file reference: "ca ca.crt". Nothing is opened here. An
+		// inline <ca> block may still appear below this line and would
+		// win, so the decision waits for resolveFileRefs.
+		if len(fields) < 2 {
+			return fmt.Errorf("profile: %s: missing file name", directive)
+		}
+		a.refs = append(a.refs, pendingFileRef{tag: directive, name: fields[1], line: lineNo})
 	}
 	return nil
 }
 
 // finish resolves what could only be settled once every directive was seen,
 // then hands back the profile.
-func (a *assembler) finish() (*Profile, error) {
+func (a *assembler) finish(baseDir string) (*Profile, error) {
 	p := a.p
 
 	if len(p.Remotes) == 0 {
@@ -311,6 +321,13 @@ func (a *assembler) finish() (*Profile, error) {
 	p.Remote = p.Remotes[0].Host
 	p.Port = p.Remotes[0].Port
 	p.Proto = p.Remotes[0].Proto
+
+	// Last, because it is the only step that reads anything outside the file
+	// and because an inline block anywhere in it can settle a reference
+	// without a read.
+	if err := p.resolveFileRefs(a.refs, baseDir); err != nil {
+		return nil, err
+	}
 
 	return p, nil
 }

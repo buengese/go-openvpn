@@ -10,6 +10,13 @@
 // Profile.Directives, and every block tag on Profile.InlineBlocks, for the
 // capability preflight in the caps package.
 //
+// A profile may also name its CA, certificate or key in a separate file
+// rather than inlining it. Resolving that name needs a directory, which is
+// the one behaviour that differs between the entry points: ParsePath and
+// ParseFileIn have one and read the file, ParseFile and ParseString do not
+// and refuse the profile rather than returning one with an empty trust
+// store. See ErrNoProfileDir and resolveFileRefs.
+//
 // <tls-auth> and <tls-crypt> bodies are secrets rather than public material:
 // see StaticKey for how they are kept out of logs, errors and reports.
 package profile
@@ -20,6 +27,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/openlawsvpn/go-openlawsvpn/dns"
@@ -57,6 +65,28 @@ type InlineBlock struct {
 	Tag string
 	// Line is the 1-based line number of the opening tag.
 	Line int
+}
+
+// FileRef records a ca, cert or key directive that named a file instead of
+// inlining the material, and what the parser did with it.
+//
+// "The material is loaded" and "the file was read" are different facts and
+// the capability registry has to tell them apart: a profile carrying both an
+// inline <ca> block and a "ca ca.crt" line loads the CA from the block, as
+// OpenVPN does, and never opens the file.
+//
+// The file name is not kept — these records reach session reports.
+type FileRef struct {
+	// Tag is the directive keyword: "ca", "cert" or "key".
+	Tag string
+	// Line is the 1-based line number the directive appeared on.
+	Line int
+	// Loaded reports that the file was read from the profile's directory
+	// into the matching field.
+	Loaded bool
+	// Superseded reports that the profile also carried an inline <tag>
+	// block. The block is what the client uses and the file is not opened.
+	Superseded bool
 }
 
 // Proto is the transport protocol for the VPN tunnel.
@@ -139,12 +169,18 @@ type Profile struct {
 	Remotes []Remote
 
 	// CA is the PEM-encoded certificate authority bundle, from an inline
-	// <ca> block.
+	// <ca> block or from the file a "ca <file>" directive named.
 	CA []byte
-	// Cert is the PEM-encoded client certificate, from a <cert> block.
+	// Cert is the PEM-encoded client certificate, from <cert> or a file.
 	Cert []byte
-	// Key is the PEM-encoded client private key, from a <key> block.
+	// Key is the PEM-encoded client private key, from <key> or a file.
 	Key []byte
+
+	// FileRefs records every ca, cert or key directive that named a file
+	// rather than inlining its contents, in file order, and says for each
+	// whether the file was read or an inline block superseded it. It never
+	// holds the name — see FileRef.
+	FileRefs []FileRef
 
 	// TLSAuth is the static key from the profile's <tls-auth> block, or nil
 	// when the profile carries none. It authenticates every control packet,
@@ -292,14 +328,29 @@ func (p *Profile) DetectFlow() AuthFlow {
 }
 
 // ParseFile parses an .ovpn profile from the provided reader.
+//
+// It has bytes and no location, so a profile that names its CA, certificate
+// or key in a file is refused with ErrNoProfileDir rather than returned with
+// the material missing. ParsePath, or ParseFileIn when the bytes are already
+// in hand, is the entry point that can read one.
 func ParseFile(r io.Reader) (*Profile, error) {
-	return parse(r)
+	return parse(r, "")
 }
 
-// parse is the parser proper: it turns lines into directives and inline
-// blocks and hands them to the assembler, which holds every rule about what
-// they mean.
-func parse(r io.Reader) (*Profile, error) {
+// ParseFileIn parses an .ovpn profile from r, resolving the file-referenced
+// ca, cert and key directives against baseDir.
+//
+// It is ParsePath for a caller that already holds the bytes, or that must not
+// let the path reach an error message. An empty baseDir behaves exactly as
+// ParseFile.
+func ParseFileIn(r io.Reader, baseDir string) (*Profile, error) {
+	return parse(r, baseDir)
+}
+
+// parse is the parser proper. The exported entry points differ in one thing
+// only: baseDir, the directory a "ca <file>" reference resolves against, and
+// whether they have one at all.
+func parse(r io.Reader, baseDir string) (*Profile, error) {
 	a := newAssembler()
 
 	scanner := bufio.NewScanner(r)
@@ -367,7 +418,7 @@ func parse(r io.Reader) (*Profile, error) {
 		return nil, fmt.Errorf("profile: read: %w", err)
 	}
 
-	return a.finish()
+	return a.finish(baseDir)
 }
 
 // inlineOpenTag reports whether line is an opening inline block tag such as
@@ -395,18 +446,25 @@ func inlineOpenTag(line string) (string, bool) {
 
 // ParseString is a convenience wrapper around ParseFile for in-memory
 // profiles.
+//
+// Like ParseFile it has no directory, so a profile naming its CA in a file is
+// refused with ErrNoProfileDir rather than returned with an empty trust store.
 func ParseString(s string) (*Profile, error) {
 	return ParseFile(strings.NewReader(s))
 }
 
 // ParsePath opens path and parses it as an .ovpn profile file.
+//
+// It is the entry point that can resolve a "ca <file>" reference, because it
+// is the only one that knows where the profile came from. Names are resolved
+// against the profile's own directory and confined to it; see readConfined.
 func ParsePath(path string) (*Profile, error) {
 	f, err := os.Open(path)
 	if err != nil {
 		return nil, fmt.Errorf("profile: open %s: %w", path, err)
 	}
 	defer f.Close()
-	return parse(f)
+	return parse(f, filepath.Dir(path))
 }
 
 // MSSFixMode says how a numeric mssfix value is measured. It is the directive's

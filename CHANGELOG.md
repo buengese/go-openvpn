@@ -46,6 +46,22 @@ and releases follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   rather than a reachability check — a peer that compresses the reply can be
   detected no other way, because a tunnel carrying incompressible traffic looks
   exactly like one whose peer never compresses. IPv4 only.
+- File-referenced `ca`, `cert` and `key`. A profile that names its certificate
+  authority in a separate file — `ca ca.vpn.example.test.crt`, with no inline
+  `<ca>` block — now has that file read, resolved against the profile's own
+  directory and confined to it. A profile shaped that way was refused before a
+  socket was opened, for want of anything to verify the server against. A
+  profile carrying both an inline block and a file reference uses the block, as
+  OpenVPN does.
+- `profile.ParseFileIn`, which parses from a reader against a named directory.
+  It is `ParsePath` for a caller that already holds the bytes and must keep the
+  path out of its error messages. `ParseFile` and `ParseString` have no
+  directory and refuse a file reference with `profile.ErrNoProfileDir`, which
+  names the entry point that can read one; returning a profile with an empty
+  trust store instead is the failure this replaces.
+- `Profile.FileRefs`: which of the `ca`, `cert` and `key` directives named a
+  file, and for each whether the file was read or an inline block superseded
+  it. The name itself is not recorded.
 - The `device` package: the tunnel-device seam. `device.Backend` turns the
   parameters a server pushed into a `device.Device` — raw IP packets, no framing
   — so the client core no longer knows whether they reach a kernel interface or
