@@ -230,6 +230,7 @@ func TestReportSurvivesAFailedConnect(t *testing.T) {
 	defer cancel()
 
 	tun, rep, connErr := netstack.ConnectWithReport(ctx, p, netstack.Options{
+		PreflightMode: diag.PreflightAdvisory,
 		// Also incidental, one stage further on: a profile with no client
 		// certificate is FlowUserPass, and a FlowUserPass attempt with nothing
 		// to present is refused at StageParse rather than dialing. Threading it

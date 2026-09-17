@@ -48,6 +48,59 @@ func unreachableClient(t *testing.T, credsCalls *int) *Client {
 	return c
 }
 
+// chachaClient returns a client whose profile asks for a cipher this
+// implementation does not have, which is a diag.SeverityFatal capability gap
+// and therefore a StageParse refusal in the default preflight mode.
+func chachaClient(t *testing.T) *Client {
+	t.Helper()
+	p, err := profile.ParseString(
+		"client\nproto tcp-client\nremote 127.0.0.1 1194\ncipher CHACHA20-POLY1305\n")
+	if err != nil {
+		t.Fatalf("ParseString: %v", err)
+	}
+	p.CA = testCAPEM(t)
+	c := New(p)
+	c.EventFn = func(Event) {}
+	c.CredentialsFn = func(context.Context) (Credentials, error) {
+		return Credentials{}, errors.New("must not be asked: the attempt never dials")
+	}
+	return c
+}
+
+// TestReconnectFatalGapMakesExactlyOneAttempt is the acceptance property for
+// the half of the retry policy that says no: a profile the client cannot
+// honour will not become honourable by being dialed again, so an unsupported
+// cipher costs one attempt rather than MaxReconnects of them.
+func TestReconnectFatalGapMakesExactlyOneAttempt(t *testing.T) {
+	c := chachaClient(t)
+
+	err := c.Reconnect(context.Background())
+	if err == nil {
+		t.Fatal("Reconnect succeeded against an unsupported cipher")
+	}
+	derr := diag.AsError(err)
+	if derr == nil || derr.Class != diag.ClassUnsupported || derr.Stage != diag.StageParse {
+		t.Fatalf("Reconnect error = %v, want unsupported at parse", err)
+	}
+
+	attempts := c.Attempts()
+	if len(attempts) != 1 {
+		t.Fatalf("attempts = %d, want exactly 1: %s", len(attempts), attemptSummary(attempts))
+	}
+	if got := attempts[0].Report.Outcome.Class; got != diag.ClassUnsupported {
+		t.Errorf("attempt 1 outcome class = %s, want unsupported", got)
+	}
+	if got := attempts[0].Report.Outcome.Feature; got != "cipher" {
+		t.Errorf("attempt 1 outcome feature = %q, want the directive that was refused", got)
+	}
+	// Nothing was dialed, and the report is what says so.
+	for _, s := range attempts[0].Report.Stages {
+		if s.Stage != diag.StageParse {
+			t.Errorf("attempt 1 reached %s: a fatal gap must not open a socket", s.Stage)
+		}
+	}
+}
+
 // TestReconnectKeepsOneReportPerAttempt: every attempt keeps its own report,
 // and the loop does not overwrite the one belonging to the attempt that failed.
 // Two attempts is the smallest case in which a shared report is visible.
@@ -103,6 +156,23 @@ func TestReconnectKeepsOneReportPerAttempt(t *testing.T) {
 	}
 	if len(rep.Stages) != len(last.Stages) {
 		t.Errorf("Report has %d stages, the last attempt %d", len(rep.Stages), len(last.Stages))
+	}
+}
+
+// TestPreflightThenConnectIsOneAttempt pins the idempotence of the StageParse
+// boundary, and only that: beginAttempt replays the answer it already gave, so
+// the second entry point does not open a second Attempt slot.
+func TestPreflightThenConnectIsOneAttempt(t *testing.T) {
+	c := chachaClient(t)
+
+	if err := c.Preflight(); err == nil {
+		t.Fatal("Preflight accepted an unsupported cipher")
+	}
+	if err := c.Connect(context.Background()); err == nil {
+		t.Fatal("Connect accepted an unsupported cipher")
+	}
+	if got := len(c.Attempts()); got != 1 {
+		t.Fatalf("attempts after Preflight+Connect = %d, want 1", got)
 	}
 }
 

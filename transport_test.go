@@ -1455,6 +1455,7 @@ func TestEveryRemoteIsRetained(t *testing.T) {
 	p.CA = testCAPEM(t)
 
 	c := New(p)
+	c.PreflightMode = diag.PreflightAdvisory
 	c.CredentialsFn = func(context.Context) (Credentials, error) {
 		return Credentials{Username: "u", Password: "p"}, nil
 	}

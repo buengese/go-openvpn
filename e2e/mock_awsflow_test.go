@@ -265,6 +265,7 @@ func TestConnectUserPassPresentsCredentials(t *testing.T) {
 	)
 	client := vpn.New(p)
 	client.Device = &idleBackend{} // a running tunnel without CAP_NET_ADMIN
+	client.PreflightMode = diag.PreflightAdvisory
 	client.CredentialsFn = func(context.Context) (vpn.Credentials, error) {
 		calls++
 		return vpn.Credentials{Username: wantUser, Password: wantPass}, nil

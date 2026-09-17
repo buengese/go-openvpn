@@ -21,6 +21,12 @@ import (
 // Options configures a Connect. The zero value is valid and is what a
 // measurement consumer wanting default behaviour passes.
 type Options struct {
+	// PreflightMode selects what the capability preflight does with a fatal
+	// gap. The zero value ends the attempt at StageParse before a socket is
+	// opened; diag.PreflightAdvisory records the same gaps and proceeds anyway,
+	// so the attempt fails where it really fails.
+	PreflightMode diag.PreflightMode
+
 	// EventFn, when set, receives every lifecycle event: state changes, log
 	// lines and periodic stats. It is called from internal goroutines and
 	// must not block.
@@ -84,6 +90,7 @@ func ConnectWithReport(ctx context.Context, prof *profile.Profile, opts Options)
 
 	c := vpn.New(prof)
 	c.Device = &Backend{Name: opts.DeviceName}
+	c.PreflightMode = opts.PreflightMode
 	c.MaxReconnects = opts.MaxReconnects
 	if opts.EventFn != nil {
 		c.EventFn = opts.EventFn

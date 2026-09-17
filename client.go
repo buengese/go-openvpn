@@ -316,6 +316,14 @@ type Client struct {
 	// from several goroutines, must not block, and is set before Connect.
 	EventFn EventFn
 
+	// PreflightMode selects what the StageParse capability preflight does with
+	// a diag.SeverityFatal gap. The zero value, diag.PreflightFailFast, ends
+	// the attempt there with diag.ClassUnsupported before a socket is opened;
+	// diag.PreflightAdvisory records the same gaps and lets the attempt fail
+	// wherever it really fails. The mode is recorded in the session report, so
+	// aggregated reports cannot silently mix the two. Read at StageParse.
+	PreflightMode diag.PreflightMode
+
 	// DataV2 selects whether the IV_PROTO advertisement claims
 	// IV_PROTO_DATA_V2. The zero value claims it, which is what every
 	// production connection wants: P_DATA_V2 is this client's preferred

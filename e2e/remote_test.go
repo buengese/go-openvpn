@@ -112,7 +112,9 @@ func TestRemoteProtocolFieldDecidesTheTransport(t *testing.T) {
 			defer cancel()
 			// The userspace backend, so the run needs no privilege and the
 			// data stage is reachable as an ordinary user.
-			tun, rep, connErr := netstack.ConnectWithReport(ctx, p, netstack.Options{})
+			tun, rep, connErr := netstack.ConnectWithReport(ctx, p, netstack.Options{
+				PreflightMode: diag.PreflightAdvisory,
+			})
 			if tun != nil {
 				defer tun.Close() //nolint:errcheck
 			}

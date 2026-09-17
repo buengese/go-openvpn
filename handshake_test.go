@@ -36,12 +36,12 @@ import (
 // behaviour is tested in internal/tlsverify, where it is implemented.
 
 // TestNoUsableCAIsAConfigErrorBeforeAnySocket pins that the attempt is refused
-// at StageParse with ClassConfig, and that nothing is dialled: the endpoint is
-// a loopback port with nothing listening, so a dial would be observable as a
-// ClassNetwork failure at StageDial.
+// at StageParse with ClassConfig, in every preflight mode, and that nothing is
+// dialled: the endpoint is a loopback port with nothing listening, so a dial
+// would be observable as a ClassNetwork failure at StageDial.
 func TestNoUsableCAIsAConfigErrorBeforeAnySocket(t *testing.T) {
-	{
-		{
+	for _, mode := range []diag.PreflightMode{diag.PreflightFailFast, diag.PreflightAdvisory} {
+		t.Run(mode.String(), func(t *testing.T) {
 			ln, err := net.Listen("tcp", "127.0.0.1:0")
 			if err != nil {
 				t.Fatalf("reserve a port: %v", err)
@@ -57,6 +57,8 @@ func TestNoUsableCAIsAConfigErrorBeforeAnySocket(t *testing.T) {
 				Remote: "127.0.0.1", Port: addr.Port, Proto: profile.ProtoTCP,
 				Cert: []byte("x"), Key: []byte("y"),
 			})
+			c.PreflightMode = mode
+
 			derr := c.Preflight()
 			if derr == nil {
 				t.Fatal("a profile with no CA passed the preflight")
@@ -84,7 +86,7 @@ func TestNoUsableCAIsAConfigErrorBeforeAnySocket(t *testing.T) {
 					t.Errorf("attempt reached %s; a profile with no CA must not open a socket", s.Stage)
 				}
 			}
-		}
+		})
 	}
 }
 
@@ -121,9 +123,10 @@ func TestFileReferencedCAPassesThePreflight(t *testing.T) {
 		t.Fatalf("tlsverify.BuildConfig on a file-referenced CA: %v", err)
 	}
 
-	{
-		{
+	for _, mode := range []diag.PreflightMode{diag.PreflightFailFast, diag.PreflightAdvisory} {
+		t.Run(mode.String(), func(t *testing.T) {
 			c := New(p)
+			c.PreflightMode = mode
 			// The profile asks for credentials, and the preflight checks
 			// that a caller can supply them. That is not what is under
 			// test here.
@@ -131,7 +134,7 @@ func TestFileReferencedCAPassesThePreflight(t *testing.T) {
 			if err := c.Preflight(); err != nil {
 				t.Fatalf("preflight refused a profile whose CA is in a file: %v", err)
 			}
-		}
+		})
 	}
 
 	// The bytes alone are still refused, and the refusal says which call to

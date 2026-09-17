@@ -44,6 +44,7 @@ func attemptMatrix(t *testing.T, entry string) *diag.SessionReport {
 	}
 
 	c := vpn.New(p)
+	c.PreflightMode = diag.PreflightAdvisory
 	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
 	defer cancel()
 	_ = c.Connect(ctx)

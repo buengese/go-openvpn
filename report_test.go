@@ -304,6 +304,29 @@ func TestEventStageEmitted(t *testing.T) {
 	}
 }
 
+// TestCapabilityGapsRunsPreflight checks that the StageParse boundary really
+// consults the capability registry, rather than a placeholder standing in for
+// it.
+func TestCapabilityGapsRunsPreflight(t *testing.T) {
+	p, err := profile.ParseString("remote vpn.example.com 443\nproto tcp-client\ntls-crypt-v2-not-a-directive\n")
+	if err != nil {
+		t.Fatalf("ParseString: %v", err)
+	}
+	gaps := New(p).capabilityGaps()
+	if len(gaps) == 0 {
+		t.Fatal("capabilityGaps returned nothing; caps.Inspect is not wired up")
+	}
+	var fatal bool
+	for _, g := range gaps {
+		if g.Severity == diag.SeverityFatal {
+			fatal = true
+		}
+	}
+	if !fatal {
+		t.Errorf("an unrecognised directive should be fatal; got %v", gaps)
+	}
+}
+
 // makeReportTestProfile returns a minimal profile for the report tests.
 func makeReportTestProfile(t *testing.T) *profile.Profile {
 	t.Helper()
@@ -313,6 +336,157 @@ func makeReportTestProfile(t *testing.T) *profile.Profile {
 		// no usable CA is refused at StageParse and never reaches the stage
 		// under test.
 		CA: testCAPEM(t),
+	}
+}
+
+// fatalGapProfile is a profile whose preflight is guaranteed to report a
+// SeverityFatal gap. It dials nothing: every test below stops at or before
+// StageDial.
+func fatalGapProfile(t *testing.T) *profile.Profile {
+	t.Helper()
+	p, err := profile.ParseString("client\nremote 127.0.0.1 1\nproto tcp-client\nauth-user-pass /etc/openvpn/creds.txt\n")
+	if err != nil {
+		t.Fatalf("ParseString: %v", err)
+	}
+	// The gap under test is the *file* form of auth-user-pass: nothing reads
+	// the file, so an empty username would be recorded as a rejected password.
+	// The CA is only here to get the profile past the StageParse boundary.
+	p.CA = testCAPEM(t)
+	return p
+}
+
+// TestPreflightFailFastIsTheDefault pins that a config with a Fatal gap yields
+// ClassUnsupported at StageParse with Feature naming the directive, on a Client
+// that was never configured.
+func TestPreflightFailFastIsTheDefault(t *testing.T) {
+	c := New(fatalGapProfile(t))
+	if c.PreflightMode != diag.PreflightFailFast {
+		t.Fatalf("default PreflightMode = %v, want fail-fast", c.PreflightMode)
+	}
+
+	err := c.Preflight()
+	var derr *diag.Error
+	if !errors.As(err, &derr) {
+		t.Fatalf("Preflight error is not a *diag.Error: %T: %v", err, err)
+	}
+	if derr.Class != diag.ClassUnsupported {
+		t.Errorf("class = %v, want unsupported", derr.Class)
+	}
+	if derr.Stage != diag.StageParse {
+		t.Errorf("stage = %v, want parse", derr.Stage)
+	}
+	if derr.Feature != "auth-user-pass" {
+		t.Errorf("feature = %q, want %q", derr.Feature, "auth-user-pass")
+	}
+
+	rep := c.Report()
+	if rep.Preflight != diag.PreflightFailFast {
+		t.Errorf("report preflight = %v, want fail-fast", rep.Preflight)
+	}
+	if rep.Outcome.Succeeded || rep.Outcome.Class != diag.ClassUnsupported ||
+		rep.Outcome.Stage != diag.StageParse || rep.Outcome.Feature != "auth-user-pass" {
+		t.Errorf("report outcome = %+v, want unsupported/parse/auth-user-pass", rep.Outcome)
+	}
+	if got := stageNames(rep); !equalStrings(got, []string{"parse"}) {
+		t.Errorf("stages = %v, want [parse]: fail-fast must not reach the network", got)
+	}
+}
+
+// TestPreflightAdvisoryRecordsGapsWithoutAborting pins what advisory mode adds:
+// the same profile, the same gaps in the report, the same stage event — but the
+// attempt is allowed to continue so that it fails where it really fails.
+func TestPreflightAdvisoryRecordsGapsWithoutAborting(t *testing.T) {
+	c := New(fatalGapProfile(t))
+	c.PreflightMode = diag.PreflightAdvisory
+	c.CredentialsFn = stubCredentials("user", "pass")
+
+	if err := c.Preflight(); err != nil {
+		t.Fatalf("advisory Preflight returned %v, want nil", err)
+	}
+
+	rep := c.Report()
+	if rep.Preflight != diag.PreflightAdvisory {
+		t.Errorf("report preflight = %v, want advisory", rep.Preflight)
+	}
+	if rep.Outcome.Succeeded || len(rep.Outcome.ErrorChain) != 0 {
+		t.Errorf("advisory mode wrote an outcome at parse: %+v", rep.Outcome)
+	}
+
+	// The gaps must be recorded exactly as fail-fast records them.
+	var fatal []string
+	for _, g := range rep.Profile.Gaps {
+		if g.Severity == diag.SeverityFatal {
+			fatal = append(fatal, g.Directive)
+		}
+	}
+	if len(fatal) == 0 {
+		t.Fatal("advisory mode dropped the fatal gaps from the report")
+	}
+	fail := New(fatalGapProfile(t))
+	_ = fail.Preflight()
+	if got, want := len(rep.Profile.Gaps), len(fail.Report().Profile.Gaps); got != want {
+		t.Errorf("advisory recorded %d gaps, fail-fast recorded %d; they must agree", got, want)
+	}
+
+	// StageParse completed rather than being left open by a failure.
+	if len(rep.Stages) != 1 || rep.Stages[0].Stage != diag.StageParse || rep.Stages[0].Duration == 0 {
+		t.Errorf("advisory stage record = %+v, want a completed parse stage", rep.Stages)
+	}
+}
+
+// TestPreflightAdvisoryLetsTheAttemptReachTheNetwork is the property advisory
+// mode exists for: with a fatal gap present the attempt still reaches the
+// transport, so the failure it reports is the one the protocol code produces.
+func TestPreflightAdvisoryLetsTheAttemptReachTheNetwork(t *testing.T) {
+	p := fatalGapProfile(t)
+	p.Port = closedTCPPort(t)
+
+	c := New(p)
+	c.PreflightMode = diag.PreflightAdvisory
+	c.EventFn = func(Event) {}
+	c.CredentialsFn = stubCredentials("user", "pass")
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	err := c.Connect(ctx)
+	if err == nil {
+		t.Fatal("expected Connect to fail against a closed port")
+	}
+
+	var derr *diag.Error
+	if !errors.As(err, &derr) {
+		t.Fatalf("error is not a *diag.Error: %T: %v", err, err)
+	}
+	if derr.Class != diag.ClassNetwork || derr.Stage != diag.StageDial {
+		t.Errorf("got %v at %v, want network at dial: advisory mode must not "+
+			"short-circuit at parse", derr.Class, derr.Stage)
+	}
+	rep := c.Report()
+	if rep.Preflight != diag.PreflightAdvisory {
+		t.Errorf("report preflight = %v, want advisory", rep.Preflight)
+	}
+	if got := stageNames(rep); !equalStrings(got, []string{"parse", "dial"}) {
+		t.Errorf("stages = %v, want [parse dial]", got)
+	}
+}
+
+// TestPreflightModeSurvivesRedaction checks that the mode is readable on the
+// only form that gets serialised: a redacted report that lost it would let an
+// aggregator mix advisory and fail-fast runs.
+func TestPreflightModeSurvivesRedaction(t *testing.T) {
+	c := New(fatalGapProfile(t))
+	c.PreflightMode = diag.PreflightAdvisory
+	c.CredentialsFn = stubCredentials("user", "pass")
+	if err := c.Preflight(); err != nil {
+		t.Fatalf("Preflight: %v", err)
+	}
+
+	blob, err := json.Marshal(c.Report().Redacted())
+	if err != nil {
+		t.Fatalf("marshal redacted report: %v", err)
+	}
+	if !bytes.Contains(blob, []byte(`"preflight":"advisory"`)) {
+		t.Errorf("redacted report does not name the preflight mode: %s", blob)
 	}
 }
 
@@ -384,7 +558,7 @@ func TestPushedTunnelAddressIsRedactedBeforeTheDeviceOpens(t *testing.T) {
 		t.Fatalf("ParsePushReply: %v", err)
 	}
 
-	c := New(makeReportTestProfile(t))
+	c := New(fatalGapProfile(t))
 	c.enterStage(diag.StagePush)
 	// Deliberately no recordDevice: this is the failed-before-the-device case.
 	c.recordPush(raw, opts, 0)

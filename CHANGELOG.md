@@ -24,6 +24,10 @@ and releases follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `SessionReport` that redacts credentials, certificates and pushed options
   before serialisation. Every connection attempt now produces one, on success
   and on failure alike, reachable through `Client.Report()`.
+- `Client.Preflight()` and `Client.PreflightMode`: a capability preflight that
+  reports what a profile asks for that the client cannot honour, without
+  opening a socket. It refuses the connection by default; the advisory mode
+  records the same gaps and continues, for measurement.
 - Support for stock OpenVPN 2.4 and 2.5 servers. The client now performs the
   classic OpenVPN key derivation, so it connects to deployments that do not
   offer the TLS keying-material exporter — which is every OpenVPN server before
@@ -282,6 +286,22 @@ and releases follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - A server we cannot authenticate to is reported as a crypto failure at the
   reset stage rather than as a network timeout. A wrapped server and a dead one
   were previously indistinguishable.
+- The capability registry reports `tls-auth`, `tls-crypt`, `key-direction` and
+  the bare form of `auth-user-pass` as supported. The file-argument forms stay
+  fatal: nothing reads the file, and proceeding would report the server's
+  refusal as a wrong password.
+- The capability registry reports `remote-cert-tls server` as supported. The
+  client has required the server certificate's serverAuth extended key usage
+  since the certificate verifier was rewritten, but the registry still described
+  the directive as unread, which understated what most profiles would get.
+- The capability registry reports a `ca`, `cert` or `key` file reference as
+  supported when the file was read and as ignored when an inline block
+  superseded it, in place of the flat "not read" it reported before. It was the
+  last row that routinely graded a real provider profile fatal.
+- The capability registry reports `compress` and `allow-compression` as
+  supported, and `comp-lzo` as degraded rather than "not read". The framing is
+  applied in every case; the distinction is the codec, which only `comp-lzo`,
+  `compress lzo`, `compress lz4` and `compress lz4-v2` can meet.
 - `diag.NegotiatedInfo.Compression` reports the compression actually in force
   rather than the pushed directive, and names it as a `.ovpn` file does —
   `comp-lzo`, `compress`, `compress stub-v2`. It previously reported `none` for

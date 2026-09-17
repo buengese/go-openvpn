@@ -586,14 +586,28 @@ func TestCredentialsFnErrorPropagates(t *testing.T) {
 // TestMissingCredentialsFnIsConfigAtParse covers a profile that needs a
 // password and has no way to get one. It fails before dialing, because dialing
 // cannot help, and it fails as ClassConfig: no server rejected anything.
+//
+// The two subtests carry the same rule in the two preflight modes. Under
+// fail-fast the profile is the bare one, because a profile spelling
+// auth-user-pass out loud is stopped one step earlier by the capability
+// registry, which grades the directive itself (caps.Inspect).
 func TestMissingCredentialsFnIsConfigAtParse(t *testing.T) {
-	for _, directives := range []string{"", "auth-user-pass\n"} {
-		t.Run(directives, func(t *testing.T) {
-			p := credentialTestProfile(t, directives, false)
+	tests := []struct {
+		mode       diag.PreflightMode
+		directives string
+	}{
+		{mode: diag.PreflightFailFast, directives: ""},
+		{mode: diag.PreflightAdvisory, directives: "auth-user-pass\n"},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.mode.String(), func(t *testing.T) {
+			p := credentialTestProfile(t, tc.directives, false)
 			if got := p.AuthFlow(); got != profile.FlowUserPass {
 				t.Fatalf("AuthFlow = %v, want FlowUserPass", got)
 			}
 			c := New(p)
+			c.PreflightMode = tc.mode
 
 			err := c.Preflight()
 			var derr *diag.Error
@@ -609,6 +623,32 @@ func TestMissingCredentialsFnIsConfigAtParse(t *testing.T) {
 				t.Errorf("stages = %v, want [parse]: the attempt must not dial", got)
 			}
 		})
+	}
+}
+
+// TestBareAuthUserPassIsSupportedAndTheFileFormIsNot pins both halves of the
+// registry's verdict on the directive. The bare form is supported, so a profile
+// carrying it reaches the wire instead of being refused at preflight. The file
+// form is not, and stays fatal: nothing reads the file, and a profile that
+// proceeded would send an empty username and have the server's refusal recorded
+// as a wrong password.
+func TestBareAuthUserPassIsSupportedAndTheFileFormIsNot(t *testing.T) {
+	bare := New(credentialTestProfile(t, "auth-user-pass\n", true))
+	bare.CredentialsFn = stubCredentials(sentinelUser, sentinelPassword)
+	if err := bare.Preflight(); err != nil {
+		t.Fatalf("Preflight refused a bare auth-user-pass profile: %v", err)
+	}
+
+	withFile := New(credentialTestProfile(t, "auth-user-pass /etc/openvpn/creds.txt\n", true))
+	withFile.CredentialsFn = stubCredentials(sentinelUser, sentinelPassword)
+	err := withFile.Preflight()
+
+	var derr *diag.Error
+	if !errors.As(err, &derr) {
+		t.Fatalf("error is not a *diag.Error: %T: %v", err, err)
+	}
+	if derr.Class != diag.ClassUnsupported || derr.Feature != "auth-user-pass" {
+		t.Errorf("got %s/%q, want unsupported/auth-user-pass", derr.Class, derr.Feature)
 	}
 }
 

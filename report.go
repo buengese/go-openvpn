@@ -18,6 +18,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/openlawsvpn/go-openlawsvpn/caps"
 	"github.com/openlawsvpn/go-openlawsvpn/device"
 	"github.com/openlawsvpn/go-openlawsvpn/diag"
 	"github.com/openlawsvpn/go-openlawsvpn/internal/compress"
@@ -275,9 +276,24 @@ func (c *Client) failUnsupported(s diag.Stage, feature, detail string) *diag.Err
 	return derr
 }
 
-// Preflight runs the StageParse boundary — profile fingerprint, endpoint and
-// credential registration — without opening a socket, and returns the error the
-// attempt would fail with, or nil.
+// capabilityGaps returns the capability preflight result for this client's
+// profile: every directive and inline block it asks for, classified against
+// what this client can honour. beginAttempt assigns the result into
+// SessionReport.Profile.Gaps and, under the default diag.PreflightFailFast,
+// ends the attempt with ClassUnsupported at StageParse as soon as any gap
+// comes back SeverityFatal.
+func (c *Client) capabilityGaps() []diag.Gap {
+	return caps.Inspect(c.prof)
+}
+
+// Preflight runs the StageParse boundary — profile fingerprint, capability
+// preflight, endpoint and credential registration — without opening a socket,
+// and returns the error the attempt would fail with, or nil.
+//
+// Under the default diag.PreflightFailFast a profile with a fatal capability
+// gap yields a *diag.Error of diag.ClassUnsupported at diag.StageParse whose
+// Feature names the directive; under diag.PreflightAdvisory it returns nil and
+// the gaps are readable from Report.
 //
 // The boundary is shared with Connect and is idempotent: calling Preflight and
 // then Connect on the same Client runs it once and replays its result.
@@ -300,8 +316,13 @@ func profileDirectiveNames(p *profile.Profile) []string {
 }
 
 // beginAttempt starts the session report for a connection attempt and runs the
-// StageParse boundary: profile fingerprint, endpoint, and registration of the
-// profile's own credential material for redaction.
+// StageParse boundary: profile fingerprint, capability preflight, endpoint, and
+// registration of the profile's own credential material for redaction.
+//
+// Client.PreflightMode decides what a SeverityFatal gap does here: the default
+// ends the attempt with ClassUnsupported at StageParse, diag.PreflightAdvisory
+// records the identical gaps and returns nil so the attempt fails wherever it
+// really fails. The mode goes into the report.
 //
 // It is idempotent within an attempt and replays its result. Connect,
 // dialAndAuthenticate and bringUpTunnel all call it, because the mobile, relay
@@ -318,16 +339,20 @@ func (c *Client) beginAttempt() error {
 	rec.mu.Unlock()
 
 	// The attempt is this recorder's, and the slot is opened before the
-	// boundary below can end it: a profile refused at StageParse is an
+	// preflight below can end it: a profile refused at StageParse is an
 	// attempt that was made and explains itself, not an absence of one.
 	c.registerAttempt(rec)
 
 	c.enterStage(diag.StageParse)
 
 	p := c.prof
+	mode := c.PreflightMode
+	gaps := c.capabilityGaps()
 	rec.edit(func(r *diag.SessionReport) {
+		r.Preflight = mode
 		r.Profile.Fingerprint = profileFingerprint(p)
 		r.Profile.Directives = profileDirectiveNames(p)
+		r.Profile.Gaps = gaps
 		r.Endpoint.Host = p.Remote
 		r.Endpoint.Port = p.Port
 		r.Endpoint.Proto = p.Proto.String()
@@ -336,9 +361,27 @@ func (c *Client) beginAttempt() error {
 		r.SetClientKeyPEM(string(p.Key))
 	})
 
+	if mode == diag.PreflightFailFast {
+		for _, g := range gaps {
+			if g.Severity != diag.SeverityFatal {
+				continue
+			}
+			err := c.failUnsupported(diag.StageParse, g.Directive, g.Detail)
+			rec.mu.Lock()
+			rec.startErr = err
+			rec.mu.Unlock()
+			return err
+		}
+	}
+	// Advisory mode does not call fail here: writing an outcome would claim
+	// the attempt's one explanatory failure for a gap it is about to walk
+	// straight past. The gaps are already in Profile.Gaps.
+
 	// A profile with no usable CA is refused here, before any socket is
-	// opened: dialing anyway would build a tunnel with an empty trust store
-	// and no verification.
+	// opened, and in every preflight mode. It is deliberately not routed
+	// through the capability preflight, which advisory mode is allowed to walk
+	// past: walking past this one would build a tunnel with an empty trust
+	// store and no verification.
 	if _, err := tlsverify.RootCAs(p); err != nil {
 		derr := c.failStage(diag.ClassConfig, diag.StageParse, err,
 			"no CA to verify the server against")
@@ -350,9 +393,9 @@ func (c *Client) beginAttempt() error {
 
 	// The control-channel wrap is chosen here, before any socket exists,
 	// because tls-auth authenticates the opening HARD_RESET and cannot be
-	// installed after it. A profile whose wrap cannot be built is refused:
-	// dialing anyway would report a ClassNetwork silence instead of the
-	// config error it is.
+	// installed after it. A profile whose wrap cannot be built fails in every
+	// preflight mode: dialing anyway would report a ClassNetwork silence
+	// instead of the config error it is.
 	if err := c.selectWrapper(); err != nil {
 		derr := c.failStage(diag.ClassConfig, diag.StageParse, err,
 			"control-channel wrap")
@@ -367,9 +410,9 @@ func (c *Client) beginAttempt() error {
 	wrapName := c.controlWrapper().Name()
 	rec.edit(func(r *diag.SessionReport) { r.Negotiated.TLSWrap = wrapName })
 
-	// A profile whose method has nothing to present is refused: there is
-	// nothing to put in the key-method-2 packet. It is ClassConfig, not
-	// ClassAuth — no server rejected anything.
+	// A profile whose method has nothing to present is refused in every
+	// preflight mode: there is nothing to put in the key-method-2 packet. It is
+	// ClassConfig, not ClassAuth — no server rejected anything.
 	if missing := c.authMethodFor(p).missing(missingForAnyEntry); missing != "" {
 		derr := c.failStage(diag.ClassConfig, diag.StageParse, nil, missing)
 		rec.mu.Lock()
