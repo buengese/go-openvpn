@@ -20,6 +20,9 @@ and releases follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   and on failure alike, reachable through `Client.Report()`.
 - Data-channel breadth: AES-128, AES-192 and AES-256 in both GCM and CBC, with
   CBC authenticated by HMAC-SHA1, HMAC-SHA256 or HMAC-SHA512.
+- A control-channel replay window, separate from the reliable layer's own
+  sequence numbers. Replayed and stale-timestamped control packets are rejected
+  and counted in `diag.Counters` rather than dropped silently.
 
 ### Changed
 

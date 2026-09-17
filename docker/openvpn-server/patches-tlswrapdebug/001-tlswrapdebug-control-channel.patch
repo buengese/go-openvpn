@@ -1,0 +1,187 @@
+--- a/src/openvpn/crypto.h
++++ b/src/openvpn/crypto.h
+@@ -321,6 +321,14 @@
+                   const struct key_type *kt, int enc,
+                   const char *prefix);
+ 
++/*
++ * go-openlawsvpn control-channel wrap instrumentation.
++ * Defined in crypto.c, called from crypto.c and ssl.c. Present only in the
++ * throwaway "tlswrapdebug" image; see docker/TLS-WRAP-VECTORS.md.
++ */
++void tlswrapdebug_dump(const char *tag, const uint8_t *data, int len,
++                       const char *trailer);
++
+ void free_key_ctx(struct key_ctx *ctx);
+ 
+ void init_key_ctx_bi(struct key_ctx_bi *ctx, const struct key2 *key2,
+--- a/src/openvpn/crypto.c
++++ b/src/openvpn/crypto.c
+@@ -840,6 +840,59 @@
+     }
+ }
+ 
++/*
++ * go-openlawsvpn control-channel wrap instrumentation.
++ *
++ * Prints one greppable line:  TLSWRAPDEBUG <tag> <hex> [<trailer>]
++ *
++ * The trailer carries free-form text that may contain spaces (init_key_ctx()'s
++ * log prefix does), so it goes last and the hex stays a single field.
++ *
++ * This deliberately does NOT go through msg().  msg() formats into a buffer of
++ * ERR_BUF_SIZE (1280 without PKCS#11) and then formats *again* to prepend the
++ * per-instance prefix, so a line is silently clipped somewhere past 1200
++ * characters -- and where exactly depends on how long the tag and the peer's
++ * address are.  That truncates precisely the vectors worth having, the full
++ * P_CONTROL_V1 packets, and it truncates two stages of the same packet at two
++ * different points, which reads as a wire-format discovery rather than as a
++ * logging limit.  It cost an hour once; it will not cost a second.
++ *
++ * Control packets are bounded by --tls-mtu (1250 by default) plus the wrap
++ * overhead, so TLSWRAPDEBUG_MAX is comfortably above anything either caller can
++ * hand us.  A longer buffer is reported rather than truncated: a silently
++ * truncated vector is worse than a missing one, because it still looks like a
++ * vector.
++ *
++ * This exists only in the throwaway "tlswrapdebug" image.  It prints the
++ * control-channel key material and every control packet in the clear, and must
++ * never be built into anything that carries real traffic.
++ * See docker/TLS-WRAP-VECTORS.md.
++ */
++#define TLSWRAPDEBUG_MAX 2048
++
++void
++tlswrapdebug_dump(const char *tag, const uint8_t *data, int len,
++                  const char *trailer)
++{
++    char hex[2 * TLSWRAPDEBUG_MAX + 1];
++    int i;
++
++    if (len < 0 || len > TLSWRAPDEBUG_MAX)
++    {
++        fprintf(stderr, "TLSWRAPDEBUG %s <oversized:%d>\n", tag, len);
++        fflush(stderr);
++        return;
++    }
++    for (i = 0; i < len; ++i)
++    {
++        openvpn_snprintf(&hex[i * 2], 3, "%02x", data[i]);
++    }
++    hex[len * 2] = '\0';
++    fprintf(stderr, "TLSWRAPDEBUG %s %s%s%s\n", tag, hex,
++            trailer ? " " : "", trailer ? trailer : "");
++    fflush(stderr);
++}
++
+ /* given a key and key_type, build a key_ctx */
+ void
+ init_key_ctx(struct key_ctx *ctx, const struct key *key,
+@@ -848,6 +901,30 @@
+ {
+     struct gc_arena gc = gc_new();
+     CLEAR(*ctx);
++
++    /* --- wrap instrumentation (tlswrapdebug build only) -----------------
++     *
++     * Exactly the bytes installed into this context, and the log prefix that
++     * names which context it is: init_key_ctx_bi() passes "Outgoing <name>"
++     * for key2->keys[kds.out_key] and "Incoming <name>" for keys[kds.in_key],
++     * where <name> is "Control Channel Authentication" for --tls-auth and
++     * "Control Channel Encryption" for --tls-crypt.
++     *
++     * The capture locates these bytes inside the 256-byte static key rather
++     * than assuming an offset, so the key-direction mapping is measured and
++     * not read.
++     */
++    if (kt->cipher && kt->cipher_length > 0)
++    {
++        tlswrapdebug_dump("keyctx cipher", key->cipher, kt->cipher_length,
++                          prefix);
++    }
++    if (kt->digest && kt->hmac_length > 0)
++    {
++        tlswrapdebug_dump("keyctx hmac", key->hmac, kt->hmac_length, prefix);
++    }
++    /* --- end wrap instrumentation --------------------------------------- */
++
+     if (kt->cipher && kt->cipher_length > 0)
+     {
+ 
+--- a/src/openvpn/ssl.c
++++ b/src/openvpn/ssl.c
+@@ -1458,6 +1458,26 @@
+ #undef SWAP_BUF_SIZE
+ 
+ /*
++ * go-openlawsvpn control-channel wrap instrumentation.
++ *
++ * One line per stage of write_control_auth(), tagged with the wrap mode and
++ * the opcode so the capture can pick the first packet of each shape:
++ *
++ *   TLSWRAPDEBUG <auth|crypt> <opcode> <stage> <hex>
++ *
++ * See docker/TLS-WRAP-VECTORS.md for what each stage is and why it is dumped.
++ */
++static void
++tlswrapdebug_packet(const char *mode, int opcode, const char *stage,
++                    const struct buffer *buf)
++{
++    char tag[64];
++
++    openvpn_snprintf(tag, sizeof(tag), "%s %d %s", mode, opcode, stage);
++    tlswrapdebug_dump(tag, BPTR(buf), BLEN(buf), NULL);
++}
++
++/*
+  * Write a control channel authentication record.
+  */
+ static void
+@@ -1484,17 +1504,47 @@
+     }
+     if (session->tls_wrap.mode == TLS_WRAP_AUTH)
+     {
++        /* --- wrap instrumentation (tlswrapdebug build only) -------------
++         *
++         * "plain" is the complete unwrapped control packet, opcode and
++         * session id already prepended just above:
++         *   opcode|key_id ‖ session_id ‖ ack_array ‖ [packet_id ‖ payload]
++         *
++         * "preswap" is what openvpn_encrypt() leaves behind. In auth-only
++         * mode it prepends the long-form replay packet id and then the HMAC,
++         * so the tail of this buffer past the HMAC is *precisely* the byte
++         * string that was HMAC'd — which is the field ordering these vectors
++         * exist to pin down, and it is not the wire ordering.
++         *
++         * "wire" is the same bytes after swap_hmac() has moved the opcode and
++         * session id back to the front.
++         */
++        tlswrapdebug_packet("auth", opcode, "plain", buf);
+         /* no encryption, only write hmac */
+         openvpn_encrypt(buf, null, &session->tls_wrap.opt);
++        tlswrapdebug_packet("auth", opcode, "preswap", buf);
+         ASSERT(swap_hmac(buf, &session->tls_wrap.opt, false));
++        tlswrapdebug_packet("auth", opcode, "wire", buf);
+     }
+     else if (session->tls_wrap.mode == TLS_WRAP_CRYPT)
+     {
+         ASSERT(buf_init(&session->tls_wrap.work, buf->offset));
+         ASSERT(buf_write(&session->tls_wrap.work, &header, sizeof(header)));
+         ASSERT(session_id_write(&session->session_id, &session->tls_wrap.work));
++        /* --- wrap instrumentation (tlswrapdebug build only) -------------
++         *
++         * tls-crypt builds its output in a second buffer, so the plain packet
++         * exists in two pieces here and never in one: "plainhdr" is the
++         * opcode|key_id ‖ session_id that was just written into work, and
++         * "plainbody" is everything after it. Their concatenation is the same
++         * plain control packet the auth path dumps as "plain"; the capture
++         * joins them and says so.
++         */
++        tlswrapdebug_packet("crypt", opcode, "plainhdr", &session->tls_wrap.work);
++        tlswrapdebug_packet("crypt", opcode, "plainbody", buf);
+         if (tls_crypt_wrap(buf, &session->tls_wrap.work, &session->tls_wrap.opt))
+         {
++            tlswrapdebug_packet("crypt", opcode, "wire", &session->tls_wrap.work);
+             /* Don't change the original data in buf, it's used by the reliability
+              * layer to resend on failure. */
+             *buf = session->tls_wrap.work;
