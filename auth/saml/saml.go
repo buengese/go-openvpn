@@ -25,8 +25,23 @@ import (
 	"net"
 	"net/http"
 	"strings"
+	"sync"
+	"syscall"
 	"time"
+
+	"github.com/openlawsvpn/go-openlawsvpn/diag"
 )
+
+// IsAWSEndpoint reports whether host is an AWS Client VPN endpoint, matching the
+// two fixed ends of cvpn-endpoint-<id>.prod.clientvpn.<region>.amazonaws.com as
+// a fallback for a profile that has lost its auth-federate directive.
+//
+// host is the remote as the profile writes it. The random label AWS requires is
+// prepended at dial time, so passing the dialled name fails the prefix match and
+// silently disables the fallback.
+func IsAWSEndpoint(host string) bool {
+	return strings.HasPrefix(host, "cvpn-endpoint-") && strings.HasSuffix(host, ".amazonaws.com")
+}
 
 // ACSPort is the TCP port that AWS hardcodes for the SAML ACS callback.
 // This is fixed across all AWS regions and all IdPs.
@@ -202,40 +217,70 @@ func validateResponseXML(data []byte) error {
 	return nil
 }
 
+// acsShutdownGrace bounds how long Wait lets the success page finish reaching
+// the browser after the token has arrived. It only has to cover one fixed,
+// few-hundred-byte response over the loopback interface.
+const acsShutdownGrace = 2 * time.Second
+
 // ACSServer listens on 127.0.0.1:35001 for the browser's SAML POST callback.
-// It captures the SAMLResponse form field and returns it via the returned
-// channel, then shuts down.
+// It captures the SAMLResponse form field, hands it to Wait, and releases the
+// port.
 //
-// The caller must cancel ctx to abort the server if no callback arrives in time.
+// AWS hardcodes the ACS URL, so there is no second port to fall back to: the
+// listener is owned for exactly as long as the ACSServer lives, and no more.
+// NewACSServer binds it, Wait releases it on every path it can return through,
+// Close releases it for a caller that never reaches Wait, and a lost bind is
+// reported rather than absorbed — see ErrACSPortBusy.
+//
+// Holding the port for the process's lifetime would keep a squatter out and is
+// deliberately not done: the callback is only answerable while a flow this
+// client started is waiting for it (docs/security-architecture.md §5.4).
 type ACSServer struct {
 	ln    net.Listener
+	srv   *http.Server
 	token chan string
-	errCh chan error
+
+	closeOnce sync.Once
+	closeErr  error
 }
 
-// NewACSServer creates and starts the ACS server.
-// It binds to 127.0.0.1:ACSPort immediately so callers know whether the
-// port is available before opening the browser.
+// ErrACSPortBusy reports that something else already held the assertion
+// callback port when this client tried to take it. It is wrapped by the error
+// NewACSServer returns, so recover it with errors.Is.
+//
+// AWS fixes the callback address, so the browser posts the assertion to
+// 127.0.0.1:35001 whether or not this client is listening there: a bind lost to
+// another local account delivers the identity provider's POST — the credential
+// this flow exists to fetch — to that account, and loopback ports are not
+// partitioned by UID while the ACS server runs in the system daemon. See
+// docs/security-architecture.md §5.4. It is named so that no caller answers it
+// with a paste prompt, which turns an interception into a login finished by hand.
+var ErrACSPortBusy = errors.New("saml: the assertion callback port is held by another process")
+
+// NewACSServer binds the ACS listener on 127.0.0.1:ACSPort, so the caller learns
+// the port is unavailable before it opens a browser whose callback it could not
+// answer. A caller that gives up before Wait must Close the server, or the port
+// stays bound for the life of the process. A failure is a *diag.Error of
+// ClassLocal at StageAuth, wrapping ErrACSPortBusy when the port was taken.
 func NewACSServer() (*ACSServer, error) {
-	ln, err := net.Listen("tcp", fmt.Sprintf("127.0.0.1:%d", ACSPort))
+	return newACSServer(ACSPort)
+}
+
+// newACSServer is NewACSServer with the port as an argument, so that a test can
+// hold the port first and see what the bind does about it. The argument stops
+// here: AWS hardcodes the ACS URL, so ACSPort is its only working value.
+func newACSServer(port int) (*ACSServer, error) {
+	ln, err := net.Listen("tcp", fmt.Sprintf("127.0.0.1:%d", port))
 	if err != nil {
-		return nil, fmt.Errorf("saml: ACS listen: %w", err)
+		return nil, acsListenError(err)
 	}
 	s := &ACSServer{
 		ln:    ln,
 		token: make(chan string, 1),
-		errCh: make(chan error, 1),
 	}
-	return s, nil
-}
-
-// Wait starts serving and blocks until a SAMLResponse is received or ctx is
-// cancelled. It returns the raw SAMLResponse value (base64-encoded by the IdP).
-func (s *ACSServer) Wait(ctx context.Context) (string, error) {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/", s.handleACS)
-
-	srv := &http.Server{
+	s.srv = &http.Server{
 		Handler:           mux,
 		ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout:       10 * time.Second,
@@ -243,30 +288,96 @@ func (s *ACSServer) Wait(ctx context.Context) (string, error) {
 		IdleTimeout:       5 * time.Second,
 		MaxHeaderBytes:    16 * 1024,
 	}
+	return s, nil
+}
 
-	// Shut down the HTTP server when ctx is done.
-	go func() {
-		<-ctx.Done()
-		srv.Close() //nolint:errcheck
-	}()
+// acsListenError classifies a failed ACS bind as ClassLocal at StageAuth: the
+// obstacle is on this machine, which the failover loop reads as "no endpoint can
+// help", and collecting the assertion is authentication. EADDRINUSE is singled
+// out because it is the one bind failure that means the assertion is going
+// somewhere else rather than nowhere, which is what ErrACSPortBusy names.
+func acsListenError(cause error) *diag.Error {
+	const detail = "bind the SAML assertion callback port"
+	if errors.Is(cause, syscall.EADDRINUSE) {
+		return diag.Wrap(diag.ClassLocal, diag.StageAuth,
+			fmt.Errorf("%w: %w", ErrACSPortBusy, cause), detail)
+	}
+	return diag.Wrap(diag.ClassLocal, diag.StageAuth, cause, detail)
+}
 
-	go func() {
-		if err := srv.Serve(s.ln); err != nil && err != http.ErrServerClosed {
-			s.errCh <- err
+// Close releases the ACS listener and drops any connection still open on it. It
+// is idempotent and safe to call concurrently with Wait, which closes the server
+// itself; Close is for a caller that binds and then abandons before Wait.
+func (s *ACSServer) Close() error {
+	s.closeOnce.Do(func() {
+		// Server.Close only closes listeners Serve has registered with it, so a
+		// server that never reached Wait needs its listener closed directly; the
+		// second close of the same listener is the net.ErrClosed discarded here.
+		s.closeErr = s.srv.Close()
+		if err := s.ln.Close(); err != nil && !errors.Is(err, net.ErrClosed) && s.closeErr == nil {
+			s.closeErr = err
 		}
-	}()
+	})
+	return s.closeErr
+}
+
+// Wait serves the ACS callback and blocks until a SAMLResponse arrives (raw,
+// base64-encoded by the IdP), ctx ends, or the server fails. The listener is
+// released before Wait returns, so the caller's next NewACSServer can bind.
+func (s *ACSServer) Wait(ctx context.Context) (string, error) {
+	// Closing from the goroutine that is returning is the whole of the contract
+	// above: leave it to a separate ctx watcher and Wait returns with the
+	// listener still open, which a re-authentication's immediate re-bind races.
+	defer s.Close() //nolint:errcheck
+
+	serveErr := make(chan error, 1)
+	go func() { serveErr <- s.srv.Serve(s.ln) }()
 
 	select {
 	case tok := <-s.token:
-		srv.Close() //nolint:errcheck
+		// The handler publishes the token before its success page has left the
+		// connection, and Close drops connections that are still active. Shutdown
+		// frees the listener at once, then waits for the page so the browser gets
+		// it instead of a reset; the deferred Close backstops a stalled one.
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), acsShutdownGrace)
+		defer cancel()
+		s.srv.Shutdown(shutdownCtx) //nolint:errcheck
 		return tok, nil
-	case err := <-s.errCh:
+	case err := <-serveErr:
+		if errors.Is(err, http.ErrServerClosed) {
+			return "", errors.New("saml: ACS server closed before a callback arrived")
+		}
 		return "", fmt.Errorf("saml: ACS server error: %w", err)
 	case <-ctx.Done():
 		return "", fmt.Errorf("saml: ACS timeout: %w", ctx.Err())
 	}
 }
 
+// handleACS takes the identity provider's POST and publishes the assertion to
+// Wait. It checks the shape of what arrived and nothing at all about who sent
+// it, because there is nothing here to check it against.
+//
+// SAML's field for a nonce — RelayState — is unusable: a responder echoes it
+// only when it accompanied the *request*, and this client sends no request, so
+// whatever AuthnRequest exists is AWS's and so is its RelayState. A value out of
+// the challenge serves no better, because the state_id and the IdP URL both
+// travel to the browser and the daemon broadcasts the URL over SAMLRequired to
+// every session the bus policy admits: a value every local account can read
+// authenticates nothing against a local account, the attacker in
+// docs/security-architecture.md §5.4. Nor the assertion's own fields — this
+// client holds no IdP signing key, AWS verifies the signature, the audience and
+// the conditions, and a Destination read out of the XML is attacker-controlled
+// input checked against itself.
+//
+// What is left is what this code does: own the port for exactly as long as the
+// flow, refuse loudly when it cannot (ErrACSPortBusy), and accept only a
+// bounded, well-formed SAML protocol Response, so a malformed POST from a local
+// process is rejected without ending the wait. An attacker who wins the bind
+// still sees the assertion, and one holding a valid assertion of their own can
+// post it here first; both are residual risk, not mitigated.
+//
+// Reference: saml-bindings-2.0-os §3.1.1 and §3.5.3, saml-profiles-2.0-os
+// §4.1.5 — RelayState is echoed only when the request carried it.
 func (s *ACSServer) handleACS(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "no-store")
 	w.Header().Set("Content-Security-Policy", "default-src 'none'; frame-ancestors 'none'")
@@ -294,10 +405,9 @@ func (s *ACSServer) handleACS(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "bad form", http.StatusBadRequest)
 		return
 	}
-	// r.FormValue URL-decodes the POST body, which converts base64 '+' characters
-	// (submitted as '%2B' or as raw '+' in application/x-www-form-urlencoded) into
-	// spaces. normalizeAndValidateResponse restores the base64 representation,
-	// rejects malformed input, and verifies a SAML protocol Response root.
+	// r.FormValue URL-decodes the POST body, turning base64 '+' characters
+	// (submitted as '%2B' or raw) into spaces. normalizeAndValidateResponse
+	// restores the base64, rejects malformed input, and requires a SAML Response.
 	tok, err := normalizeAndValidateResponse(r.FormValue("SAMLResponse"))
 	if err != nil {
 		http.Error(w, "invalid SAMLResponse", http.StatusBadRequest)

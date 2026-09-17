@@ -8,6 +8,12 @@ and releases follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- `saml.ACSServer.Close()`: releases the ACS listener on 127.0.0.1:35001 and
+  drops any connection still open on it. `NewACSServer` binds the port so the
+  caller learns it is unavailable before opening a browser, but a caller that
+  then abandoned the attempt before reaching `Wait` had no way to give the port
+  back, and it stayed bound for the life of the process. `Close` is idempotent
+  and may be called while a `Wait` is parked.
 - `diag.ClassServerBusy` and `diag.Error.RetryAfter`: a server that answers
   `PUSH_REQUEST` with `AUTH_FAILED,TEMP` has declined this attempt and asked us
   back, which is neither a credential rejection nor a protocol fault. It now has
@@ -99,6 +105,18 @@ and releases follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- Re-authenticating against an AWS endpoint no longer loses the ACS port to
+  itself. `saml.ACSServer.Wait` returned while a separate goroutine was still
+  closing the listener, so the next `NewACSServer` — AWS hardcodes the callback
+  to 127.0.0.1:35001, so there is no other port to take — could fail to bind and
+  silently leave the user pasting the assertion by hand. `Wait` now releases the
+  listener before it returns, on every path. In a loop that cancels and rebinds
+  immediately, this failed 28 times in 100 and is now clean in 300.
+- The browser gets the "Authentication successful" page. `Wait` tore the server
+  down the moment the token reached it, from inside the handler and before the
+  page had left the connection, so a user who had just authenticated could be
+  shown a connection error instead. Measured at roughly 1 round in 1000; clean
+  in 2000 now.
 - The compression framing bytes were inverted, and the client announced
   `0x69` — *this payload is LZ4-compressed* — over plaintext on every packet of
   a `compress lz4` session. `0x69` means compressed and `0xFA` means not; both
@@ -151,6 +169,15 @@ and releases follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   both goroutines and the hijacked `net.Conn` per dropped connection. And it
   demanded `token`, `agent_id` and `hostname` as URL query parameters, answering
   400 before the upgrade, while the agent sends them in its first text frame.
+
+### Security
+
+- A SAML assertion callback port this client cannot bind is now reported as
+  that condition — `saml.ErrACSPortBusy`, a `local` failure at the `auth`
+  stage — instead of as an unexplained listen error. AWS fixes the callback to
+  `127.0.0.1:35001` and the ACS server now runs in the system daemon, where the
+  port is not partitioned by user: whatever holds it receives the identity
+  provider's POST, which carries the assertion.
 
 ## [1.2.3] - 2026-08-19
 
