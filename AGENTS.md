@@ -86,7 +86,11 @@ openvpn3-core *dependency* anywhere in the shipping stack. Reading the openvpn3
 ## Goals (in priority order)
 
 1. **Correctness over completeness** — every packet exchange must be byte-exact
-   with what openvpn3-core expects. The mock server is the oracle.
+   with what a real OpenVPN peer expects. The arbiter is stock `openvpn` itself,
+   run against the same config in a throwaway container and compared cell by cell
+   (`testenv/oracle.go`); the one cell that generates work is "we fail, stock
+   openvpn connects". `testenv/mockserver` is not that arbiter — it is the AWS
+   Client VPN CRV1 regression gate and the fastest feedback in the tree.
 2. **Android via gomobile** — `gomobile bind` produces an `.aar` that drops into
    `openlawsvpn-android-go` with no NDK changes.
 3. **Linux static binary** — `CGO_ENABLED=0 go build` produces a binary with

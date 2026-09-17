@@ -5,6 +5,18 @@ Pure-Go mock OpenVPN3 server used by integration tests and as a **lightweight de
 Implements the full control-channel handshake: HARD_RESET → TLS → key-method-2 auth →
 PUSH_REQUEST → PUSH_REPLY. Supports both TCP and UDP. No openvpn3-core or C dependencies.
 
+It also carries a **data channel**. After PUSH_REPLY it derives the same 256-byte key
+block the client does — RFC 5705 exported keying material over the TLS session, which is
+what its own `key-derivation tls-ekm` asks for — and from then on pushes an OCC keepalive
+every 25 ms and decrypts what the client sends, logging `data_channel_ready`,
+`client_keepalive`, `data_recv` and `occ_exit`. An OCC exit message ends the session on
+the spot, as both reference servers do.
+
+The keepalives are why they exist: a mock that went quiet after PUSH_REPLY meant every
+test in the tree disconnected from a silent peer, and three teardown races survived a
+green suite and a green `-race` because of it. Lower the interval for a test that needs
+traffic *in flight* during a teardown; set it to `0` for the old silent behaviour.
+
 ## Modes
 
 ### Normal mode (default)
@@ -13,7 +25,7 @@ Accepts any client, completes the handshake, and sends a PUSH_REPLY with a dummy
 `10.8.0.x` network config. Used by unit and integration tests.
 
 ```bash
-go run ./mock/mockserver
+go run ./testenv/mockserver
 ```
 
 ### CRV1 / SAML mode (`MOCK_CRV1=1`)
@@ -26,7 +38,7 @@ Mimics AWS Client VPN behaviour:
   Server validates the token and sends PUSH_REPLY.
 
 ```bash
-MOCK_CRV1=1 go run ./mock/mockserver
+MOCK_CRV1=1 go run ./testenv/mockserver
 ```
 
 ## Environment variables
@@ -36,6 +48,7 @@ MOCK_CRV1=1 go run ./mock/mockserver
 | `MOCK_CRV1` | `""` | Set to `1` to enable CRV1/SAML mode |
 | `MOCK_TCP_PORT` | `4433` | TCP listen port |
 | `MOCK_UDP_PORT` | `1194` | UDP listen port |
+| `MOCK_KEEPALIVE_MS` | `25` | Data-channel keepalive interval once the tunnel is up, in milliseconds. `0` disables. A test knob, not the pushed `ping 10`: it exists to overlap a teardown that takes milliseconds |
 | `CERT_DIR` | `""` | Directory with `ca.crt`, `server.crt`, `server.key`. When empty, ephemeral in-memory certs are generated and the CA PEM is printed to stderr |
 | `IDP_URL` | `https://openlawsvpn.com/demo/login/` | Base URL for the CRV1 login page. `?state=<id>` is appended |
 | `DEMO_TOKEN` | canonical base64 SAML protocol `Response` | Fixed response the login page must POST to `127.0.0.1:35001`. Phase 2 rejects anything else |
@@ -82,13 +95,13 @@ MOCK_CRV1=1 \
 CERT_DIR=/etc/mock-vpn \
 MOCK_TCP_PORT=4433 \
 MOCK_UDP_PORT=1194 \
-go run ./mock/mockserver
+go run ./testenv/mockserver
 ```
 
 Or build a static binary and run as a systemd service:
 
 ```bash
-CGO_ENABLED=0 go build -o demo-vpn-server ./mock/mockserver
+CGO_ENABLED=0 go build -o demo-vpn-server ./testenv/mockserver
 ```
 
 3. **Point DNS** — add an A record: `demo.openlawsvpn.com → <EC2 public IP>`

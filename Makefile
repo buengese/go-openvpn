@@ -19,7 +19,7 @@ ifndef ANDROID_NDK_HOME
   endif
 endif
 
-.PHONY: test-privileged all aar aar-sha256 cli build-macos-cli relay-server run-local-relay check-platforms test lint clean \
+.PHONY: test-mock test-privileged all aar aar-sha256 cli build-macos-cli relay-server run-local-relay check-platforms test lint clean \
         build-bins test-integration-cli matrix-images matrix-clean prf-vectors \
         tls-wrap-vectors comp-vectors \
 
@@ -82,9 +82,9 @@ check-platforms:
 test:
 	go test -race ./...
 
-## Run integration tests (starts local mock server, no Docker needed)
-integration-test:
-	go test -v -tags=integration -timeout 120s .
+## Mock-server pass: the AWS CRV1 gate. No Docker. See docs/testing.md.
+test-mock:
+	go test -v -tags=mockserver -timeout 300s ./internal/ctls
 
 ## Privileged pass: needs root. See docs/testing.md.
 test-privileged:
@@ -144,7 +144,7 @@ matrix-clean:
 ## Build CLI + mock-server binaries into bin/
 build-bins:
 	mkdir -p bin
-	go build -o bin/mock-server ./mock/mockserver
+	go build -o bin/mock-server ./testenv/mockserver
 	CGO_ENABLED=0 go build -o bin/openlawsvpn-cli ./cmd/cli
 
 ## CLI binary integration test: starts mock server, connects CLI in daemon mode, asserts tunnel up.

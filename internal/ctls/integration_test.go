@@ -1,11 +1,11 @@
-//go:build integration
+//go:build mockserver
 
 // Integration test: TLS handshake against the live mock server.
 //
 // Run with:
 //
 //	MOCK_SERVER_BIN=/path/to/mock-server \
-//	  go test -v -tags=integration -timeout=60s ./internal/ctls/
+//	  go test -v -tags=mockserver -timeout=60s ./internal/ctls/
 //
 // If MOCK_SERVER_BIN is not set, the test is skipped.
 package ctls_test
@@ -58,8 +58,8 @@ func TestTLSHandshakeAgainstMockServer(t *testing.T) {
 	}
 	defer srv.Stop() //nolint:errcheck
 
-	t.Logf("mock server at %s events=%d", srv.TCPAddr, len(srv.Events))
-	for _, e := range srv.Events {
+	t.Logf("mock server at %s events=%d", srv.TCPAddr, len(srv.EventLog()))
+	for _, e := range srv.EventLog() {
 		t.Logf("  [%s] %s", e.Event, e.Detail)
 	}
 

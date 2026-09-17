@@ -51,7 +51,7 @@ trap cleanup EXIT
 if [[ ! -x "$MOCK_BIN" ]]; then
     echo "Building mock-server..."
     cd "$REPO_ROOT"
-    go build -o "$MOCK_BIN" ./mock/mockserver
+    go build -o "$MOCK_BIN" ./testenv/mockserver
 fi
 
 if [[ ! -x "$CLI_BIN" ]]; then

@@ -13,6 +13,9 @@
 //	                           (simulates AWS Client VPN full-tunnel mode)
 //	MOCK_TCP_PORT            — TCP listen port (default 4433)
 //	MOCK_UDP_PORT            — UDP listen port (default 1194)
+//	MOCK_KEEPALIVE_MS        — data-channel keepalive interval in milliseconds once the
+//	                           tunnel is up (default 25, "0" disables). This is a test
+//	                           knob and not the pushed ping value: see pushKeepalives.
 //	CERT_DIR                 — directory containing ca.crt server.crt server.key
 //	                           when unset, self-signed certs are generated in memory
 //	IDP_URL                  — base URL for the CRV1 login page (default: https://openlawsvpn.com/demo/login/)
@@ -21,6 +24,7 @@
 package main
 
 import (
+	"bytes"
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
@@ -38,7 +42,12 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
+
+	"github.com/openlawsvpn/go-openlawsvpn/internal/datachannel"
+	"github.com/openlawsvpn/go-openlawsvpn/internal/occ"
+	"github.com/openlawsvpn/go-openlawsvpn/internal/prf"
 )
 
 // event is a structured log line emitted to stdout.
@@ -291,6 +300,19 @@ type tcpFramer struct{ conn net.Conn }
 func (f *tcpFramer) ReadPacket() ([]byte, error) { return readTCP(f.conn) }
 func (f *tcpFramer) WritePacket(p []byte) error  { return writeTCP(f.conn, p) }
 
+// udpSessionIdle ends a UDP session that has heard nothing for this long.
+//
+// A datagram session has no close to observe, so without this a client that
+// vanishes leaves handleSession blocked on a channel nobody will ever write
+// to — and, since the data phase pushes keepalives, leaves a goroutine
+// writing packets at the keepalive rate to an address that is gone.
+//
+// It has to exceed the "ping 10" buildPushReply advertises, because a healthy
+// idle client sends nothing else: the only inbound traffic on a quiet tunnel
+// is its own keepalive every 10 seconds. A deliberate disconnect does not wait
+// for this — the OCC exit message ends the session immediately.
+const udpSessionIdle = 30 * time.Second
+
 // udpFramer delivers pre-read datagrams from a channel and sends via a callback.
 type udpFramer struct {
 	recvCh chan []byte
@@ -298,11 +320,17 @@ type udpFramer struct {
 }
 
 func (f *udpFramer) ReadPacket() ([]byte, error) {
-	pkt, ok := <-f.recvCh
-	if !ok {
+	idle := time.NewTimer(udpSessionIdle)
+	defer idle.Stop()
+	select {
+	case pkt, ok := <-f.recvCh:
+		if !ok {
+			return nil, io.EOF
+		}
+		return pkt, nil
+	case <-idle.C:
 		return nil, io.EOF
 	}
-	return pkt, nil
 }
 func (f *udpFramer) WritePacket(p []byte) error { return f.sendFn(p) }
 
@@ -368,9 +396,18 @@ func handleSession(f framer, remote string, tlsCfg *tls.Config, crv1 bool) {
 		writeMu.Unlock()
 	}
 
-	// rawConn → TLS: strip P_CONTROL_V1 framing, feed TLS bytes.
+	// The data channel does not exist until the keys are derived, which
+	// happens after PUSH_REPLY — but the read relay that has to decrypt
+	// inbound data packets starts before the TLS handshake. The pointer is
+	// what crosses that gap, and it is atomic because the two goroutines are
+	// different ones.
+	dp := &dataPhase{write: writePacket}
+
+	// rawConn → TLS: strip P_CONTROL_V1 framing, feed TLS bytes, and decrypt
+	// inbound data packets once the data phase has installed a channel.
 	go func() {
 		defer tlsPipe1.Close()
+		var sawData, sawClientKeepalive, badData bool
 		for {
 			data, err := f.ReadPacket()
 			if err != nil {
@@ -399,6 +436,49 @@ func handleSession(f framer, remote string, tlsCfg *tls.Config, crv1 bool) {
 				}
 			case opcodeAckV1:
 				// client ACKing our outbound packets — nothing to do
+			case opcodeDataV1:
+				// Logged once per kind rather than per packet: a client
+				// keepalive every few seconds is fine, but this stream also
+				// carries whatever the test pushes through the tunnel, and an
+				// event per packet would drown the log the assertions read.
+				ch := dp.channel()
+				if ch == nil {
+					continue
+				}
+				plain, err := ch.Decrypt(data)
+				if err != nil {
+					if !badData {
+						badData = true
+						logEvent("data_decrypt_error", err.Error())
+					}
+					continue
+				}
+				switch {
+				case bytes.Equal(plain, occ.ExitMessage()):
+					// The client said goodbye on the data channel — the only
+					// evidence a server has that a disconnect was deliberate
+					// rather than a dead socket.
+					//
+					// Returning here ends the session on the spot, which is
+					// what both reference servers do (2.4.12 occ.c line 421
+					// raises SIGTERM, 2.6.22 line 430 raises SIGUSR1) and
+					// what closes the TLS pipe, unblocks serve's drain and
+					// stops the keepalives. On TCP the socket close would
+					// have done it anyway; on UDP nothing else would, because
+					// a datagram session has no close to observe.
+					logEvent("occ_exit", "remote="+remote)
+					return
+				case occ.IsKeepalive(plain):
+					if !sawClientKeepalive {
+						sawClientKeepalive = true
+						logEvent("client_keepalive", "remote="+remote)
+					}
+				default:
+					if !sawData {
+						sawData = true
+						logEvent("data_recv", fmt.Sprintf("remote=%s len=%d", remote, len(plain)))
+					}
+				}
 			}
 		}
 	}()
@@ -475,7 +555,7 @@ func handleSession(f framer, remote string, tlsCfg *tls.Config, crv1 bool) {
 		if strings.HasPrefix(authInfo.password, "CRV1::") {
 			// This is a Phase 2 connection — validate stateID and send PUSH_REPLY.
 			// The stateID is embedded in the password: CRV1::<stateID>::<token>
-			handleCRV1Phase2(tlsConn, authInfo, remote)
+			handleCRV1Phase2(tlsConn, authInfo, remote, dp)
 			return
 		}
 		// Phase 1 — send CRV1 challenge.
@@ -504,14 +584,13 @@ func handleSession(f framer, remote string, tlsCfg *tls.Config, crv1 bool) {
 		return
 	}
 	logEvent("push_reply", "sent to "+remote)
-	io.Copy(io.Discard, tlsConn) //nolint:errcheck
-	logEvent("disconnect", remote)
+	dp.serve(tlsConn, remote)
 }
 
 // handleCRV1Phase2 handles a Phase 2 connection in CRV1 mode.
 // The client has already sent its auth packet with password="CRV1::<stateID>::<token>".
 // We just validate the format and send PUSH_REPLY.
-func handleCRV1Phase2(tlsConn *tls.Conn, authInfo clientAuthInfo, remote string) {
+func handleCRV1Phase2(tlsConn *tls.Conn, authInfo clientAuthInfo, remote string, dp *dataPhase) {
 	password := authInfo.password
 	const crv1Prefix = "CRV1::"
 	if !strings.HasPrefix(password, crv1Prefix) {
@@ -546,15 +625,154 @@ func handleCRV1Phase2(tlsConn *tls.Conn, authInfo clientAuthInfo, remote string)
 		return
 	}
 	logEvent("push_reply", "sent after crv1 phase2 to "+remote)
+	dp.serve(tlsConn, remote)
+}
+
+// ---- Data phase --------------------------------------------------------------
+
+// dataPhase carries what a session needs once the tunnel is up: this server's
+// own data channel, installed where the read relay can find it, and the
+// serialised writer that puts packets on the wire.
+//
+// The two paths that reach a PUSH_REPLY — the stock one and the CRV1 second
+// exchange — share this tail, so both flows get the same data-channel
+// behaviour instead of one of them growing it and the other being forgotten.
+type dataPhase struct {
+	write func([]byte)
+	ch    atomic.Pointer[datachannel.Channel]
+}
+
+// channel returns the installed data channel, or nil before the keys exist.
+func (dp *dataPhase) channel() *datachannel.Channel { return dp.ch.Load() }
+
+// serve runs the session from PUSH_REPLY to disconnect: derive the channel,
+// start pushing keepalives, then drain the control channel until the peer goes
+// away, which is what ends the session and stops the keepalives.
+func (dp *dataPhase) serve(tlsConn *tls.Conn, remote string) {
+	ch, err := serverDataChannel(tlsConn)
+	if err != nil {
+		// Not fatal. A handshake that completed is still a completed
+		// handshake, and every assertion this server carried before it could
+		// derive keys is about stages rather than traffic.
+		logEvent("data_channel_error", err.Error())
+	} else {
+		dp.ch.Store(ch)
+		logEvent("data_channel_ready", "remote="+remote)
+		done := make(chan struct{})
+		defer close(done)
+		go pushKeepalives(ch, dp.write, done)
+	}
 	io.Copy(io.Discard, tlsConn) //nolint:errcheck
 	logEvent("disconnect", remote)
 }
 
+// serverDataChannel builds the data channel for this server's direction.
+//
+// The key block is RFC 5705 exported keying material over the TLS session,
+// which is what buildPushReply's "key-derivation tls-ekm" tells the client to
+// use: each end exports the same 256 bytes from its own TLS stack and none of
+// the key material crosses the wire.
+//
+// prf.Split names its four slots from the *client's* point of view —
+// CipherEncrypt is what the client transmits with. A server sharing the same
+// block transmits with the client's receive pair and receives with its
+// transmit pair, so the two are swapped here, once, in a named function. A
+// channel built without the swap negotiates cleanly and then discards every
+// packet in silence, which is the failure this comment exists to prevent.
+//
+// The wire format is P_DATA_V1 because buildPushReply pushes no peer-id, and
+// the client's pushedWireFormat maps a push without one onto V1.
+func serverDataChannel(tlsConn *tls.Conn) (*datachannel.Channel, error) {
+	cs := tlsConn.ConnectionState()
+	keyMat, err := cs.ExportKeyingMaterial(prf.ExporterLabel, nil, prf.DataKeyBlockLen)
+	if err != nil {
+		return nil, fmt.Errorf("export keying material: %w", err)
+	}
+	slots, err := prf.Split(keyMat)
+	if err != nil {
+		return nil, fmt.Errorf("split key block: %w", err)
+	}
+	params, _, err := datachannel.ResolveParams(mockCipher, "")
+	if err != nil {
+		return nil, fmt.Errorf("resolve %s: %w", mockCipher, err)
+	}
+	n := params.Spec.KeyLen
+	return datachannel.New(datachannel.WireDataV1, 0, 0,
+		slots.CipherDecrypt[:n], slots.HMACDecrypt,
+		slots.CipherEncrypt[:n], slots.HMACEncrypt)
+}
+
+// pushKeepalives sends an OCC keepalive on the data channel until the session
+// ends.
+//
+// The interval is a test knob rather than the "ping 10" buildPushReply
+// advertises, and it defaults to 25 ms — four hundred times faster than a real
+// server would. That is the point: this exists to put traffic on the data path
+// *while* a teardown is running, and a teardown takes milliseconds. A peer that
+// goes quiet after PUSH_REPLY lets teardown races pass both a green suite and a
+// green -race.
+//
+// Keepalives specifically, rather than synthetic IP packets: the client drops
+// them in wireToTun before markDataFlow, so they exercise the receive path,
+// the channel and the replay window without making StageData claim that user
+// traffic crossed when none did.
+func pushKeepalives(ch *datachannel.Channel, write func([]byte), done <-chan struct{}) {
+	interval := keepaliveInterval()
+	if interval <= 0 {
+		return
+	}
+	t := time.NewTicker(interval)
+	defer t.Stop()
+	for {
+		select {
+		case <-done:
+			return
+		case <-t.C:
+			// The first tick is one interval in rather than at zero, which is
+			// also what keeps the first packet from arriving before the client
+			// has finished installing its own channel and counting it as a
+			// decrypt failure.
+			pkt, err := ch.Encrypt(occ.KeepaliveMagic)
+			if err != nil {
+				logEvent("keepalive_error", err.Error())
+				return
+			}
+			write(pkt)
+		}
+	}
+}
+
+// keepaliveInterval reads MOCK_KEEPALIVE_MS. Unset means the default; an
+// explicit "0" switches keepalives off, which is how a test asks for a peer
+// that stays silent after PUSH_REPLY.
+func keepaliveInterval() time.Duration {
+	ms := 25
+	if v := os.Getenv("MOCK_KEEPALIVE_MS"); v != "" {
+		n, err := strconv.Atoi(v)
+		if err != nil {
+			logEvent("error", "MOCK_KEEPALIVE_MS: "+err.Error())
+		} else {
+			ms = n
+		}
+	}
+	if ms <= 0 {
+		return 0
+	}
+	return time.Duration(ms) * time.Millisecond
+}
+
 // ---- Auth packet helpers -----------------------------------------------------
+
+// mockCipher is the data-channel cipher this server negotiates. It appears in
+// three places that have to agree — the auth-packet options string, the
+// PUSH_REPLY, and the channel serverDataChannel builds — so it is named once.
+// A disagreement between any two of them produces a tunnel that comes up and
+// then discards every data packet in silence.
+const mockCipher = "AES-256-GCM"
 
 // serverAuthOptions is the options string the server sends in its auth packet.
 // Must be a valid V4 options string; the client validates that it starts with "V4".
-const serverAuthOptions = "V4,dev-type tun,link-mtu 1521,tun-mtu 1500,proto UDPv4,cipher AES-256-GCM,auth [null-digest],keysize 256,key-method 2,tls-server"
+const serverAuthOptions = "V4,dev-type tun,link-mtu 1521,tun-mtu 1500,proto UDPv4,cipher " + mockCipher + ",auth [null-digest],keysize 256,key-method 2,tls-server"
 
 // buildServerAuthPacket constructs the server side of the key-method-2 handshake.
 //
@@ -781,10 +999,15 @@ func authStr(s string) []byte {
 }
 
 // authStr16 encodes s as a uint16_be-length-prefixed NUL-terminated string.
-// Empty string: uint16_be(1) + NUL — matches stock OpenVPN CE encoding.
+//
+// An empty string is a bare uint16_be(0) with no bytes at all, which is what
+// stock sends: openvpn-2.6.22 src/openvpn/ssl.c write_empty_string().
+// uint16_be(1)+NUL says "present, and empty", a different statement from
+// "absent" and one a peer is entitled to treat differently, so this is the
+// shape the client's consume side must be driven with.
 func authStr16(s string) []byte {
 	if s == "" {
-		return []byte{0x00, 0x01, 0x00}
+		return []byte{0x00, 0x00}
 	}
 	l := uint16(len(s) + 1)
 	b := []byte{byte(l >> 8), byte(l)}
@@ -798,7 +1021,7 @@ func authStr16(s string) []byte {
 // to simulate AWS Client VPN full-tunnel mode (all traffic via the VPN).
 func buildPushReply() string {
 	base := "PUSH_REPLY,ifconfig 10.8.0.6 10.8.0.5,route 10.8.0.0 255.255.0.0," +
-		"dhcp-option DNS 10.8.0.1,cipher AES-256-GCM," +
+		"dhcp-option DNS 10.8.0.1,cipher " + mockCipher + "," +
 		"ping 10,ping-restart 60," +
 		"key-derivation tls-ekm"
 	if os.Getenv("MOCK_REDIRECT_GATEWAY") == "1" {
@@ -842,6 +1065,7 @@ const (
 	opcodeHardResetServerV2 = 0x08
 	opcodeControlV1         = 0x04
 	opcodeAckV1             = 0x05
+	opcodeDataV1            = 0x06
 )
 
 // buildHardResetServer constructs a P_CONTROL_HARD_RESET_SERVER_V2 packet

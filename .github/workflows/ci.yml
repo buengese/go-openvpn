@@ -30,6 +30,11 @@ jobs:
       - name: Vet
         run: go vet ./...
 
+      # No Docker and no root: the AWS Client VPN CRV1 regression gate and the
+      # fastest end-to-end feedback in the tree.
+      - name: Mock-server pass
+        run: make test-mock
+
   cli-integration:
     strategy:
       matrix:
@@ -50,7 +55,7 @@ jobs:
       - name: Build binaries
         run: |
           mkdir -p bin
-          go build -o bin/mock-server ./mock/mockserver
+          go build -o bin/mock-server ./testenv/mockserver
           CGO_ENABLED=0 go build -o bin/openlawsvpn-cli ./cmd/cli
 
       - name: Run CLI integration test
