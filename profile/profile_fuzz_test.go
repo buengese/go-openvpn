@@ -1,6 +1,7 @@
 package profile_test
 
 import (
+	"encoding/hex"
 	"strings"
 	"testing"
 
@@ -33,9 +34,85 @@ func FuzzParseString(f *testing.F) {
 	f.Add("remote vpn.example.com 443\nproto tcp-client\n<ca>\n-----BEGIN CERTIFICATE-----\nMIIB\n")
 	// Seed: nested-looking tags.
 	f.Add("remote vpn.example.com 443\nproto tcp-client\n<ca>\n<cert>\n-----END CERTIFICATE-----\n</ca>\n")
+	// Seed: a well-formed wrap key in the shape a real config ships.
+	f.Add(wrappedProfile("tls-auth", testKeyFill, "key-direction 1\n"))
+	// Seed: a wrap key one digit short — the parse now fails rather than
+	// dropping the block, so the failure path needs seeding too.
+	f.Add("remote vpn.example.com 1194\n<tls-crypt>\n" +
+		staticKeyHex(testKeyFill)[:511] + "\n</tls-crypt>\n")
 
 	f.Fuzz(func(t *testing.T, s string) {
 		_, _ = profile.ParseString(s)
+	})
+}
+
+// hexRun is the longest run of consecutive hexadecimal digits in s.
+func hexRun(s string) int {
+	longest, run := 0, 0
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		if (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F') {
+			run++
+			if run > longest {
+				longest = run
+			}
+			continue
+		}
+		run = 0
+	}
+	return longest
+}
+
+// maxErrorHexRun bounds how many consecutive hex digits a static-key error
+// message may contain. Sixteen is eight bytes of key: more than enough to make
+// a leak visible, far more than a line number or a count could reach.
+const maxErrorHexRun = 16
+
+// FuzzParseStaticKey feeds random bytes to ParseStaticKey, whose input, unlike
+// the rest of the parser's, is key material. Two invariants: a success is
+// exactly 256 bytes and decodes back to the digits it was built from, and a
+// failure names what is wrong without echoing any of it — the leading half of a
+// truncated tls-auth key is the whole of the send HMAC key.
+func FuzzParseStaticKey(f *testing.F) {
+	f.Add([]byte(staticKeyBlock(testKeyFill)))
+	f.Add([]byte(staticKeyHex(testKeyFill)))
+	f.Add([]byte(strings.ToUpper(staticKeyHex(testKeyFill))))
+	f.Add([]byte("#\n# 2048 bit OpenVPN static key\n#\n" + staticKeyBlock(testKeyFill)))
+	f.Add([]byte(staticKeyHex(testKeyFill)[:511]))
+	f.Add([]byte(staticKeyHex(testKeyFill) + "00"))
+	f.Add([]byte("-----BEGIN OpenVPN Static key V1-----\n"))
+	f.Add([]byte(""))
+	f.Add([]byte("zz"))
+	f.Add([]byte("\r\n\t \n;x\n#y\n"))
+
+	f.Fuzz(func(t *testing.T, body []byte) {
+		key, err := profile.ParseStaticKey(body)
+		if err != nil {
+			if key != nil {
+				t.Fatal("a key came back alongside an error")
+			}
+			if n := hexRun(err.Error()); n > maxErrorHexRun {
+				t.Fatalf("error message carries a run of %d hex digits, "+
+					"which is key material: %q", n, err.Error())
+			}
+			return
+		}
+		if key == nil {
+			t.Fatal("no key and no error")
+		}
+		if len(key) != profile.StaticKeySize {
+			t.Fatalf("key is %d bytes, want %d", len(key), profile.StaticKeySize)
+		}
+		// Round-trip: the canonical rendering of what we parsed must parse
+		// back to the same bytes. A parser that dropped or duplicated digits
+		// would still return 256 bytes, and this is what notices.
+		again, err := profile.ParseStaticKey([]byte(hex.EncodeToString(key[:])))
+		if err != nil {
+			t.Fatalf("re-parsing a parsed key failed: %v", err)
+		}
+		if *again != *key {
+			t.Fatal("re-parsing a parsed key produced different bytes")
+		}
 	})
 }
 
@@ -75,6 +152,12 @@ func blockBodyLines(s string) map[int]bool {
 // block ever becomes a directive.
 func FuzzParseRecording(f *testing.F) {
 	f.Add("remote vpn.example.com 443\nproto tcp-client\nfast-io\nsndbuf 524288\n")
+	f.Add(wrappedProfile("tls-auth", testKeyFill, "key-direction 1\n"))
+	f.Add("remote vpn.example.com 1194\n<tls-crypt>\n" + staticKeyBlock(testKeyFill) +
+		"</tls-crypt>\n<ca>\nMIIB\n</ca>\n")
+	// A wrap block whose body is not a key: the parse fails, so this seed
+	// exercises the error path rather than the recording invariants.
+	f.Add("remote vpn.example.com 1194\nkey-direction 1\n<tls-auth>\ndeadbeef\n</tls-auth>\n")
 	// Unclosed non-standard block: must not resurface as directives.
 	f.Add("remote vpn.example.com 1194\n<tls-auth>\nAAAA\nBBBB\n")
 	// Stray and malformed tags.
@@ -133,6 +216,30 @@ func FuzzParseRecording(f *testing.F) {
 				t.Fatalf("block opener %q recorded inside another block at line %d", b.Tag, b.Line)
 			}
 			tags[strings.ToLower(b.Tag)] = true
+		}
+
+		// A loaded wrap key must have come from a recorded block. The two
+		// records are built in different places, and the capability preflight
+		// would understate a profile whose key arrived some other way.
+		if p.TLSAuth != nil && !tags["tls-auth"] {
+			t.Fatal("a tls-auth key was loaded with no <tls-auth> block recorded")
+		}
+		if p.TLSCrypt != nil && !tags["tls-crypt"] {
+			t.Fatal("a tls-crypt key was loaded with no <tls-crypt> block recorded")
+		}
+		// An absent key-direction is its own value, so a profile that
+		// recorded no key-direction directive must not report one.
+		if _, given := p.KeyDirection.Value(); given {
+			found := false
+			for _, d := range p.Directives {
+				if d.Name == "key-direction" {
+					found = true
+					break
+				}
+			}
+			if !found {
+				t.Fatalf("KeyDirection = %v with no key-direction directive", p.KeyDirection)
+			}
 		}
 	})
 }

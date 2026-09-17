@@ -1,13 +1,17 @@
 // Package profile parses OpenVPN .ovpn configuration files.
 //
 // It handles the directives that go-openlawsvpn needs: remote, port, proto,
-// inline PEM blocks (<ca>, <cert>, <key>), cipher, auth and rekey timing.
+// inline PEM blocks (<ca>, <cert>, <key>), the static-key blocks <tls-auth>
+// and <tls-crypt>, cipher, auth and rekey timing.
 //
 // Inline <tag>...</tag> blocks are recognised generically, so a block the
 // client has no field for is consumed as a block rather than having its body
 // parsed as directives. Every directive line is recorded on
 // Profile.Directives, and every block tag on Profile.InlineBlocks, for the
 // capability preflight in the caps package.
+//
+// <tls-auth> and <tls-crypt> bodies are secrets rather than public material:
+// see StaticKey for how they are kept out of logs, errors and reports.
 package profile
 
 import (
@@ -142,6 +146,23 @@ type Profile struct {
 	// Key is the PEM-encoded client private key, from a <key> block.
 	Key []byte
 
+	// TLSAuth is the static key from the profile's <tls-auth> block, or nil
+	// when the profile carries none. It authenticates every control packet,
+	// the opening HARD_RESET included.
+	TLSAuth *StaticKey
+	// TLSCrypt is the static key from the profile's <tls-crypt> block, or
+	// nil when the profile carries none. It encrypts as well as
+	// authenticates the control channel.
+	//
+	// A profile carrying both blocks is contradictory — the two wraps are
+	// alternatives, not layers — and the parser loads both rather than
+	// choosing between them. Refusing the combination is the wrapper's
+	// decision, made from the whole profile.
+	TLSCrypt *StaticKey
+	// KeyDirection is the --key-direction value: 0, 1, or absent. Absent is
+	// a behaviour of its own and not a default of 0 — see KeyDirection.
+	KeyDirection KeyDirection
+
 	// Cipher is the negotiated data-channel cipher name, e.g. "AES-256-GCM".
 	Cipher string
 	// Auth is the HMAC digest, e.g. "SHA256" (unused for GCM). A profile
@@ -232,11 +253,12 @@ type Profile struct {
 
 	// InlineBlocks records the inline <tag>...</tag> blocks the profile
 	// contained, in file order — tag names and line numbers only, never the
-	// bodies. The parser loads the bodies of <ca>, <cert> and <key>; any
-	// other tag, <tls-auth> among them, is recognised as a block so that its
-	// contents are not mistaken for directives, but is otherwise unused. This
-	// list is the input to the capability preflight, so it describes what the
-	// file said whether or not the client has anywhere to put it.
+	// bodies. The parser loads the bodies of <ca>, <cert>, <key>,
+	// <tls-auth> and <tls-crypt>; any other tag, <tls-crypt-v2> among them,
+	// is recognised as a block so that its contents are not mistaken for
+	// directives, but is otherwise unused. This list is the input to the
+	// capability preflight, so it describes what the file said whether or not
+	// the client has anywhere to put it.
 	InlineBlocks []InlineBlock
 }
 

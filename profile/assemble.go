@@ -15,6 +15,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/openlawsvpn/go-openlawsvpn/diag"
 	"github.com/openlawsvpn/go-openlawsvpn/dns"
 	"github.com/openlawsvpn/go-openlawsvpn/internal/crypto"
 )
@@ -57,8 +58,8 @@ func (a *assembler) openBlock(tag string, line int) {
 }
 
 // closeBlock takes the body of a completed inline block. The bodies of <ca>,
-// <cert> and <key> are kept; every other tag is dropped, so its contents are
-// never read as directives.
+// <cert>, <key>, <tls-auth> and <tls-crypt> are kept; every other tag is
+// dropped, so its contents are never read as directives.
 //
 // The tag is folded here, as it is by hasInlineBlock and by the capability
 // registry. Comparing it verbatim leaves <CA> marking a "ca ca.crt" reference
@@ -76,6 +77,22 @@ func (a *assembler) closeBlock(tag string, body []byte) error {
 		p.Cert = append([]byte{}, body...)
 	case "key":
 		p.Key = append([]byte{}, body...)
+	case "tls-auth", "tls-crypt":
+		key, err := ParseStaticKey(body)
+		if err != nil {
+			// A profile whose wrap key is unusable is unusable as
+			// written, which is what ClassConfig means, and the
+			// wrap is the first thing on the wire. The cause says
+			// what is wrong with the key without quoting any of
+			// it.
+			return diag.Wrap(diag.ClassConfig, diag.StageParse, err,
+				"<"+tag+"> is not a usable OpenVPN static key")
+		}
+		if tag == "tls-auth" {
+			p.TLSAuth = key
+		} else {
+			p.TLSCrypt = key
+		}
 	}
 	return nil
 }
@@ -228,6 +245,18 @@ func (a *assembler) directive(d Directive) error {
 				}
 			}
 		}
+	case "key-direction":
+		// Not a default: an omitted key-direction leaves p.KeyDirection at
+		// KeyDirectionAbsent, which means "use the whole key in both
+		// directions" and is a third behaviour, not a synonym for 0.
+		if len(fields) < 2 {
+			return fmt.Errorf("profile: key-direction: missing value")
+		}
+		dir, err := ParseKeyDirection(fields[1])
+		if err != nil {
+			return fmt.Errorf("profile: key-direction: invalid %q", fields[1])
+		}
+		p.KeyDirection = dir
 	case "remote-random":
 		// The order of the remote list, not a property of any remote.
 		// The shuffle itself is the dialer's; see Profile.RemoteRandom.

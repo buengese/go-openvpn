@@ -357,6 +357,25 @@ func TestAuthFederateForcesSAMLFlow(t *testing.T) {
 	}
 }
 
+// tlsAuthProfile exercises the generic inline-block path. The body is a full
+// 256-byte key, which the parser loads; a shorter one is a diag.ClassConfig
+// parse failure rather than something silently ignored. The block opens on
+// line 7, which TestParseRecordsInlineBlocksNotTheirBodies pins.
+var tlsAuthProfile = `client
+dev tun
+proto udp
+remote vpn.example.com 1194
+cipher AES-256-CBC
+key-direction 1
+<tls-auth>
+` + staticKeyBlock(testKeyFill) + `</tls-auth>
+<ca>
+-----BEGIN CERTIFICATE-----
+MIIB...
+-----END CERTIFICATE-----
+</ca>
+`
+
 func TestParseRecordsDirectives(t *testing.T) {
 	p, err := profile.ParseString(minimal)
 	if err != nil {
@@ -399,6 +418,45 @@ func TestParseRecordsUnrecognisedDirectives(t *testing.T) {
 	}
 }
 
+// TestParseRecordsInlineBlocksNotTheirBodies is the whole of the inline-block
+// contract on one profile: each opening tag is recorded, in order and with its
+// line, and no body line reaches the directive list or the wrong field.
+func TestParseRecordsInlineBlocksNotTheirBodies(t *testing.T) {
+	p, err := profile.ParseString(tlsAuthProfile)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var names []string
+	for _, d := range p.Directives {
+		if strings.HasPrefix(d.Name, "-----") || len(d.Name) == 32 {
+			t.Errorf("inline block body parsed as directive: %q at line %d", d.Name, d.Line)
+		}
+		names = append(names, d.Name)
+	}
+	want := "client dev proto remote cipher key-direction"
+	if got := strings.Join(names, " "); got != want {
+		t.Errorf("directives = %q, want %q", got, want)
+	}
+
+	if len(p.InlineBlocks) != 2 {
+		t.Fatalf("InlineBlocks = %v, want 2 entries", p.InlineBlocks)
+	}
+	if p.InlineBlocks[0].Tag != "tls-auth" || p.InlineBlocks[1].Tag != "ca" {
+		t.Errorf("InlineBlocks = %v, want tls-auth then ca", p.InlineBlocks)
+	}
+	if p.InlineBlocks[0].Line != 7 {
+		t.Errorf("tls-auth block line = %d, want 7", p.InlineBlocks[0].Line)
+	}
+	// The key block's body must not be stored anywhere but the key field.
+	if len(p.CA) == 0 {
+		t.Error("CA not loaded")
+	}
+	if strings.Contains(string(p.CA), "OpenVPN Static key") {
+		t.Error("tls-auth body leaked into CA")
+	}
+}
+
 func TestParseInlineBlocksStillLoadCertAndKey(t *testing.T) {
 	p, err := profile.ParseString(minimal)
 	if err != nil {
@@ -416,10 +474,10 @@ func TestParseInlineBlocksStillLoadCertAndKey(t *testing.T) {
 	}
 }
 
-// TestParseInlineBlockTagsAreCaseInsensitive pins the tag spelling for the
-// three blocks whose bodies are loaded. openBlock records the tag whatever its
-// case and the capability registry folds it, so closeBlock has to fold too, or
-// <CA> is recorded as present with CA left empty.
+// TestParseInlineBlockTagsAreCaseInsensitive pins the tag spelling for the five
+// blocks whose bodies are loaded. openBlock records the tag whatever its case
+// and hasInlineBlock and caps both fold, so closeBlock has to fold too, or
+// <TLS-AUTH> is recorded as present with TLSAuth left nil.
 //
 // The tolerant reading is the one this package already takes for directive
 // names. It is more tolerant than the reference: openvpn3-core keys its option
@@ -446,6 +504,29 @@ func TestParseInlineBlockTagsAreCaseInsensitive(t *testing.T) {
 			}
 			if len(p.InlineBlocks) != 1 || p.InlineBlocks[0].Tag != tc.tag {
 				t.Errorf("InlineBlocks = %v, want the tag as the file spelled it", p.InlineBlocks)
+			}
+		})
+	}
+
+	// The wrap keys take a separate path through ParseStaticKey. The test is
+	// against nil and not against a length: both fields are *StaticKey, a
+	// pointer to an array, so len() answers 256 without dereferencing and a
+	// length assertion would pass on a nil key.
+	for _, tc := range []struct {
+		tag  string
+		want func(*profile.Profile) *profile.StaticKey
+	}{
+		{"TLS-AUTH", func(p *profile.Profile) *profile.StaticKey { return p.TLSAuth }},
+		{"Tls-Crypt", func(p *profile.Profile) *profile.StaticKey { return p.TLSCrypt }},
+	} {
+		t.Run(tc.tag, func(t *testing.T) {
+			p, err := profile.ParseString("remote vpn.example.com 443\n" +
+				"<" + tc.tag + ">\n" + staticKeyBlock(testKeyFill) + "</" + tc.tag + ">\n")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if tc.want(p) == nil {
+				t.Errorf("<%s> was recorded as present but its key was loaded nowhere", tc.tag)
 			}
 		})
 	}

@@ -29,6 +29,11 @@ and releases follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - A control-channel replay window, separate from the reliable layer's own
   sequence numbers. Replayed and stale-timestamped control packets are rejected
   and counted in `diag.Counters` rather than dropped silently.
+- `Profile.TLSAuth`, `Profile.TLSCrypt` and `Profile.KeyDirection`: the inline
+  `<tls-auth>` and `<tls-crypt>` bodies are now parsed as 2048-bit static keys.
+  An absent `key-direction` is a distinct value from 0, because OpenVPN treats
+  it as a third behaviour rather than a default. The key material is redacted
+  from every rendering of a profile by construction.
 - `Profile.Remotes`: every `remote` line is now retained, in file order, as a
   host, a port and an optional per-remote protocol. `Profile.Remote`, `Port`
   and `Proto` remain and are the first entry.
