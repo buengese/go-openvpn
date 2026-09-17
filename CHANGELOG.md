@@ -55,6 +55,9 @@ and releases follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Data-channel keys for AES-CBC were taken from the wrong halves of the key
   block, transposing the transmit and receive HMAC keys. The mapping now exists
   in one place and both cipher modes read it.
+- The server's key-method-2 packet is now read field by field instead of being
+  drained into a fixed buffer, so a truncated packet is reported as a protocol
+  error rather than parsed from whatever had arrived.
 
 ## [1.2.3] - 2026-08-19
 

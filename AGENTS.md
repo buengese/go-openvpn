@@ -173,7 +173,8 @@ it is what this section used to describe.
 The TLS session contributes nothing to the classic derivation. Each peer sends a
 `key_source2` structure *through* the control channel — the client's carries a
 48-byte pre-master and two 32-byte randoms, the server's the two randoms alone
-— and both sides run two stages over the union:
+(`internal/keymethod2/authpacket.go`) — and both sides run two stages over the
+union:
 
 ```
 master    = TLS1PRF(client.PreMaster, "OpenVPN master secret",
