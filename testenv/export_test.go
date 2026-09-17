@@ -4,6 +4,13 @@ package testenv
 // API means the version-banner parsing can be tested against captured logs
 // without committing it as a supported surface.
 
+// OpenVPNBannerForTest exposes openvpnBanner to the external test package.
+var OpenVPNBannerForTest = openvpnBanner
+
+// ReleaseFromBannerForTest exposes releaseFromBanner to the external test
+// package.
+var ReleaseFromBannerForTest = releaseFromBanner
+
 // AuthVerifyScriptForTest exposes authVerifyScript to the external test package,
 // so the server-side hook can be checked against the same constants the
 // client-side credentials file is built from. It is not a supported surface.

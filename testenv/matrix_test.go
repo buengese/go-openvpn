@@ -872,6 +872,43 @@ func TestForcedLZOIsOnAVersionThatCompresses(t *testing.T) {
 	}
 }
 
+// TestReferenceRejectsNamesARealRule guards the third marker on MatrixEntry,
+// the one that can go wrong quietly: Unimplemented and ClientUnsupported cause
+// a skip, while ReferenceRejects causes an assertion, so a value naming a rule
+// that does not exist asserts something no log can ever satisfy.
+func TestReferenceRejectsNamesARealRule(t *testing.T) {
+	known := map[string]bool{}
+	for _, name := range testenv.OracleRuleNames() {
+		known[name] = true
+	}
+	if !known["cert-verify-failed"] {
+		t.Fatal("OracleRuleNames does not include cert-verify-failed; the rule set moved")
+	}
+
+	rejecting := 0
+	for _, e := range testenv.Matrix() {
+		if e.ReferenceRejects == "" {
+			continue
+		}
+		rejecting++
+		if !known[e.ReferenceRejects] {
+			t.Errorf("%s: ReferenceRejects = %q, which is not a rule "+
+				"ClassifyReferenceLog can ever report", e.Name, e.ReferenceRejects)
+		}
+		if e.ReferenceRejects == "connected" {
+			t.Errorf("%s: an entry cannot be expected to be refused by connecting", e.Name)
+		}
+		if e.Unimplemented != "" {
+			t.Errorf("%s is both Unimplemented and ReferenceRejects; StartMatrix refuses "+
+				"the entry, so nothing can ever check the refusal", e.Name)
+		}
+	}
+	if rejecting == 0 {
+		t.Error("no entry expects to be refused; the verify-x509-name mismatch isolate " +
+			"is the reason this marker exists and it has gone")
+	}
+}
+
 // TestNSCertTypeEntryGetsTheExtension checks the one place an axis reaches into
 // the PKI. A server certificate issued without the extension fails the check, so
 // the entry would be green only in the sense that the client refused. The
