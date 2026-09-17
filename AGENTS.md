@@ -3,13 +3,37 @@
 ## What this repo is
 
 A pure Go implementation of the OpenVPN3 client protocol — the same protocol
-used by openvpn3-core (C++). It is a clean-room Go implementation based on the
-OpenVPN protocol specification, with openvpn3-core source consulted only as a
-historical reference. `go build` / `gomobile bind` produce a fully static binary
-and an Android `.aar` with no C toolchain.
+used by openvpn3-core (C++). `go build` / `gomobile bind` produce a fully static
+binary and an Android `.aar` with no C toolchain.
+
+**This is not a clean-room implementation, and must not be treated as one.**
+[`docs/openvpn3-reference-policy.md`](docs/openvpn3-reference-policy.md) governs
+all protocol work here: we consult the openvpn3 source as the authoritative
+description of the OpenVPN wire protocol, taken under the MPL-2.0 branch of its
+dual license. Transliterating an openvpn3 function is permitted (§3.2) as a
+derivative work carrying attribution, and a provenance citation is **required**
+(§3.3) on anything learned from openvpn3:
+
+```go
+// Reference: openvpn3-core ssl/proto.hpp KeyContext::init_data_channel() line ~2297
+```
+
+`grep -rn 'Reference: openvpn' --include=*.go .` finds the existing ones. Do not
+strip them and do not avoid reading openvpn3 — read the policy first, then cite
+what you read.
 
 This repo **is** the engine. The old C++/openvpn3-core stack it once aimed to
 replace is now fully retired and archived (see "Status" below).
+
+## The other documents
+
+AGENTS.md is context, not the authority on any of these. Read the one that
+covers what you are about to change:
+
+| Document | Authoritative on |
+|---|---|
+| [`docs/openvpn3-reference-policy.md`](docs/openvpn3-reference-policy.md) | how openvpn3 may be read and cited |
+| [`docs/ci-relay.md`](docs/ci-relay.md) | `openlawsvpn-cli` relay mode in CI |
 
 ## Parent project context
 
@@ -48,8 +72,8 @@ from openlawsvpn-linux.
 - `openlawsvpn/openlawsvpn-android` (archived) — old Kotlin+JNI/NDK app.
 
 There is no longer a `libopenlawsvpn` C library, no JNI, no NDK, and no
-openvpn3-core dependency anywhere in the shipping stack. The C API and C++
-reference sections below are kept only as protocol/porting background.
+openvpn3-core *dependency* anywhere in the shipping stack. Reading the openvpn3
+*source* remains current practice — see "What this repo is" above.
 
 ## Why Go
 
@@ -131,11 +155,13 @@ Key concepts an AI agent must know:
 - Critical options: `ifconfig`, `route`, `dhcp-option DNS`, `redirect-gateway`, `cipher`, `compress`
 - Example: `PUSH_REPLY,ifconfig 10.0.0.6 10.0.0.5,route 10.0.0.0 255.255.0.0,dhcp-option DNS 10.0.0.2`
 
-## C++ reference files (historical — protocol background only)
+## C++ reference files (current — the authoritative protocol description)
 
-> The shipping engine is pure Go and does not depend on these. They are listed
-> only as a map of where each protocol behaviour was originally learned from,
-> useful when porting a new protocol or debugging a wire-format edge case.
+> The shipping engine is pure Go and links none of this. But openvpn3 is not
+> "historical background": under
+> [`docs/openvpn3-reference-policy.md`](docs/openvpn3-reference-policy.md) it is
+> the authoritative description of the wire protocol, and the right first move
+> when a protocol question comes up. Cite what you read (§3.3).
 
 All in openvpn3-core (https://github.com/OpenVPN/openvpn3):
 
