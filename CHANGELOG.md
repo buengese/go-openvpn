@@ -109,9 +109,33 @@ and releases follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   whichever backend needs one and handed back as the second result, because only
   that backend knows whether it made a backup or what it was called.
 
+- **Breaking:** `Profile.ForceSAMLFlow` is now `Profile.Federated`, and
+  `Profile.DetectFlow()` is now `Profile.AuthFlow()`. The old names described
+  a SAML override bolted onto a client that assumed AWS; the new ones name what
+  the profile says — it authenticates against an identity provider — and what
+  the method answers.
+- **Breaking:** `Profile.AuthFlow()` reads the profile and nothing else. It
+  used to answer "federated" for a remote whose hostname matched
+  `cvpn-endpoint-*.amazonaws.com`, which put one vendor's endpoint naming
+  inside the file-format parser.
+- **Breaking:** the `profile.AuthFlow` constants are reordered so that
+  `FlowCertAuth` is the zero value, followed by `FlowUserPass` and
+  `FlowFederated`. A flow variable nobody set now means an ordinary OpenVPN
+  profile rather than one vendor's federated flow. Nothing persists these
+  numbers; code that names the constants is unaffected. `AuthFlow` also gained
+  a `String()`, so a flow in a log line or a test failure says which it is.
+- **Breaking:** `profile.FlowAWSSSO` is now `profile.FlowFederated`. Its own
+  `String()` already answered `"federated"`, and the flow is what the profile
+  asks for rather than who serves it: `auth-federate` is an OpenVPN directive
+  any server can carry, and `x-openlawsvpn-flow saml` exists so that one does.
+  This completes the rename above — the constant was the last name in the
+  package still asserting whose endpoint it was.
 - The `auth` digest now defaults to SHA1, matching OpenVPN, where it previously
   defaulted to SHA256. `Profile.AuthSet` distinguishes a profile that named a
   digest from one that did not.
+- A profile carrying both a client certificate and `auth-user-pass` is now
+  treated as needing credentials. It was previously read as certificate-only
+  and could never present a password.
 - `redirect-gateway` installs two /1 routes, `0.0.0.0/1` and `128.0.0.0/1`,
   instead of replacing the host's default with its own `0.0.0.0/0`, and covers
   IPv6 with four prefixes rather than a `::/0`. Each wins by longest-prefix

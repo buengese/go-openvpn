@@ -374,10 +374,10 @@ func (a *assembler) directive(d Directive) error {
 		// AWS Client VPN profiles use this OpenVPN directive to request
 		// federated (SAML) authentication. Treat it as the standard spelling
 		// of the existing explicit SAML-flow override.
-		p.ForceSAMLFlow = true
+		p.Federated = true
 	case "x-openlawsvpn-flow":
 		if len(fields) >= 2 && strings.ToLower(fields[1]) == "saml" {
-			p.ForceSAMLFlow = true
+			p.Federated = true
 		}
 	case "verify-x509-name":
 		// The match type is the whole point of the second field: the

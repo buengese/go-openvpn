@@ -241,7 +241,7 @@ type Client struct {
 	// goroutines — must not block. Set before calling Connect.
 	EventFn EventFn
 
-	// awsFormat is true when the profile targets AWS Client VPN (FlowAWSSSO).
+	// awsFormat is true when the profile targets AWS Client VPN (FlowFederated).
 	// It selects the AWS-patched key_method_2 wire format (uint32_be length
 	// prefixes + uint32_le total-length header) instead of the standard
 	// stock-OpenVPN format (uint16_be length prefixes, no total-length header).
@@ -301,6 +301,15 @@ func New(p *profile.Profile) *Client {
 	}
 }
 
+// detectFlow keeps the endpoint-hostname rule the parser used to apply, until
+// the client core is rebuilt around auth methods and saml.IsAWSEndpoint.
+func (c *Client) detectFlow() profile.AuthFlow {
+	if strings.HasPrefix(c.prof.Remote, "cvpn-endpoint-") && strings.HasSuffix(c.prof.Remote, ".amazonaws.com") {
+		return profile.FlowFederated
+	}
+	return c.prof.AuthFlow()
+}
+
 // Connect dials, authenticates, and brings up the VPN tunnel.
 //
 // The auth flow is auto-detected from the profile:
@@ -312,13 +321,13 @@ func New(p *profile.Profile) *Client {
 //
 // Connect is not safe for concurrent use.
 func (c *Client) Connect(ctx context.Context) error {
-	flow := c.prof.DetectFlow()
-	c.awsFormat = flow == profile.FlowAWSSSO
+	flow := c.detectFlow()
+	c.awsFormat = flow == profile.FlowFederated
 
 	c.emit(Event{Type: EventStateChanged, State: StateConnecting})
 
 	switch flow {
-	case profile.FlowAWSSSO:
+	case profile.FlowFederated:
 		if c.SAMLTokenFn == nil {
 			return fmt.Errorf("vpn: SAMLTokenFn must be set for AWS SSO profiles")
 		}
@@ -380,7 +389,7 @@ func (c *Client) connectPhase1(ctx context.Context) (*SAMLChallenge, error) {
 	c.state = stateConnecting
 	// Detect auth flow here so connectPhase2 (called separately on mobile)
 	// uses the correct wire format even when Connect() is bypassed.
-	awsSSO := c.prof.DetectFlow() == profile.FlowAWSSSO
+	awsSSO := c.detectFlow() == profile.FlowFederated
 	if awsSSO {
 		c.awsFormat = true
 	}
@@ -1173,7 +1182,7 @@ func (c *Client) SetRelayPhase2(remoteIP, stateID string) {
 	// Without this, ConnectPhase2 sends stock OpenVPN CE framing to an AWS
 	// endpoint and gets AUTH_FAILED — regression introduced in v1.0.7 when
 	// awsFormat became a conditional flag.
-	if c.prof.DetectFlow() == profile.FlowAWSSSO {
+	if c.detectFlow() == profile.FlowFederated {
 		c.awsFormat = true
 	}
 }

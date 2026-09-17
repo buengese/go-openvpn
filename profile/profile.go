@@ -397,11 +397,13 @@ type Profile struct {
 	// line that omits it.
 	VerifyX509NameMatch X509NameMatch
 
-	// ForceSAMLFlow is set when the profile contains 'auth-federate' or
-	// 'x-openlawsvpn-flow saml'. It forces FlowAWSSSO regardless of the remote
-	// hostname, allowing non-AWS servers (e.g. the demo mockserver) to use the
-	// CRV1/SAML two-phase flow.
-	ForceSAMLFlow bool
+	// Federated is set when the profile contains 'auth-federate' or
+	// 'x-openlawsvpn-flow saml': the profile authenticates against an identity
+	// provider rather than with anything it carries itself.
+	//
+	// It reads the file and nothing else; recognising a federated endpoint by
+	// its hostname is auth/saml.IsAWSEndpoint's job.
+	Federated bool
 
 	// DNS is the static resolver configuration the profile's dhcp-option
 	// directives asked for. It is merged with what the server pushes, which
@@ -427,28 +429,71 @@ type Profile struct {
 	InlineBlocks []InlineBlock
 }
 
-// AuthFlow describes which authentication mechanism the profile uses.
+// AuthFlow describes which authentication mechanism the profile asks for.
+// The zero value is a plain OpenVPN profile rather than a federated one.
 type AuthFlow int
 
 const (
-	// FlowAWSSSO is the AWS Client VPN SAML/CRV1 two-phase flow.
-	// Detected when the remote hostname matches cvpn-endpoint-*.amazonaws.com.
-	FlowAWSSSO AuthFlow = iota
 	// FlowCertAuth is standard mutual-TLS client certificate authentication.
-	// Detected when the profile embeds both <cert> and <key> blocks.
-	FlowCertAuth
+	// Read from a profile that embeds both <cert> and <key> and asks for no
+	// credentials.
+	FlowCertAuth AuthFlow = iota
 	// FlowUserPass is username/password authentication (auth-user-pass).
-	// Used as the fallback when no other pattern matches.
+	// Read from a profile carrying an auth-user-pass directive, and used as
+	// the fallback when no other pattern matches.
 	FlowUserPass
+	// FlowFederated is authentication against an identity provider, over the
+	// SAML/CRV1 two-exchange flow. Read from auth-federate, which is the
+	// directive AWS Client VPN profiles carry and which any other server can
+	// carry to ask for the same thing.
+	FlowFederated
 )
 
-// DetectFlow inspects the profile and returns the appropriate AuthFlow.
-func (p *Profile) DetectFlow() AuthFlow {
-	if p.ForceSAMLFlow {
-		return FlowAWSSSO
+// String names the flow, so that a value reaching a log line or a test failure
+// says which one it is.
+func (f AuthFlow) String() string {
+	switch f {
+	case FlowCertAuth:
+		return "cert"
+	case FlowUserPass:
+		return "user-pass"
+	case FlowFederated:
+		return "federated"
+	default:
+		return fmt.Sprintf("AuthFlow(%d)", int(f))
 	}
-	if strings.HasPrefix(p.Remote, "cvpn-endpoint-") && strings.HasSuffix(p.Remote, ".amazonaws.com") {
-		return FlowAWSSSO
+}
+
+// RequiresCredentials reports whether the profile carries an auth-user-pass
+// directive. The values themselves come from the client's credential
+// callback; a profile never carries them.
+//
+// It reads the recorded directives, so a profile assembled in memory rather
+// than parsed reports false — it carries no directives, and so nothing in it
+// has asked for credentials.
+func (p *Profile) RequiresCredentials() bool {
+	for _, d := range p.Directives {
+		if d.Name == "auth-user-pass" {
+			return true
+		}
+	}
+	return false
+}
+
+// AuthFlow reports which authentication mechanism the profile asks for. It
+// reads what the file says and nothing else; recognising an endpoint by its
+// hostname is auth/saml.IsAWSEndpoint's job, not a file parser's.
+//
+// auth-user-pass is tested before the embedded certificate because a profile
+// may carry both, and there the certificate is one half of the credential and
+// the password the other. Nothing is lost by preferring it: the certificate
+// reaches the TLS configuration from the profile fields, never from the flow.
+func (p *Profile) AuthFlow() AuthFlow {
+	if p.Federated {
+		return FlowFederated
+	}
+	if p.RequiresCredentials() {
+		return FlowUserPass
 	}
 	if len(p.Cert) > 0 && len(p.Key) > 0 {
 		return FlowCertAuth

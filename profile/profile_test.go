@@ -500,16 +500,118 @@ func TestParsePathMissing(t *testing.T) {
 	}
 }
 
-func TestAuthFederateForcesSAMLFlow(t *testing.T) {
+// TestZeroAuthFlowIsTheOrdinaryOne pins the constant order: the zero value is
+// what a flow variable holds before anything sets it, so forgetting to set one
+// has to mean a plain handshake rather than a browser flow.
+func TestZeroAuthFlowIsTheOrdinaryOne(t *testing.T) {
+	var zero profile.AuthFlow
+	if zero != profile.FlowCertAuth {
+		t.Errorf("the zero AuthFlow is %v, want %v", zero, profile.FlowCertAuth)
+	}
+	for _, tc := range []struct {
+		flow profile.AuthFlow
+		want string
+	}{
+		{profile.FlowCertAuth, "cert"},
+		{profile.FlowUserPass, "user-pass"},
+		{profile.FlowFederated, "federated"},
+	} {
+		if got := tc.flow.String(); got != tc.want {
+			t.Errorf("String() = %q, want %q", got, tc.want)
+		}
+	}
+}
+
+// TestAuthFederateIsWhatSaysFederated pins the one directive that puts a
+// profile on the federated flow. Nothing else does: not the remote's hostname,
+// which is one vendor's rule and lives in that vendor's package.
+func TestAuthFederateIsWhatSaysFederated(t *testing.T) {
 	p, err := profile.ParseString("remote vpn.example.test 443\nauth-federate\n")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !p.ForceSAMLFlow {
-		t.Fatal("ForceSAMLFlow = false, want true")
+	if !p.Federated {
+		t.Fatal("Federated = false, want true")
 	}
-	if got := p.DetectFlow(); got != profile.FlowAWSSSO {
-		t.Errorf("DetectFlow() = %v, want FlowAWSSSO", got)
+	if got := p.AuthFlow(); got != profile.FlowFederated {
+		t.Errorf("AuthFlow() = %v, want FlowFederated", got)
+	}
+}
+
+// TestAuthFlowPrefersCredentialsOverACertificate pins the precedence that lets
+// a profile present a username at all: many profiles carrying auth-user-pass
+// also embed a <cert> and a <key>, and testing the certificate first classifies
+// them as FlowCertAuth, which sends the credential fields empty.
+func TestAuthFlowPrefersCredentialsOverACertificate(t *testing.T) {
+	const cert = "-----BEGIN CERTIFICATE-----\nx\n-----END CERTIFICATE-----\n"
+	const key = "-----BEGIN PRIVATE KEY-----\nx\n-----END PRIVATE KEY-----\n"
+
+	tests := []struct {
+		name       string
+		config     string
+		withCert   bool
+		wantFlow   profile.AuthFlow
+		wantNeeded bool
+	}{
+		{
+			name:     "certificate alone is cert auth",
+			config:   "remote vpn.example.test 443\n",
+			withCert: true,
+			wantFlow: profile.FlowCertAuth,
+		},
+		{
+			name:       "auth-user-pass alone is user-pass",
+			config:     "remote vpn.example.test 443\nauth-user-pass\n",
+			wantFlow:   profile.FlowUserPass,
+			wantNeeded: true,
+		},
+		{
+			name:       "both is user-pass",
+			config:     "remote vpn.example.test 443\nauth-user-pass\n",
+			withCert:   true,
+			wantFlow:   profile.FlowUserPass,
+			wantNeeded: true,
+		},
+		{
+			name:     "neither falls back to user-pass",
+			config:   "remote vpn.example.test 443\n",
+			wantFlow: profile.FlowUserPass,
+		},
+		{
+			name:       "the federated flow wins over both",
+			config:     "remote vpn.example.test 443\nauth-federate\nauth-user-pass\n",
+			withCert:   true,
+			wantFlow:   profile.FlowFederated,
+			wantNeeded: true,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			p, err := profile.ParseString(tc.config)
+			if err != nil {
+				t.Fatalf("ParseString: %v", err)
+			}
+			if tc.withCert {
+				p.Cert, p.Key = []byte(cert), []byte(key)
+			}
+			if got := p.AuthFlow(); got != tc.wantFlow {
+				t.Errorf("AuthFlow() = %v, want %v", got, tc.wantFlow)
+			}
+			if got := p.RequiresCredentials(); got != tc.wantNeeded {
+				t.Errorf("RequiresCredentials() = %t, want %t", got, tc.wantNeeded)
+			}
+		})
+	}
+}
+
+// TestRequiresCredentialsIgnoresAnAssembledProfile records that the question
+// is answered from the recorded directives. A profile built field by field
+// rather than parsed has none, so nothing in it has asked for credentials.
+func TestRequiresCredentialsIgnoresAnAssembledProfile(t *testing.T) {
+	p := &profile.Profile{Remote: "vpn.example.test", Port: 443}
+	if p.RequiresCredentials() {
+		t.Error("an assembled profile claims to require credentials")
 	}
 }
 
@@ -766,15 +868,15 @@ func TestParseFlowDirectiveAsksForSAML(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if p.ForceSAMLFlow != tc.want {
-				t.Errorf("ForceSAMLFlow = %t, want %t", p.ForceSAMLFlow, tc.want)
+			if p.Federated != tc.want {
+				t.Errorf("Federated = %t, want %t", p.Federated, tc.want)
 			}
 			wantFlow := profile.FlowUserPass
 			if tc.want {
-				wantFlow = profile.FlowAWSSSO
+				wantFlow = profile.FlowFederated
 			}
-			if got := p.DetectFlow(); got != wantFlow {
-				t.Errorf("DetectFlow() = %v, want %v", got, wantFlow)
+			if got := p.AuthFlow(); got != wantFlow {
+				t.Errorf("AuthFlow() = %v, want %v", got, wantFlow)
 			}
 		})
 	}
