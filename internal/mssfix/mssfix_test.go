@@ -1,6 +1,7 @@
 package mssfix_test
 
 import (
+	"bytes"
 	"encoding/binary"
 	"testing"
 
@@ -98,57 +99,68 @@ func mssOf(pkt []byte) uint16 {
 	return 0
 }
 
-func TestClamp_ClampsOversizedMSS(t *testing.T) {
-	pkt := buildSYN4(1460)
-	mssfix.Clamp(pkt, 1350)
-	if got := mssOf(pkt); got != 1350 {
-		t.Fatalf("MSS after clamp: got %d, want 1350", got)
+// TestClamp covers the four decisions Clamp makes about a packet: lower an
+// oversized MSS, leave a smaller one alone, ignore anything that is not a SYN,
+// and do nothing at all when no maximum is configured.
+func TestClamp(t *testing.T) {
+	cases := []struct {
+		name string
+		pkt  func() []byte
+		// maxMSS is the clamp; wantMSS the option value afterwards.
+		maxMSS  int
+		wantMSS uint16
+		// wantUnchanged demands the packet be byte-identical afterwards, not
+		// merely to carry the same MSS: a rewrite that lands on the same value
+		// still recomputes checksums over a packet nobody asked us to touch.
+		wantUnchanged bool
+		why           string
+	}{
+		{
+			name: "an oversized MSS is lowered", pkt: func() []byte { return buildSYN4(1460) },
+			maxMSS: 1350, wantMSS: 1350,
+			why: "1460 is above the configured maximum",
+		},
+		{
+			name: "a smaller MSS is left where it is", pkt: func() []byte { return buildSYN4(1200) },
+			maxMSS: 1350, wantMSS: 1200,
+			why: "clamping must never raise an MSS",
+		},
+		{
+			name: "a non-SYN packet is untouched",
+			pkt: func() []byte {
+				pkt := buildSYN4(1460)
+				pkt[20+13] = 0x10 // ACK, not SYN
+				return pkt
+			},
+			maxMSS: 1000, wantMSS: 1460, wantUnchanged: true,
+			why: "option 2 only means MSS in a SYN",
+		},
+		{
+			name: "a zero maximum is a no-op", pkt: func() []byte { return buildSYN4(1460) },
+			maxMSS: 0, wantMSS: 1460, wantUnchanged: true,
+			why: "mssfix unset must not rewrite anything",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			pkt := tc.pkt()
+			before := append([]byte(nil), pkt...)
+
+			mssfix.Clamp(pkt, tc.maxMSS)
+
+			if got := mssOf(pkt); got != tc.wantMSS {
+				t.Fatalf("MSS = %d, want %d — %s", got, tc.wantMSS, tc.why)
+			}
+			if tc.wantUnchanged && !bytes.Equal(pkt, before) {
+				t.Errorf("the packet was rewritten — %s", tc.why)
+			}
+		})
 	}
 }
 
-func TestClamp_DoesNotIncreaseSmallMSS(t *testing.T) {
-	pkt := buildSYN4(1200)
-	mssfix.Clamp(pkt, 1350)
-	if got := mssOf(pkt); got != 1200 {
-		t.Fatalf("MSS should not increase: got %d, want 1200", got)
-	}
-}
-
-func TestClamp_NonSYNUntouched(t *testing.T) {
-	pkt := buildSYN4(1460)
-	pkt[20+13] = 0x10 // ACK, not SYN
-	before := make([]byte, len(pkt))
-	copy(before, pkt)
-	mssfix.Clamp(pkt, 1000)
-	for i, b := range pkt {
-		if b != before[i] {
-			t.Fatal("non-SYN packet was modified")
-		}
-	}
-}
-
-func TestClamp_ZeroMaxMSSIsNoop(t *testing.T) {
-	pkt := buildSYN4(1460)
-	before := make([]byte, len(pkt))
-	copy(before, pkt)
-	mssfix.Clamp(pkt, 0)
-	for i, b := range pkt {
-		if b != before[i] {
-			t.Fatal("zero maxMSS should be a no-op")
-		}
-	}
-}
-
-func TestClampToMTUDerivesIPv4MSS(t *testing.T) {
-	pkt := buildSYN4(1460)
-	mssfix.ClampToMTU(pkt, 1440)
-	if got := mssOf(pkt); got != 1400 {
-		t.Fatalf("MSS after MTU-derived clamp: got %d, want 1400", got)
-	}
-}
-
-func TestClampToMTUDerivesIPv6MSS(t *testing.T) {
-	// IPv6 header (40) + TCP header (24 with an MSS option).
+// buildSYN6 constructs a minimal IPv6 TCP SYN packet with an MSS option:
+// IPv6 header (40) + TCP header (24 with the option).
+func buildSYN6(mssVal uint16) []byte {
 	pkt := make([]byte, 64)
 	pkt[0] = 0x60
 	pkt[6] = 6 // TCP next header
@@ -157,15 +169,45 @@ func TestClampToMTUDerivesIPv6MSS(t *testing.T) {
 	tcp[13] = 0x02 // SYN
 	tcp[20] = 2
 	tcp[21] = 4
-	binary.BigEndian.PutUint16(tcp[22:24], 1460)
+	binary.BigEndian.PutUint16(tcp[22:24], mssVal)
+	return pkt
+}
 
-	mssfix.ClampToMTU(pkt, 1440)
-	if got := binary.BigEndian.Uint16(tcp[22:24]); got != 1380 {
-		t.Fatalf("IPv6 MSS after MTU-derived clamp: got %d, want 1380", got)
+// mss6Of reads the MSS option out of the packet buildSYN6 builds. It is not
+// mssOf: that one takes the header length from the IPv4 IHL nibble, which an
+// IPv6 packet does not have.
+func mss6Of(pkt []byte) uint16 {
+	return binary.BigEndian.Uint16(pkt[40+22 : 40+24])
+}
+
+// TestClampChargesIPv6ForItsLongerHeader pins the one allowance Clamp applies
+// itself. Callers derive a single MSS for an IPv4 payload; an IPv6 header is
+// 20 bytes longer, so a v6 SYN must be clamped 20 lower from the same number.
+// Passing one value to both families puts 20 bytes back on the wire, which is
+// the whole reason this test names both versions.
+func TestClampChargesIPv6ForItsLongerHeader(t *testing.T) {
+	cases := []struct {
+		name    string
+		pkt     func() []byte
+		mssOf   func([]byte) uint16
+		maxMSS  int
+		wantMSS uint16
+	}{
+		{"IPv4", func() []byte { return buildSYN4(1460) }, mssOf, 1400, 1400},
+		{"IPv6", func() []byte { return buildSYN6(1460) }, mss6Of, 1400, 1380},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			pkt := tc.pkt()
+			mssfix.Clamp(pkt, tc.maxMSS)
+			if got := tc.mssOf(pkt); got != tc.wantMSS {
+				t.Fatalf("MSS after clamping to %d = %d, want %d", tc.maxMSS, got, tc.wantMSS)
+			}
+		})
 	}
 }
 
-func TestClamp_ChecksumValid(t *testing.T) {
+func TestClampKeepsChecksumsValid(t *testing.T) {
 	pkt := buildSYN4(1460)
 	mssfix.Clamp(pkt, 1300)
 	// IP checksum
@@ -181,7 +223,11 @@ func TestClamp_ChecksumValid(t *testing.T) {
 	}
 }
 
-func TestClamp_ShortPacketNoPanic(t *testing.T) {
+// TestClampSurvivesShortPackets feeds Clamp buffers too short to hold an IPv4
+// header. There is nothing to assert but the absence of a panic: these arrive
+// from the tunnel, so a slice expression that assumed a full header would take
+// the client down on a malformed packet.
+func TestClampSurvivesShortPackets(t *testing.T) {
 	for _, l := range []int{0, 1, 10, 19} {
 		mssfix.Clamp(make([]byte, l), 1300)
 	}

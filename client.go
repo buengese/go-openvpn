@@ -2012,7 +2012,9 @@ func (c *Client) clampMSS(pkt []byte) {
 		mssfix.Clamp(pkt, c.mssFix)
 		return
 	}
-	mssfix.ClampToMTU(pkt, c.mssFixMTU)
+	// mssfix.ClampToMTU is gone; Clamp now takes the IPv4 allowance and
+	// charges IPv6 the extra 20 bytes itself, so one call covers both.
+	mssfix.Clamp(pkt, c.mssFixMTU-40)
 }
 
 // keepaliveMagic is the plaintext payload of an OpenVPN keepalive data packet.

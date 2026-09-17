@@ -4,7 +4,7 @@
 // It is applied to plaintext IPv4/IPv6 packets in the TUN data path so that
 // TCP connections negotiated through the tunnel respect the tunnel MTU.
 //
-// Reference: openvpn3-core tun/builder/capture.hpp MSSPayload::mssfix_ipv4/ipv6
+// Reference: openvpn3-core transport/mssfix.hpp MSSFix::mssfix()
 package mssfix
 
 import (
@@ -15,8 +15,11 @@ import (
 // carrying an MSS option larger than maxMSS.  The IP and TCP checksums are
 // updated in-place.  pkt is modified directly; no allocation occurs.
 //
-// maxMSS is typically MTU - 40 (IPv4) or MTU - 60 (IPv6) to leave room for
-// IP + TCP headers.  Passing maxMSS ≤ 0 is a no-op.
+// maxMSS is the allowance for an IPv4 payload; an IPv6 payload gets 20 less,
+// its header being 20 bytes longer. The adjustment belongs here because the
+// reference derives one mss_fix value and subtracts the difference at clamp
+// time (openvpn-2.6.22 src/openvpn/mss.c:133, mss_fixup_ipv6 passing
+// maxmss-20). Passing maxMSS <= 0 is a no-op.
 func Clamp(pkt []byte, maxMSS int) {
 	if maxMSS <= 0 || len(pkt) < 20 {
 		return
@@ -25,26 +28,9 @@ func Clamp(pkt []byte, maxMSS int) {
 	case 4:
 		clamp4(pkt, maxMSS)
 	case 6:
-		clamp6(pkt, maxMSS)
-	}
-}
-
-// ClampToMTU clamps a TCP SYN's advertised MSS to fit in an inner IP packet
-// with the supplied MTU. Unlike Clamp, it accounts for the inner IP header:
-// 20 bytes for IPv4 and 40 bytes for IPv6, plus the 20-byte TCP header.
-//
-// This mirrors OpenVPN's default mssfix behaviour, which starts from a link
-// MTU budget and derives the per-IP-version MSS during packet processing.
-func ClampToMTU(pkt []byte, mtu int) {
-	if mtu <= 0 || len(pkt) == 0 {
-		return
-	}
-
-	switch pkt[0] >> 4 {
-	case 4:
-		Clamp(pkt, mtu-20-20)
-	case 6:
-		Clamp(pkt, mtu-40-20)
+		if maxMSS > innerIPv6Extra {
+			clamp6(pkt, maxMSS-innerIPv6Extra)
+		}
 	}
 }
 
@@ -129,19 +115,7 @@ func clampTCP(tcp []byte, maxMSS int) bool {
 	return false
 }
 
-func checksum(b []byte) uint16 {
-	var sum uint32
-	for i := 0; i+1 < len(b); i += 2 {
-		sum += uint32(binary.BigEndian.Uint16(b[i:]))
-	}
-	if len(b)%2 != 0 {
-		sum += uint32(b[len(b)-1]) << 8
-	}
-	for sum>>16 != 0 {
-		sum = (sum & 0xffff) + (sum >> 16)
-	}
-	return ^uint16(sum)
-}
+func checksum(b []byte) uint16 { return checksumVec(b, nil) }
 
 func fixTCPChecksum4(pkt []byte, ihl int) {
 	tcp := pkt[ihl:]

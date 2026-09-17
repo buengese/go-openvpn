@@ -19,6 +19,16 @@ and releases follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   before serialisation. Every connection attempt now produces one, on success
   and on failure alike, reachable through `Client.Report()`.
 
+### Changed
+
+- `mssfix N` is read as a link budget rather than as an MTU. The directive
+  bounds the whole encapsulated packet, so `internal/mssfix.MaxMSS` subtracts
+  the transport prefix, the opcode and peer-id, the packet id, the cipher's tag
+  or IV and digest, any compression byte and the inner IP and TCP headers before
+  clamping — deriving 1336 from `mssfix 1400` for AES-GCM over UDP with a
+  peer-id, where the old `ClampToMTU` subtracted the inner headers alone and
+  clamped to 1360. The number a profile gets therefore changes.
+
 ### Removed
 
 - The Linux desktop app — the GTK GUI, the D-Bus system daemon and the RPM/AUR
@@ -30,6 +40,8 @@ and releases follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   packages from this module. Nothing in this tree carries a version any more:
   the release tag is the version, and the release workflows no longer check it
   against a spec, a PKGBUILD or a Cargo manifest.
+
+### Fixed
 
 ## [1.2.3] - 2026-08-19
 
