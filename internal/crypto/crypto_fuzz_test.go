@@ -8,14 +8,12 @@ import (
 )
 
 // FuzzCBCOpen feeds random byte slices to CBCCipher.Open to verify it never
-// panics. All error paths should return an error, not a panic.
-//
-// The seed corpus includes a valid CBC body produced by CBCCipher.Seal so the
-// fuzzer starts from a realistic encoding and can discover boundary conditions.
+// panics. The seed corpus includes a valid CBC body produced by CBCCipher.Seal,
+// so the fuzzer starts from a realistic encoding.
 func FuzzCBCOpen(f *testing.F) {
 	aesKey := bytes.Repeat([]byte{0x11}, 32)
-	hmacKey := bytes.Repeat([]byte{0x22}, 32)
-	c, err := crypto.NewCBCCipher(aesKey, hmacKey)
+	hmacSlot := bytes.Repeat([]byte{0x22}, 64)
+	c, err := crypto.NewCBCCipher(aesKey, hmacSlot, crypto.DigestSHA256)
 	if err != nil {
 		f.Fatal(err)
 	}
@@ -24,6 +22,21 @@ func FuzzCBCOpen(f *testing.F) {
 	validPlain := append([]byte{0, 0, 0, 1}, []byte("seed data for fuzzer")...)
 	validBody := c.Seal(0, validPlain, nil)
 	f.Add(validBody)
+
+	// Seed: bodies shaped by the other two digests. The cipher under test is
+	// SHA256, so these cannot authenticate — the point is the length
+	// arithmetic, which varies with the digest.
+	for _, d := range []crypto.Digest{crypto.DigestSHA1, crypto.DigestSHA512} {
+		other, oerr := crypto.NewCBCCipher(aesKey, hmacSlot, d)
+		if oerr != nil {
+			f.Fatal(oerr)
+		}
+		f.Add(other.Seal(0, validPlain, nil))
+		// Seed: that digest's exact minimum body length, all zeroes.
+		f.Add(make([]byte, d.Size()+16+16))
+		// Seed: one byte short of it.
+		f.Add(make([]byte, d.Size()+16+16-1))
+	}
 
 	// Seed: truncated body (HMAC only, no IV or ciphertext).
 	f.Add(make([]byte, 32))

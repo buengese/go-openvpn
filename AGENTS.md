@@ -233,7 +233,7 @@ All in openvpn3-core (https://github.com/OpenVPN/openvpn3):
 | `client/ovpncli.cpp` | Full client state machine — Phase 1, Phase 2, CRV1 parsing |
 | `ssl/sslctx.hpp` | TLS setup, cert loading, SNI |
 | `reliable/reliable.hpp` | Reliable control channel — seq numbers, ACK, window |
-| `crypto/cipher.hpp` + `data_epoch.cpp` | Data channel crypto, IV construction |
+| `crypto/crypto_aead.hpp` | Data channel AEAD and the GCM nonce (`set_tail`) — this is the IV construction this client implements. `crypto/data_epoch.cpp` is the *data v3* epoch-key nonce and is **not**: see `internal/crypto/cipher.go` |
 | `transport/tcplink.hpp` + `udplink.hpp` | Framing: 2-byte length prefix (TCP), raw (UDP) |
 | `ssl/tlsprf.hpp` + `openssl/crypto/tls1prf.hpp` | Classic key derivation: both labels, and the `EVP_md5_sha1()` digest choice. These, not `prf/prfplus.hpp`, are what `internal/prf` cites |
 | `tun/builder/base.hpp` | TUN callback interface (what gomobile must expose) |

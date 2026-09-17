@@ -79,11 +79,11 @@ func New(peerID uint32, keyID uint8, txKey, txIV, rxKey, rxIV []byte) (*Channel,
 //   - rxAESKey:  32-byte AES key, receive direction
 //   - rxHMACKey: 32-byte HMAC key, receive direction
 func NewCBC(peerID uint32, keyID uint8, txAESKey, txHMACKey, rxAESKey, rxHMACKey []byte) (*Channel, error) {
-	enc, err := crypto.NewCBCCipher(txAESKey, txHMACKey)
+	enc, err := crypto.NewCBCCipher(txAESKey, txHMACKey, crypto.DigestSHA256)
 	if err != nil {
 		return nil, fmt.Errorf("datachannel: tx CBC cipher: %w", err)
 	}
-	dec, err := crypto.NewCBCCipher(rxAESKey, rxHMACKey)
+	dec, err := crypto.NewCBCCipher(rxAESKey, rxHMACKey, crypto.DigestSHA256)
 	if err != nil {
 		return nil, fmt.Errorf("datachannel: rx CBC cipher: %w", err)
 	}

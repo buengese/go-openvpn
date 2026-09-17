@@ -1,11 +1,17 @@
 // Package crypto implements the OpenVPN3 data-channel cipher suite.
 //
-// Supported ciphers:
-//   - AES-256-GCM  (primary, used by AWS Client VPN)
-//   - AES-128-GCM
-//   - AES-256-CBC  (legacy, no AEAD tag — separate HMAC-SHA256 required)
+// Supported ciphers — cipherTable below is the single source of truth, and
+// every other statement about our capabilities is generated from it:
 //
-// Reference: openvpn3-core crypto/cipher.hpp, data_epoch.cpp
+//   - AES-128-GCM, AES-192-GCM, AES-256-GCM — AEAD, no separate digest
+//   - AES-128-CBC, AES-192-CBC, AES-256-CBC — authenticated by HMAC-SHA1,
+//     HMAC-SHA256 or HMAC-SHA512, selected by the profile's `auth` directive
+//
+// CHACHA20-POLY1305 is deliberately absent: this package implements the AES
+// suite and nothing else, and because the advertisement is generated from the
+// table, leaving it out here is what stops it being advertised.
+//
+// Reference: openvpn3-core crypto/cipher.hpp, crypto/crypto_aead.hpp
 package crypto
 
 import (
@@ -13,6 +19,7 @@ import (
 	"crypto/cipher"
 	"encoding/binary"
 	"fmt"
+	"strings"
 )
 
 // DataCipher is the interface implemented by all supported data-channel ciphers.
@@ -29,8 +36,9 @@ import (
 // data channel uses the CBC-with-HMAC path.
 //
 // Overhead returns the number of bytes added by encryption beyond the
-// plaintext length. For GCM this is 12 (IV) + 16 (tag) = 28; for CBC it is
-// 16 (random IV) + 32 (HMAC-SHA256).
+// plaintext length. For GCM this is 16 (tag); for CBC it is the digest's tag
+// length + 16 (random IV) + up to 16 (PKCS#7 padding), so it varies with the
+// negotiated digest and is not a constant.
 type DataCipher interface {
 	Seal(packetID uint32, plaintext, aad []byte) []byte
 	Open(packetID uint32, ciphertext, aad []byte) ([]byte, error)
@@ -38,40 +46,120 @@ type DataCipher interface {
 	Overhead() int
 }
 
-// Suite identifies the negotiated cipher suite.
-type Suite int
+// Mode distinguishes the two data-channel constructions. A caller switches on
+// it to pick a constructor, so the decision is driven by the cipher table
+// rather than by re-parsing the cipher's name.
+type Mode int
 
 const (
-	// SuiteAES256GCM is AES-256-GCM (recommended).
-	SuiteAES256GCM Suite = iota
-	// SuiteAES128GCM is AES-128-GCM.
-	SuiteAES128GCM
-	// SuiteAES256CBC is AES-256-CBC with HMAC-SHA256 (legacy).
-	SuiteAES256CBC
+	// ModeAEAD is AES-GCM: the cipher authenticates its own output and the
+	// P_DATA_V2 header is the AAD. No `auth` digest applies — OpenVPN reports
+	// it as [null-digest].
+	ModeAEAD Mode = iota
+	// ModeCBC is AES-CBC authenticated by a separate HMAC. The profile's
+	// `auth` digest selects the HMAC and therefore the wire tag length.
+	ModeCBC
 )
 
-// ParseSuite maps the cipher name from a .ovpn profile / PUSH_REPLY to a Suite.
-func ParseSuite(name string) (Suite, error) {
-	switch name {
-	case "AES-256-GCM":
-		return SuiteAES256GCM, nil
-	case "AES-128-GCM":
-		return SuiteAES128GCM, nil
-	case "AES-256-CBC":
-		return SuiteAES256CBC, nil
+// String returns "AEAD" or "CBC", or a placeholder naming the numeric value
+// when it is outside the defined set.
+func (m Mode) String() string {
+	switch m {
+	case ModeAEAD:
+		return "AEAD"
+	case ModeCBC:
+		return "CBC"
 	default:
-		return 0, fmt.Errorf("crypto: unsupported cipher %q", name)
+		return fmt.Sprintf("Mode(%d)", int(m))
 	}
+}
+
+// CipherSpec describes one data-channel cipher this client can construct: the
+// unit of the cipher table, holding everything a caller needs in order to
+// slice key material and pick a constructor without re-deriving it from the
+// cipher's name. It is a value; callers may keep or copy it freely.
+type CipherSpec struct {
+	// Name is the canonical OpenVPN spelling, as it appears in a profile's
+	// `cipher` / `data-ciphers` directive, in a PUSH_REPLY and in IV_CIPHERS.
+	Name string
+	// KeyLen is the AES key length in bytes: 16, 24 or 32.
+	KeyLen int
+	// Mode selects the construction: ModeAEAD (GCM) or ModeCBC.
+	Mode Mode
+}
+
+// UsesDigest reports whether an `auth` digest applies to this cipher. It is
+// false for AEAD ciphers, which authenticate their own output, and true for
+// CBC, where the digest chooses the HMAC and the wire tag length.
+func (s CipherSpec) UsesDigest() bool { return s.Mode == ModeCBC }
+
+// cipherTable is the single source of truth for what this client can
+// construct. The IV_CIPHERS advertisement, the accept/reject decision for a
+// pushed cipher and the key length each path slices are all derived from it,
+// so the advertisement cannot drift from the implementation. Order is the
+// advertisement order: AEAD first, ascending key length within each mode.
+//
+// Reference: openvpn3-core ssl/proto.hpp parse_pushed_data_channel_options()
+// validates the pushed cipher against the IV_CIPHERS list the client sent, so
+// the two must describe the same set.
+var cipherTable = []CipherSpec{
+	{Name: "AES-128-GCM", KeyLen: 16, Mode: ModeAEAD},
+	{Name: "AES-192-GCM", KeyLen: 24, Mode: ModeAEAD},
+	{Name: "AES-256-GCM", KeyLen: 32, Mode: ModeAEAD},
+	{Name: "AES-128-CBC", KeyLen: 16, Mode: ModeCBC},
+	{Name: "AES-192-CBC", KeyLen: 24, Mode: ModeCBC},
+	{Name: "AES-256-CBC", KeyLen: 32, Mode: ModeCBC},
+}
+
+// Ciphers returns every cipher this client can construct, in advertisement
+// order. The returned slice is a copy; mutating it does not change the table.
+func Ciphers() []CipherSpec {
+	out := make([]CipherSpec, len(cipherTable))
+	copy(out, cipherTable)
+	return out
+}
+
+// CipherNames returns the canonical names of every cipher this client can
+// construct, in advertisement order. It is the IV_CIPHERS list: join the
+// result with ":".
+func CipherNames() []string {
+	out := make([]string, len(cipherTable))
+	for i, spec := range cipherTable {
+		out[i] = spec.Name
+	}
+	return out
+}
+
+// LookupCipher returns the CipherSpec for a cipher name, and reports whether
+// the name is one this client can construct. Matching is case-insensitive and
+// tolerates surrounding whitespace, because the name arrives from a profile
+// directive or a PUSH_REPLY field. A false result is exactly the set of
+// ciphers a caller must report as unsupported.
+func LookupCipher(name string) (CipherSpec, bool) {
+	want := strings.ToUpper(strings.TrimSpace(name))
+	for _, spec := range cipherTable {
+		if spec.Name == want {
+			return spec, true
+		}
+	}
+	return CipherSpec{}, false
 }
 
 // GCMCipher encrypts and decrypts data-channel packets with AES-GCM.
 //
-// IV construction (openvpn3-core data_epoch.cpp):
+// IV construction is a concatenation, not a XOR:
 //
-//	iv = implicit_iv XOR (packetID zero-padded to ivLen bytes, big-endian)
+//	iv = packetID (4 bytes, big-endian) ‖ implicit_iv (8 bytes)
 //
-// The implicit IV is derived from the key material (last ivLen bytes of
-// the HMAC key slot, or a dedicated field — see ExpandImplicitIV).
+// That is what openvpn-2.6.22 src/openvpn/crypto.c:88-99 assembles — packet id
+// first, implicit part appended after it — and what openvpn3-core
+// crypto/crypto_aead.hpp:66-75 lays out through set_tail. The XOR in
+// openvpn3-core crypto/data_epoch.cpp:318-324 is the epoch-key data v3 nonce,
+// which this cipher does not implement.
+//
+// The implicit IV is the 8-byte nonce tail handed to NewGCMCipher, taken from
+// the HMAC key slot of the key block — a slot an AEAD cipher otherwise leaves
+// unused.
 type GCMCipher struct {
 	aead       cipher.AEAD
 	implicitIV []byte // len == aead.NonceSize()
@@ -79,11 +167,20 @@ type GCMCipher struct {
 
 // NewGCMCipher creates a GCMCipher from a raw AES key and a nonce tail.
 //
-//   - key:       16 bytes for AES-128-GCM, 32 bytes for AES-256-GCM
+//   - key:       16, 24 or 32 bytes for AES-128-GCM, AES-192-GCM or
+//     AES-256-GCM. The length is a property of the negotiated cipher — see
+//     LookupCipher and CipherSpec.KeyLen. It is validated here so the error
+//     names the constraint rather than leaving aes.NewCipher to say "invalid
+//     key size" without saying what a valid one would be.
 //   - nonceTail: 8 bytes — the last 8 bytes of the 12-byte GCM nonce
 //     (set from the first 8 bytes of the HMAC key slice via set_tail in
 //     openvpn3-core crypto_aead.hpp).
 func NewGCMCipher(key, nonceTail []byte) (*GCMCipher, error) {
+	switch len(key) {
+	case 16, 24, 32:
+	default:
+		return nil, fmt.Errorf("crypto: GCM AES key must be 16, 24 or 32 bytes, got %d", len(key))
+	}
 	block, err := aes.NewCipher(key)
 	if err != nil {
 		return nil, fmt.Errorf("crypto: AES key: %w", err)
