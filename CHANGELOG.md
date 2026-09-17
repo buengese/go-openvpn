@@ -18,6 +18,8 @@ and releases follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `SessionReport` that redacts credentials, certificates and pushed options
   before serialisation. Every connection attempt now produces one, on success
   and on failure alike, reachable through `Client.Report()`.
+- Data-channel breadth: AES-128, AES-192 and AES-256 in both GCM and CBC, with
+  CBC authenticated by HMAC-SHA1, HMAC-SHA256 or HMAC-SHA512.
 
 ### Changed
 
@@ -47,6 +49,9 @@ and releases follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `0x69` — *this payload is LZ4-compressed* — over plaintext on every packet of
   a `compress lz4` session. `0x69` means compressed and `0xFA` means not; both
   are now read from a peer's own captured bytes.
+- Data-channel keys for AES-CBC were taken from the wrong halves of the key
+  block, transposing the transmit and receive HMAC keys. The mapping now exists
+  in one place and both cipher modes read it.
 
 ## [1.2.3] - 2026-08-19
 

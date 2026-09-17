@@ -207,11 +207,37 @@ use this path. Only known-answer vectors (`internal/prf/testdata/vectors.json`,
 captured from a real OpenVPN 2.4.12 peer) distinguish a correct derivation from
 a convincing wrong one — length and determinism tests do not.
 
-**Data channel**
-- P_DATA_V2: [0x09 | key_id][peer_id (3 bytes)][iv (12 bytes for GCM)][ciphertext+tag]
-- AES-256-GCM: IV = packet_id (32-bit counter, big-endian, zero-padded to 12 bytes) XOR implicit IV
-- Replay protection: sliding window on packet_id (32-bit counter per session key)
-- Key renegotiation: every 3600s or 100MB (configurable via reneg-sec/reneg-bytes in .ovpn)
+**Data channel** (`internal/datachannel`, `internal/crypto`)
+
+The IV is **not on the wire**. Only the 4-byte packet id is; the IV is rebuilt
+from it at both ends.
+
+```
+P_DATA_V2, GCM:  [op<<3|key_id 1B][peer_id 3B][packet_id 4B][GCM tag 16B][ciphertext]
+P_DATA_V2, CBC:  [op<<3|key_id 1B][peer_id 3B][HMAC N B][IV 16B][ciphertext]
+P_DATA_V1:       the same two bodies with no peer_id at all
+```
+
+- `N` is the negotiated digest's output length — 20 for SHA1, 32 for SHA256, 64
+  for SHA512 — and is not a constant.
+- **IV construction is a concatenation, not a XOR** (`internal/crypto/cipher.go`,
+  `GCMCipher`): `iv = packet_id (4 B, big-endian) ‖ implicit_iv (8 B)`. The
+  implicit IV is the nonce tail taken from the key block's HMAC slot. The XOR
+  form in openvpn3-core `crypto/data_epoch.cpp` is a *different* nonce belonging
+  to the epoch-key data v3 format, which this client does not implement.
+- GCM AAD is the header: 8 bytes for P_DATA_V2 (opcode+peer_id+packet_id),
+  4 for P_DATA_V1 (the packet id alone; `aeadHeaderLen` is 0 there). Under CBC
+  the P_DATA_V2 header is not authenticated at all and the packet id lives in
+  the first 4 plaintext bytes.
+- Which of V1/V2 a channel speaks is fixed at construction and never revisited:
+  a server that pushes no peer-id gets P_DATA_V1 (`datachannel.WireFormat`).
+- Replay protection: a **64-bit** sliding window on the packet id
+  (`replayWindowSize`), matching stock OpenVPN's `--replay-window` default
+  rather than openvpn3-core's 2048-bit one.
+- Key renegotiation: `reneg-sec` defaults to 3600 s
+  (`datachannel.DefaultRenegSec`). There is **no default byte threshold** —
+  `DefaultRenegBytes` is 0, meaning no byte-limit renegotiation unless the
+  profile sets `reneg-bytes`.
 
 **PUSH_REPLY parsing**
 - After auth: server sends PUSH_REPLY with comma-separated options

@@ -43,6 +43,7 @@ import (
 	"github.com/openlawsvpn/go-openlawsvpn/auth/saml"
 	"github.com/openlawsvpn/go-openlawsvpn/dns"
 	"github.com/openlawsvpn/go-openlawsvpn/internal/compress"
+	"github.com/openlawsvpn/go-openlawsvpn/internal/crypto"
 	"github.com/openlawsvpn/go-openlawsvpn/internal/ctls"
 	"github.com/openlawsvpn/go-openlawsvpn/internal/datachannel"
 	"github.com/openlawsvpn/go-openlawsvpn/internal/framing"
@@ -781,16 +782,16 @@ func (c *Client) connectPhase2(ctx context.Context, samlToken string) error {
 	var ch2 *datachannel.Channel
 	switch strings.ToUpper(pushOpts.Cipher) {
 	case "", "AES-256-GCM":
-		ch2, err = datachannel.New(peerID, 0, txCipherKey, txNonceTail, rxCipherKey, rxNonceTail)
+		ch2, err = datachannel.New(datachannel.WireDataV2, peerID, 0, txCipherKey, txNonceTail, rxCipherKey, rxNonceTail)
 	case "AES-128-GCM":
 		// Same wire format; crypto.NewGCMCipher accepts 16-byte keys.
-		ch2, err = datachannel.New(peerID, 0, txCipherKey[:16], txNonceTail, rxCipherKey[:16], rxNonceTail)
+		ch2, err = datachannel.New(datachannel.WireDataV2, peerID, 0, txCipherKey[:16], txNonceTail, rxCipherKey[:16], rxNonceTail)
 	case "AES-256-CBC":
 		// CBC mode: cipher key + HMAC key each from separate slots.
 		// HMAC key is the full 32-byte slot (not just 8 bytes).
 		txHMAC := keyMat256[192:224] // slot 3, full 32 bytes
 		rxHMAC := keyMat256[64:96]   // slot 1, full 32 bytes
-		ch2, err = datachannel.NewCBC(peerID, 0, txCipherKey, txHMAC, rxCipherKey, rxHMAC)
+		ch2, err = datachannel.NewCBC(datachannel.WireDataV2, peerID, 0, crypto.DigestSHA256, txCipherKey, txHMAC, rxCipherKey, rxHMAC)
 	default:
 		c.rawConn.Close()
 		c.setDisconnected(fmt.Errorf("unsupported cipher: %s", pushOpts.Cipher))
@@ -2377,7 +2378,7 @@ func (c *Client) doRekey(ctx context.Context) error {
 
 	// Re-use the peer-id from the original PUSH_REPLY.
 	// openvpn3-core: remote_peer_id is connection-scoped, not per-key-epoch.
-	newCh, err := datachannel.New(c.peerID, keyID, txCipherKey, txNonceTail, rxCipherKey, rxNonceTail)
+	newCh, err := datachannel.New(datachannel.WireDataV2, c.peerID, keyID, txCipherKey, txNonceTail, rxCipherKey, rxNonceTail)
 	if err != nil {
 		rekeyTLS.Close()
 		return fmt.Errorf("rekey new channel: %w", err)

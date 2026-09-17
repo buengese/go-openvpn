@@ -12,7 +12,21 @@ import (
 	"testing"
 
 	"github.com/openlawsvpn/go-openlawsvpn/internal/crypto"
+	"github.com/openlawsvpn/go-openlawsvpn/internal/datachannel"
 )
+
+// TestUnsupportedCipherErrorNamesIt pins that datachannel.ResolveParams names
+// the cipher it refuses: the client maps this error to diag.ClassUnsupported
+// and puts the name in the report.
+func TestUnsupportedCipherErrorNamesIt(t *testing.T) {
+	_, _, err := datachannel.ResolveParams("CHACHA20-POLY1305", "SHA256")
+	if err == nil {
+		t.Fatal("ResolveParams accepted a cipher this client cannot construct")
+	}
+	if !strings.Contains(err.Error(), "CHACHA20-POLY1305") {
+		t.Errorf("error %q does not name the cipher", err)
+	}
+}
 
 func TestGCMOpenRejectsAChangedContext(t *testing.T) {
 	cases := []struct {

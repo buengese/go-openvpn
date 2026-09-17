@@ -7,25 +7,24 @@ import (
 	"github.com/openlawsvpn/go-openlawsvpn/internal/datachannel"
 )
 
-// FuzzChannelDecrypt feeds random byte slices to Channel.Decrypt to verify
-// it never panics regardless of input.
-//
-// The seed corpus contains a valid GCM-encrypted P_DATA_V2 packet produced
-// by Channel.Encrypt so the fuzzer starts from a realistic encoding.
+// FuzzChannelDecrypt feeds random byte slices to Channel.Decrypt to verify it
+// never panics regardless of input. The seed corpus contains a valid
+// GCM-encrypted P_DATA_V2 packet produced by Channel.Encrypt so the fuzzer
+// starts from a realistic encoding.
 func FuzzChannelDecrypt(f *testing.F) {
 	txKey := bytes.Repeat([]byte{0xAA}, 32)
 	txIV := bytes.Repeat([]byte{0x55}, 8)
 	rxKey := bytes.Repeat([]byte{0xBB}, 32)
 	rxIV := bytes.Repeat([]byte{0x66}, 8)
 
-	enc, err := datachannel.New(0, 0, txKey, txIV, rxKey, rxIV)
+	enc, err := datachannel.New(datachannel.WireDataV2, 0, 0, txKey, txIV, rxKey, rxIV)
 	if err != nil {
 		f.Fatal(err)
 	}
 
 	// Build a valid P_DATA_V2 packet to use as seed.
 	// We need a matching decrypt channel (rx key of enc = tx key of dec).
-	dec, err := datachannel.New(0, 0, rxKey, rxIV, txKey, txIV)
+	dec, err := datachannel.New(datachannel.WireDataV2, 0, 0, rxKey, rxIV, txKey, txIV)
 	if err != nil {
 		f.Fatal(err)
 	}

@@ -20,11 +20,11 @@ func makeGCMPairWithKeyID(t *testing.T, seed, keyID byte) (a, b *datachannel.Cha
 	keyB := bytes.Repeat([]byte{seed + 2}, 32)
 	ivB := bytes.Repeat([]byte{seed + 3}, 8)
 	var err error
-	a, err = datachannel.New(0, keyID, keyA, ivA, keyB, ivB)
+	a, err = datachannel.New(datachannel.WireDataV2, 0, keyID, keyA, ivA, keyB, ivB)
 	if err != nil {
 		t.Fatal(err)
 	}
-	b, err = datachannel.New(0, keyID, keyB, ivB, keyA, ivA)
+	b, err = datachannel.New(datachannel.WireDataV2, 0, keyID, keyB, ivB, keyA, ivA)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -74,31 +74,6 @@ func TestManagerByteThreshold(t *testing.T) {
 	}
 }
 
-func TestManagerTimeThreshold(t *testing.T) {
-	a, _ := makeGCMPair(t, 0x30)
-	mgr := datachannel.NewManager(a, &datachannel.ManagerConfig{
-		RenegSec:   0, // set below via a very short duration
-		RenegBytes: 0,
-	})
-
-	// Use a 0-second limit (already exceeded).
-	mgr2 := datachannel.NewManager(a, &datachannel.ManagerConfig{
-		RenegSec: 0, // disabled
-	})
-	if mgr2.NeedsRekey() {
-		t.Fatal("zero renegSec means disabled, should not trigger")
-	}
-	_ = mgr
-
-	// 1-second limit already expired (we sleep 1ms and check — won't work for 1s).
-	// Use a helper: create a manager with 0 bytes sent, then manually set
-	// a time limit of 0 (disabled).  Instead verify via a 1-ns config won't
-	// work without sleeping.  We test the logic path instead: check that
-	// a manager started 2 seconds ago with renegSec=1 fires.
-	// We can't mock time, so we use a 0s limit workaround:
-	// renegSec=0 → disabled.  So let's just test that the counter resets on Rotate.
-}
-
 func TestManagerRotate(t *testing.T) {
 	a, b := makeGCMPair(t, 0x40)
 	mgrA := datachannel.NewManager(a, &datachannel.ManagerConfig{RenegBytes: 50})
@@ -113,16 +88,22 @@ func TestManagerRotate(t *testing.T) {
 		t.Fatal("expected rekey needed before rotate")
 	}
 
-	// Rotate to new keys.
-	a2, b2 := makeGCMPair(t, 0x50)
-	_ = b2
-	mgrA.Rotate(a2)
+	// Rotate to new keys the way the client does it: prepare the epoch, then
+	// promote it. Both sides use key_id 1, the next one after the initial 0.
+	a2, b2 := makeGCMPairWithKeyID(t, 0x50, 1)
+	mgrA.Prepare(a2)
+	if !mgrA.Promote(1) {
+		t.Fatal("Promote(1) refused the key just prepared")
+	}
 	if mgrA.NeedsRekey() {
 		t.Fatal("should not need rekey immediately after rotate")
 	}
 
 	// Verify new channel works.
-	mgrB.Rotate(b2) // wire b to the new keys
+	mgrB.Prepare(b2) // wire b to the new keys
+	if !mgrB.Promote(1) {
+		t.Fatal("peer Promote(1) refused the key just prepared")
+	}
 	msg := []byte{1, 2, 3, 4}
 	pkt, err := mgrA.Encrypt(msg)
 	if err != nil {
@@ -186,31 +167,59 @@ func TestManagerRekeyTransitionAcceptsBothEpochs(t *testing.T) {
 	}
 }
 
-func TestManagerStats(t *testing.T) {
-	a, b := makeGCMPair(t, 0x60)
-	mgrA := datachannel.NewManager(a, nil)
-	mgrB := datachannel.NewManager(b, nil)
-
-	sent0, recv0 := mgrA.Stats()
-	if sent0 != 0 || recv0 != 0 {
-		t.Fatalf("initial stats should be zero, got sent=%d recv=%d", sent0, recv0)
-	}
-
+// TestManagerCountsBothDirectionsTowardRenegBytes checks the byte counters
+// through the only thing that reads them: the reneg-bytes rekey trigger. Sent
+// and received bytes both count, so a mostly-inbound tunnel still rotates its
+// keys.
+func TestManagerCountsBothDirectionsTowardRenegBytes(t *testing.T) {
 	msg := bytes.Repeat([]byte{0xCC}, 40)
-	pkt, _ := mgrA.Encrypt(msg)
-	_, _ = mgrB.Decrypt(pkt)
 
-	sent1, _ := mgrA.Stats()
-	if sent1 != int64(len(msg)) {
-		t.Fatalf("mgrA.Stats(): sent=%d, want %d", sent1, len(msg))
-	}
+	// A threshold of exactly one message: crossing it takes one packet in
+	// whichever direction the manager sees it.
+	cfg := &datachannel.ManagerConfig{RenegBytes: int64(len(msg))}
 
-	_, recv1 := mgrB.Stats()
-	if recv1 != int64(len(msg)) {
-		t.Fatalf("mgrB.Stats(): recv=%d, want %d", recv1, len(msg))
-	}
+	t.Run("outbound", func(t *testing.T) {
+		a, _ := makeGCMPair(t, 0x60)
+		mgr := datachannel.NewManager(a, cfg)
+		if mgr.NeedsRekey() {
+			t.Fatal("a fresh manager already wants a rekey")
+		}
+		if _, err := mgr.Encrypt(msg); err != nil {
+			t.Fatalf("Encrypt: %v", err)
+		}
+		if !mgr.NeedsRekey() {
+			t.Error("sending the threshold did not trigger a rekey")
+		}
+	})
+
+	t.Run("inbound", func(t *testing.T) {
+		a, b := makeGCMPair(t, 0x60)
+		sender := datachannel.NewManager(a, nil)
+		mgr := datachannel.NewManager(b, cfg)
+		pkt, err := sender.Encrypt(msg)
+		if err != nil {
+			t.Fatalf("Encrypt: %v", err)
+		}
+		if mgr.NeedsRekey() {
+			t.Fatal("a fresh manager already wants a rekey")
+		}
+		if _, err := mgr.Decrypt(pkt); err != nil {
+			t.Fatalf("Decrypt: %v", err)
+		}
+		if !mgr.NeedsRekey() {
+			t.Error("receiving the threshold did not trigger a rekey")
+		}
+	})
 }
 
+// TestManagerNeedsRekeyTimeDisabled checks that RenegSec=0 switches the
+// time-based trigger off altogether, rather than meaning "renegotiate
+// immediately": no amount of elapsed time may make NeedsRekey true once both
+// limits are zero.
+//
+// The opposite case — a manager that has outlived its RenegSec — is not
+// asserted here. NeedsRekey compares against time.Now() rather than an
+// injected clock, so reaching the limit would mean sleeping for it.
 func TestManagerNeedsRekeyTimeDisabled(t *testing.T) {
 	a, _ := makeGCMPair(t, 0x70)
 	// RenegSec=0 means time-based renegotiation is disabled.

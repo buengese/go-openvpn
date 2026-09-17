@@ -33,7 +33,10 @@ const (
 	// P_ACK_V1 acknowledges received control-channel packets.
 	P_ACK_V1 = 0x05
 
-	// P_DATA_V1 is a legacy data channel packet (OpenVPN 2.x).
+	// P_DATA_V1 is a data channel packet with no peer-id: the opcode and
+	// key_id byte, then the packet body. A server speaks it to a client that
+	// did not advertise IV_PROTO_DATA_V2, pushing no peer-id, and the absence
+	// of that push is what selects the format (datachannel.WireFormat).
 	P_DATA_V1 = 0x06
 
 	// P_DATA_V2 is the OpenVPN3 data channel packet with peer_id header.
