@@ -26,8 +26,9 @@ func FuzzReadTCP(f *testing.F) {
 	})
 }
 
-// FuzzParseControl feeds random byte slices to ParseControl to verify it
-// never panics and always returns a non-nil error or a valid Packet.
+// FuzzParseControl feeds random byte slices to the control-packet accessors the
+// client reads with. They index into the buffer directly and are reached
+// straight from the socket, so a missing bounds check is a remote crash.
 func FuzzParseControl(f *testing.F) {
 	// Seed: minimal valid HARD_RESET packet.
 	var valid []byte
@@ -51,7 +52,10 @@ func FuzzParseControl(f *testing.F) {
 	f.Add([]byte{0x38, 0x00})
 
 	f.Fuzz(func(t *testing.T, data []byte) {
-		// Must not panic.
-		_, _ = framing.ParseControl(data)
+		// None of these may panic.
+		framing.ParseControlV1Payload(data)
+		framing.ParseControlV1AckIDs(data)
+		framing.ControlSrcSessionID(data)
+		framing.ControlDstSessionID(data)
 	})
 }

@@ -31,8 +31,6 @@ and releases follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   the release tag is the version, and the release workflows no longer check it
   against a spec, a PKGBUILD or a Cargo manifest.
 
-### Fixed
-
 ## [1.2.3] - 2026-08-19
 
 ### Fixed

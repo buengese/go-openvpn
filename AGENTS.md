@@ -132,8 +132,34 @@ Key concepts an AI agent must know:
 
 **Control channel (reliable transport)**
 - Runs over TLS, but TLS runs inside OpenVPN's own reliable layer (not raw TCP TLS)
-- Packet structure: [opcode (1 byte)][key_id (3 bits)][peer_id (24 bits)][packet_id (32 bits)][ack_array][payload]
-- Opcodes: P_CONTROL_HARD_RESET_CLIENT_V2=0x38, P_ACK_V1=0x28, P_CONTROL_V1=0x20, P_DATA_V2=0x09
+- Packet layout (`internal/framing/control.go`). There is no `peer_id` on the
+  control channel — that field belongs to P_DATA_V2 — and the ack array comes
+  **before** the packet id, not after:
+
+  ```
+  [opcode<<3 | key_id   1 B ]
+  [session_id           8 B ]   the sender's own
+  [ack_array_len        1 B ]
+  [ack_array        4 B each]   present only when ack_array_len > 0
+  [remote_session_id    8 B ]   present only when ack_array_len > 0
+  [packet_id            4 B ]   absent on P_ACK_V1
+  [payload                  ]   absent on P_ACK_V1 and on the resets
+  ```
+
+- Opcodes are the **top 5 bits** of the first byte; the low 3 are the key_id, so
+  a literal first byte is `opcode<<3 | key_id` (`framing.FirstByte`). The
+  constants in `internal/framing/opcodes.go` are the unshifted opcodes — never
+  mix them with a shifted byte:
+
+  | Constant | Value |
+  |---|---|
+  | `P_CONTROL_SOFT_RESET_V1` | `0x03` |
+  | `P_CONTROL_V1` | `0x04` |
+  | `P_ACK_V1` | `0x05` |
+  | `P_DATA_V1` | `0x06` |
+  | `P_CONTROL_HARD_RESET_CLIENT_V2` | `0x07` |
+  | `P_CONTROL_HARD_RESET_SERVER_V2` | `0x08` |
+  | `P_DATA_V2` | `0x09` |
 - Reliable layer: sequence numbers + sliding window + retransmit (matches reliable.hpp in openvpn3-core)
 - TLS bytes are fragmented across P_CONTROL_V1 packets, reassembled in order
 

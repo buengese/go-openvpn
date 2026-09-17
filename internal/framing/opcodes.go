@@ -13,7 +13,8 @@ package framing
 // The top 5 bits of the first byte of every packet carry the opcode;
 // the bottom 3 bits carry the key_id.
 //
-// Source: openvpn3-core ssl/proto.hpp lines ~100-130
+// Source: openvpn3-core ssl/proto.hpp — OPCODE_SHIFT at :222, the opcode
+// values at :227-239.
 const (
 	// P_CONTROL_HARD_RESET_CLIENT_V2 starts a new client session.
 	// Sent as the very first packet from client to server.
