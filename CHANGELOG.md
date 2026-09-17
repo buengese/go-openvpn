@@ -23,6 +23,12 @@ and releases follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - A control-channel replay window, separate from the reliable layer's own
   sequence numbers. Replayed and stale-timestamped control packets are rejected
   and counted in `diag.Counters` rather than dropped silently.
+- `netstack.Net.Ping` and `netstack.Net.Gateway`: an ICMP echo through the
+  tunnel, and the peer's own tunnel-side address to send it to. The payload is
+  chosen by the caller and echoed back verbatim, which makes it a measurement
+  rather than a reachability check — a peer that compresses the reply can be
+  detected no other way, because a tunnel carrying incompressible traffic looks
+  exactly like one whose peer never compresses. IPv4 only.
 - The `device` package: the tunnel-device seam. `device.Backend` turns the
   parameters a server pushed into a `device.Device` — raw IP packets, no framing
   — so the client core no longer knows whether they reach a kernel interface or
@@ -30,6 +36,13 @@ and releases follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   backend and is unwound in `Device.Close`. Two ship with it: `device/kernel`, a
   kernel TUN with netlink routes and host DNS, and `device/fd`, a descriptor
   whose host owns its addressing; `device.Kind` names which one a session used.
+- The `netstack` package: a userspace tunnel backend, one gVisor network stack
+  per tunnel inside this process. It implements `device.Backend` and
+  `device.Device` over a gVisor channel endpoint, creating no interface,
+  installing no route and rewriting no resolver, so several tunnels in one
+  process cannot collide over an interface name, a route table or
+  `/etc/resolv.conf`. Its `Net` mirrors the standard library's dialers, and it
+  is the only backend that needs no privilege at all.
 - `push-continuation` reassembly, in `routing.PushAccumulator`. A server whose
   reply does not fit OpenVPN's 1024-byte bundle splits it across several
   `PUSH_REPLY` messages, each but the last ending `push-continuation 2`; the
