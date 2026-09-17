@@ -32,6 +32,7 @@ covers what you are about to change:
 
 | Document | Authoritative on |
 |---|---|
+| [`docs/testing.md`](docs/testing.md) | every test pass, and the one command that runs it |
 | [`docs/openvpn3-reference-policy.md`](docs/openvpn3-reference-policy.md) | how openvpn3 may be read and cited |
 | [`docs/ci-relay.md`](docs/ci-relay.md) | `openlawsvpn-cli` relay mode in CI |
 
@@ -79,7 +80,10 @@ openvpn3-core *dependency* anywhere in the shipping stack. Reading the openvpn3
 
 - `CGO_ENABLED=0` — fully static binary, zero native dependencies
 - `gomobile bind` — produces `.aar` for Android without NDK/CMake
-- Single codebase covers Linux CLI, Android, future iOS
+- Single codebase covers Linux CLI, Android, macOS and iOS — `make check-platforms`
+  builds linux/amd64, android/arm64, darwin/arm64 and darwin/arm64 `-tags ios`;
+  `make build-macos-cli` ships the macOS CLI and `.github/workflows/xcframework.yml`
+  ships the iOS + macOS xcframework
 - F-Droid compatible — no prebuilt blobs, `./gradlew assembleRelease` is self-contained
 - Easier auditing, fuzzing (`go test -fuzz`), and contribution
 
@@ -269,101 +273,155 @@ All in openvpn3-core (https://github.com/OpenVPN/openvpn3):
 | `ssl/tlsprf.hpp` + `openssl/crypto/tls1prf.hpp` | Classic key derivation: both labels, and the `EVP_md5_sha1()` digest choice. These, not `prf/prfplus.hpp`, are what `internal/prf` cites |
 | `tun/builder/base.hpp` | TUN callback interface (what gomobile must expose) |
 
-## Legacy libopenlawsvpn C API (historical — the Go API replaced this)
+## The client API
 
-> This C API no longer exists in any shipping component. It is kept to document
-> the semantics the Go `Client` mirrors. Today the surface is the Go `Client`
-> struct plus the gomobile `MobileClient`/`MobileCallbacks` in `client_mobile.go`.
+The old `libopenlawsvpn` C API that used to be transcribed here has been
+removed. It described a library that exists in no shipping component, and its
+names no longer map onto anything: an agent reading `clientConnectPhase1` /
+`clientConnectPhase2` would go looking for Go methods of those names, which is
+exactly the stale-symbol trail this file is meant not to leave. Read the Go
+doc comments instead — they are the surface.
 
-```c
-// Allocate a new VPN client for the given .ovpn config file path.
-// Returns a handle (opaque integer) or -1 on error.
-long clientNew(const char* config_path, void* callbacks);
-
-// Phase 1: connect and get the SAML challenge.
-// Returns JSON: {"saml_url": "...", "state_id": "...", "remote_ip": "..."}
-// Blocks on the calling thread until Phase 1 completes or fails.
-const char* clientConnectPhase1(long handle);
-
-// Phase 2: complete connection with the SAML token.
-// Returns NULL on success, error string on failure.
-// Blocks until the tunnel is established.
-const char* clientConnectPhase2(long handle, const char* saml_token);
-
-// Signal disconnect. Non-blocking — clientWaitForDisconnect() waits for teardown.
-void clientDisconnect(long handle);
-
-// Block until the client has fully torn down. Call before clientFree().
-void clientWaitForDisconnect(long handle);
-
-// Free all resources. Must only be called after clientWaitForDisconnect() returns.
-void clientFree(long handle);
-
-// Callbacks (set before clientNew):
-typedef void (*tun_establish_fn)(int fd, const char* ifconfig_json);
-typedef int  (*socket_protect_fn)(int fd);
-typedef void (*log_fn)(const char* message);
-```
-
-The Go `Client` struct exposes equivalent semantics via `Connect(ctx)`,
-`Disconnect()`, `Stats()`, and the `SAMLTokenFn` / `MobileCallbacks` hooks.
+- **Library**: the `vpn.Client` in `client.go`, driven by `Connect(ctx)`
+  (`connect.go`), `Disconnect()`, `Stats()` (`client.go`). Build the profile
+  with `profile.ParsePath`, or programmatically with a `profile.Spec` —
+  hand-building a `Profile` struct skips the defaults and normalisers and is a
+  trap (`profile/spec.go`).
+- **AWS CRV1 two-phase**: `ConnectPhase2` in `reconnect.go`, plus the
+  `SAMLTokenFn` hook.
+- **gomobile (Android, iOS, macOS)**: `MobileClient` / `MobileCallbacks` in
+  `client_mobile.go`, behind `//go:build android || darwin || mobileapi` —
+  `SetCredentials`, `Connect`, `StartSAMLFlow`, `CompleteSAMLFlow`,
+  `Disconnect`, `WaitForDisconnect`, `Stats`. The `mobileapi` tag exists so this
+  surface can be tested on the host; gomobile never sets it. Run
+  `make test-mobileapi`.
 
 ## Repository layout
+
+Package `vpn` is the repository root, and it is spread over several files
+rather than one `client.go`. Nothing named `client_tun_linux.go` or
+`client_tun_android.go` exists — the tunnel device moved behind the `device/`
+seam.
 
 ```
 go-openlawsvpn/
   AGENTS.md         — this file (agent/contributor context)
   README.md         — user-facing docs, build instructions, known limitations
-  client.go         — top-level Client: Connect, Disconnect, Stats, rekey loop
-  client_tun_linux.go   — Linux TUN setup (openNativeTUN)
-  client_tun_android.go — Android TUN setup (VpnService fd)
-  client_mobile.go  — gomobile API: MobileClient, MobileCallbacks
-  profile/          — .ovpn parser
+  docs/             — the governing documents; see "The other documents" above
+
+  package vpn (repository root):
+    client.go       — the public surface: Client and its state, Disconnect,
+                      Stats, Credentials, and the Event stream a caller watches
+    connect.go      — Connect: the connect flow, CRV1 two-phase, data-channel bring-up
+    handshake.go    — TLS handshake, control-channel relay, per-key-epoch session,
+                      and the certificate check that gates the handshake
+    rekey.go        — rekeyLoop and the rekey engine
+    reconnect.go    — attempts, resumption, retry policy; ConnectPhase2
+    datapath.go     — the data path and its monitors
+    transport.go    — packet transport: framing seam, wrap seam, dial policy
+    authmethod.go   — the authMethod seam (cert / user-pass / SAML) and which
+                      secret answers which server challenge
+    advertise.go    — IV_* peer info the client advertises
+    report.go       — the diagnostic report and its redaction
+    client_mobile.go — gomobile API (android || darwin || mobileapi)
+
+  profile/          — .ovpn parser, and the Spec builder for programmatic profiles
   auth/saml/        — CRV1 SAML challenge handling, ACS server, token TTL
-  tun/              — TUN device (Linux + Android via gomobile)
-  routing/          — PUSH_REPLY parser, netlink route management (IPv4+IPv6)
-  dns/              — DNS push: resolv.conf / systemd-resolved
+  device/           — the tunnel-device seam; kernel/ and fd/ backends
+  netstack/         — userspace gVisor backend: unprivileged, touches no host state
+  tun/              — native TUN (linux, android, darwin, ios)
+  routing/          — PUSH_REPLY parser, route management (IPv4+IPv6)
+  dns/              — DNS push: resolv.conf / systemd-resolved / scutil
+  caps/             — capability registry: what a parsed profile asks for, and the
+                      generated profile fixtures the registry is graded against
+                      (caps/fixtures_test.go, caps/testdata/shape-inventory.txt)
+  diag/             — the error taxonomy, stages, preflight and gap reporting
+  relay/            — CLI agent side of the SAML relay protocol
   internal/
-    framing/        — wire format, opcodes, 2-byte length prefix
+    framing/        — wire format, opcodes, control packets, 2-byte length prefix
     reliable/       — control channel reliable transport (sliding window)
     ctls/           — TLS over control channel (crypto/tls via net.Pipe)
-    control/        — control-channel messages after TLS: PUSH_REPLY, AUTH_FAILED, RESTART/HALT, session monitor
-    prf/            — OpenVPN key derivation PRF (HMAC-SHA256) + TLS-EKM
-    crypto/         — data channel cipher suite (AES-256-GCM / CBC)
+    wrap/           — tls-auth / tls-crypt and the control-channel replay window
+    control/        — control-channel messages after TLS: PUSH_REPLY, AUTH_FAILED,
+                      RESTART/HALT, session monitor
+    keymethod2/     — the key-method-2 auth packet, both framings
+    prf/            — classic two-stage TLS-1.0-PRF key derivation + RFC 5705 EKM
+    crypto/         — data channel cipher suite (AES-GCM / CBC)
     datachannel/    — encrypt/decrypt pipeline, replay window, key rotation
-    compress/       — lz4-v2 / comp-lzo uncompressed stub framing
+    occ/            — in-band plaintexts: keepalive magic and OCC messages
+    tlsverify/      — certificate verification and its verb>=4 rendering
+    compress/       — lz4-v2 / comp-lzo framing (links no codec, compresses nothing)
     mssfix/         — software TCP MSS clamping (SYN/SYN-ACK rewrite)
-  mock/mockserver/  — pure-Go mock OpenVPN3 server (no openvpn3-core dependency)
-  testenv/          — integration test harness (starts mock server in-process)
-  cmd/cli/          — Linux CLI with SAML flow and reconnect loop
-  cmd/relay-server/ — relay server binary
+  e2e/              — every end-to-end test; tagged docker / mockserver / soak
+  testenv/          — the rig: Docker matrix, the stock-openvpn oracle, mock harness
+  testenv/mockserver/  — pure-Go mock OpenVPN server, run as a *subprocess*
+  cmd/cli/          — Linux/macOS CLI: -config, -auth-user-pass, SAML flow,
+                      -relay agent mode, -daemon, reconnect loop
+  cmd/relay-server/ — in-memory relay server for local testing
+  docker/           — server images and the captured protocol test vectors
 ```
 
 ## Development rules
 
 - Every exported function and type must have a doc comment.
-- Integration tests must be tagged `//go:build integration` and must pass against the mock server.
-- Unit tests (`go test ./...`) must pass with no network access.
-- No CGo anywhere — `CGO_ENABLED=0` must build cleanly.
-- Protocol constants go in `internal/framing/opcodes.go` with comments citing the openvpn3-core source line.
-- When in doubt about protocol behaviour: read openvpn3-core source first, then write a test against the mock server.
+- **There is no `integration` build tag.** Nothing in the tree carries
+  `//go:build integration`, so `go test -tags=integration .` selects no extra
+  test, runs the ordinary unit tests and prints `ok` — a command that looks like
+  it proved something and proved nothing. The real tags are `docker`,
+  `mockserver`, `soak`, `privileged` and `mobileapi`, and each has one make
+  target. [`docs/testing.md`](docs/testing.md) is authoritative:
+
+  | Pass | Command | Needs |
+  |---|---|---|
+  | unit | `make test` | nothing |
+  | mockserver | `make test-mock` | nothing |
+  | mobileapi | `make test-mobileapi` | nothing |
+  | docker | `make test-e2e` | Docker + `make matrix-images` |
+  | privileged | `make test-privileged` | root |
+  | soak | `make test-soak SOAK=1h` | Docker |
+
+  `make test` is the default gate: no tag, no Docker, no root, fast. The
+  acceptance suites for the parser, the dial order and the capability registry
+  run under it unconditionally, on fixtures the tests generate for themselves —
+  `caps/fixtures_test.go` and `profile/fixturedata_test.go`, from a throwaway PKI,
+  into a temporary directory. Measuring real profiles is a separate private tool
+  and not in this repository.
+- Unit tests (`make test`) must pass with no network access.
+- No CGo anywhere — `CGO_ENABLED=0` must build cleanly; `make check-platforms`
+  must build linux, android, darwin and darwin `-tags ios`.
+- Protocol constants go in `internal/framing/opcodes.go` with comments citing the
+  openvpn3-core source, per
+  [`docs/openvpn3-reference-policy.md`](docs/openvpn3-reference-policy.md) §3.3.
+- When in doubt about protocol behaviour: read the openvpn3 source first, then
+  back it with a test — a known-answer vector where the derivation or wire format
+  is security-relevant (§3.4). Length-and-determinism tests are not evidence.
 
 ## Where to start
 
 The protocol is fully implemented and tested against a real AWS Client VPN
-endpoint. Start by reading:
+endpoint. Start by reading, in order:
 
-1. `client.go` — top-level state machine; `Connect`, `connectPhase1`,
-   `connectPhase2`, `rekeyLoop`, `tunToWire`, `wireToTun`
-2. `internal/framing/opcodes.go` — all wire-format opcodes with openvpn3-core
-   source references
-3. `mock/mockserver/main.go` — the in-process mock server used by integration
-   tests; run with `go run ./mock/mockserver` to observe the full handshake
+1. `client.go` — the package doc comment and the `Client` struct; then
+   `connect.go` for `Connect`, the CRV1 two-phase path and data-channel
+   bring-up. (`connectPhase1` and `connectPhase2` no longer exist as
+   unexported methods; the exported `ConnectPhase2` lives in `reconnect.go`.)
+2. `handshake.go` and `rekey.go` — the TLS handshake relay and `rekeyLoop`.
+3. `internal/framing/opcodes.go` and `internal/framing/control.go` — the
+   wire-format opcodes and the control packet layout, with openvpn3-core
+   source references.
+4. `internal/prf/prf.go` — the key derivation, and the package doc explaining
+   what a previous wrong implementation looked like from the outside.
+5. `testenv/mockserver/main.go` — the mock OpenVPN server the CRV1 gate drives
+   **as a subprocess** (`testenv/testenv.go`, `startBinary`), not in-process.
+   Run `go run ./testenv/mockserver` to watch the full handshake as JSON lines.
 
-To run integration tests against the local mock:
+To run the mock-server pass:
 ```bash
-go test -v -tags=integration -timeout 120s .
+make test-mock
 ```
+
+`go test -tags=integration` is **not** a thing here — see "Development rules".
+[`docs/testing.md`](docs/testing.md) lists every pass.
 
 To build and run the CLI (requires root for TUN):
 ```bash
@@ -371,4 +429,10 @@ go build -o /tmp/openlawsvpn-cli ./cmd/cli
 sudo /tmp/openlawsvpn-cli -config path/to/profile.ovpn
 ```
 
-**NOTE:** The CLI uses `-config <path>` as a named flag. There is no positional argument and no `connect` subcommand.
+**NOTE:** The CLI uses `-config <path>` as a named flag. There is no positional
+argument and no `connect` subcommand. Beside `-config` it takes `-auth-user-pass`
+(a credentials file, for non-SAML profiles), the SAML token inputs
+(`-saml-token`, `-saml-token-file`, `-saml-token-fd`, `-browser`), relay agent
+mode (`-relay`, `-relay-endpoint`, `-relay-token-file`, `-relay-token-fd`,
+`-agent-id`, `-hostname`), and `-daemon` / `-pidfile` / `-logfile`. Read
+`cmd/cli/main.go` rather than this list if it matters.

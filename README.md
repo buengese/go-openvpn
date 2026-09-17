@@ -117,20 +117,26 @@ certificate.
 ## Test
 
 ```bash
-# Unit tests (no network):
-go test -race ./...
+# The default gate — no build tag, no Docker, no root:
+make test
 
-# Integration tests (runs local mock server — no Docker required):
-go test -v -tags=integration -timeout 120s .
+# End-to-end against the local mock server — no Docker either:
+make test-mock
 ```
+
+The other passes — mobileapi, docker, privileged and soak — each have their own
+`make` target; `make test` runs the mobileapi one as well, because it needs
+nothing. There is no `integration` tag: [docs/testing.md](docs/testing.md)
+lists every pass, the one command that runs it, and what it costs.
 
 ## CI / CD
 
 | Workflow | Trigger | What it does |
 |---|---|---|
-| **CI** (`ci.yml`) | push / PR to `main` | Go builds, race tests, and vet |
+| **CI** (`ci.yml`) | push / PR to `main` or `dev` | Go builds, race tests, and vet; also drives the CLI against the mock server on ubuntu and macOS, with and without `redirect-gateway` |
 | **Build AAR** (`aar.yml`) | push tag `v*` or manual | builds `go-openlawsvpn.aar` via `gomobile bind`, publishes GitHub Release, opens a version-bump PR on `openlawsvpn-android-go` |
-| **Release** (`release.yml`) | push tag `v*` or manual | builds static `cli` binaries for amd64 / arm64 / ppc64le, attaches them to the GitHub Release |
+| **Build xcframework** (`xcframework.yml`) | push tag `v*` or manual | builds `go-openlawsvpn.xcframework` for ios / iossimulator / macos, attaches the zip and its SHA-256 to the GitHub Release, dispatches a `bump-xcframework` event to `openlawsvpn-ios` |
+| **Release** (`release.yml`) | push tag `v*` or manual | builds the static `cli` binary for linux amd64 / arm64 / ppc64le and darwin arm64 / amd64, GPG-signs and attests each, attaches them to the GitHub Release |
 | **VPN Integration** (`vpn-integration.yml`) | manual | integration run against a live endpoint |
 
 ### Publishing a new release

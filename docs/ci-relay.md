@@ -18,14 +18,17 @@ CI runner                       Relay (AWS)              Operator (phone/desktop
 ─────────                       ───────────              ───────────────────────
 openlawsvpn-cli -relay-token-file <mode-0600-file>
   -daemon                ──WS──▶  relay.openlawsvpn.com  ◀──REST──  app lists agents
-  prints: daemon started (pid N)                                      taps Connect
-  pipeline continues immediately                                      SAML browser flow
+  registers, then blocks                                              taps Connect
+  waiting for the operator                                            SAML browser flow
                                                                       POST /session/…/execute
-       │  (background)
+       │  (foreground, still blocked)
        ▼
   ConnectPhase2()  ◀──── WS push: phase2 payload ─────────────────────────────────┘
   tunnel up
   agent sends status=connected
+  forks to background
+  prints: daemon started (pid N)
+  foreground exits 0 — pipeline continues
 ```
 
 The runner never handles Phase 1 or the browser SSO flow.
