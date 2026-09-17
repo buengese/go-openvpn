@@ -23,6 +23,13 @@ and releases follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - A control-channel replay window, separate from the reliable layer's own
   sequence numbers. Replayed and stale-timestamped control packets are rejected
   and counted in `diag.Counters` rather than dropped silently.
+- `push-continuation` reassembly, in `routing.PushAccumulator`. A server whose
+  reply does not fit OpenVPN's 1024-byte bundle splits it across several
+  `PUSH_REPLY` messages, each but the last ending `push-continuation 2`; the
+  client read the first and brought the tunnel up with whatever part of the
+  configuration happened to fit. Fragments are now joined before anything is
+  parsed, bounded at `routing.MaxPushFragments` — 64, because the reference
+  bounds it not at all and the loop is peer-controlled.
 - Pushed `tun-mtu` and pushed `auth` are read: `routing.PushOptions.TunMTU` and
   `routing.PushOptions.Auth`. Both were discarded before, so a server that sized
   the tunnel or chose the data-channel digest for the session was overruled by

@@ -31,6 +31,9 @@
 //   - mssfix <n> — TCP MSS clamp
 //   - auth-token <token> — credential for later renegotiations
 //
+// push-continuation, which frames a reply the server split across several
+// control messages, is handled by PushAccumulator in push_continuation.go.
+//
 // Parsing is pure Go and requires no special privileges. Applying routes
 // requires CAP_NET_ADMIN on Linux and root on macOS.
 //
