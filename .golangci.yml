@@ -1,24 +1,41 @@
+version: "2"
 run:
-  timeout: 5m
+  # One tag per suite; see docs/testing.md. golangci-lint takes a single set,
+  # so it analyses the union — which is what is wanted, since a file no tag
+  # selects is a file nothing lints.
   build-tags:
-    - integration
-
+    - docker
+    - mockserver
+    - privileged
+    - mobileapi
+    - soak
 linters:
   enable:
-    - errcheck
-    - gosimple
-    - govet
-    - ineffassign
-    - staticcheck
-    - unused
-    - gofmt
-    - goimports
     - misspell
     - revive
-
-linters-settings:
-  revive:
-    rules:
-      - name: exported
-        arguments:
-          - checkPrivateReceivers: true
+  settings:
+    revive:
+      rules:
+        - name: exported
+          arguments:
+            - checkPrivateReceivers
+  exclusions:
+    generated: lax
+    presets:
+      - common-false-positives
+      - legacy
+      - std-error-handling
+    paths:
+      - third_party$
+      - builtin$
+      - examples$
+formatters:
+  enable:
+    - gofmt
+    - goimports
+  exclusions:
+    generated: lax
+    paths:
+      - third_party$
+      - builtin$
+      - examples$

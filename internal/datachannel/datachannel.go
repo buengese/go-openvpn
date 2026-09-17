@@ -128,8 +128,9 @@ func (c *Channel) Encrypt(plaintext []byte) ([]byte, error) {
 // AAD = header(4B) + packet_id(4B)
 //
 // Reference: openvpn3-core crypto/crypto_aead.hpp encrypt() sample comment:
-//   48000001 00000005 7e7046bd 444a7e28 cc6387b1 64a4d6c1 380275a...
-//   [ OP32 ] [seq # ] [             auth tag            ] [ payload ... ]
+//
+//	48000001 00000005 7e7046bd 444a7e28 cc6387b1 64a4d6c1 380275a...
+//	[ OP32 ] [seq # ] [             auth tag            ] [ payload ... ]
 func (c *Channel) encryptGCM(header []byte, seq uint32, plaintext []byte) ([]byte, error) {
 	// AAD = header || packet_id (both authenticated but not encrypted)
 	var seqBuf [4]byte

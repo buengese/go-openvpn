@@ -807,14 +807,6 @@ func buildPushReply() string {
 	return base + "\x00"
 }
 
-// min returns the smaller of a and b.
-func min(a, b int) int {
-	if a < b {
-		return a
-	}
-	return b
-}
-
 // ---- TCP framing -------------------------------------------------------------
 
 func readTCP(r io.Reader) ([]byte, error) {

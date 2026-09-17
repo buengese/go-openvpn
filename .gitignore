@@ -43,3 +43,7 @@ go.work.sum
 
 # mock FC build results
 /tmp/
+
+# make build-bins output
+/bin/
+

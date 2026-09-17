@@ -78,18 +78,18 @@ func generateSelfSigned(t *testing.T) (serverTLS *tls.Config, clientTLS *tls.Con
 	caPool.AddCert(caCert)
 
 	serverTLS = &tls.Config{
-		Certificates:         []tls.Certificate{srvCert},
-		ClientCAs:            caPool,
-		ClientAuth:           tls.NoClientCert,
-		MinVersion:           tls.VersionTLS12,
-		MaxVersion:           tls.VersionTLS12,
+		Certificates:           []tls.Certificate{srvCert},
+		ClientCAs:              caPool,
+		ClientAuth:             tls.NoClientCert,
+		MinVersion:             tls.VersionTLS12,
+		MaxVersion:             tls.VersionTLS12,
 		SessionTicketsDisabled: true,
 	}
 	clientTLS = &tls.Config{
-		RootCAs:              caPool,
-		ServerName:           "127.0.0.1",
-		MinVersion:           tls.VersionTLS12,
-		MaxVersion:           tls.VersionTLS12,
+		RootCAs:                caPool,
+		ServerName:             "127.0.0.1",
+		MinVersion:             tls.VersionTLS12,
+		MaxVersion:             tls.VersionTLS12,
 		SessionTicketsDisabled: true,
 	}
 	return serverTLS, clientTLS
@@ -124,7 +124,7 @@ func TestHandshakeOverNetPipe(t *testing.T) {
 	// Close both concurrently to avoid close_notify deadlock on net.Pipe.
 	t.Cleanup(func() {
 		go clientConn.Close() //nolint:errcheck
-		res.conn.Close()       //nolint:errcheck
+		res.conn.Close()      //nolint:errcheck
 	})
 
 	// Verify TLS version negotiated.
@@ -163,7 +163,7 @@ func TestSendReceive(t *testing.T) {
 	}
 	t.Cleanup(func() {
 		go clientConn.Close() //nolint:errcheck
-		srvConn.Close()        //nolint:errcheck
+		srvConn.Close()       //nolint:errcheck
 	})
 
 	// Client writes concurrently with server read — net.Pipe has no buffer.

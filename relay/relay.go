@@ -383,8 +383,7 @@ func (w *wsConn) close() {
 // Reassembles fragmented messages (FIN=0 frames), handles control frames
 // (ping/pong/close), and skips empty data frames used as keepalives.
 func (w *wsConn) readMessage(ctx context.Context) ([]byte, error) {
-	var msg []byte     // accumulated message payload across fragments
-	var msgOpcode byte // opcode of the first fragment
+	var msg []byte // accumulated message payload across fragments
 
 	for {
 		if ctx.Err() != nil {
@@ -450,8 +449,6 @@ func (w *wsConn) readMessage(ctx context.Context) ([]byte, error) {
 				}
 				result := msg
 				msg = nil
-				msgOpcode = 0
-				_ = msgOpcode
 				return result, nil
 			}
 		case 0x1, 0x2: // text or binary — start of a new message
@@ -462,7 +459,6 @@ func (w *wsConn) readMessage(ctx context.Context) ([]byte, error) {
 				return payload, nil
 			}
 			// First fragment: save opcode, accumulate payload.
-			msgOpcode = opcode
 			msg = append(msg[:0], payload...)
 		case 0x8: // close
 			return nil, fmt.Errorf("relay: server closed connection")

@@ -2833,11 +2833,6 @@ func buildHardReset(clientSID [8]byte) []byte {
 	return b
 }
 
-// buildControlV1 builds a P_CONTROL_V1 packet with key_id=0 (initial session).
-func buildControlV1(senderSID, remoteSID [8]byte, packetID uint32, ackIDs []uint32, payload []byte) []byte {
-	return buildControlV1WithKeyID(senderSID, remoteSID, 0, packetID, ackIDs, payload)
-}
-
 // buildControlV1WithKeyID builds a P_CONTROL_V1 packet with an explicit key_id.
 // Used for renegotiated sessions where key_id > 0.
 //

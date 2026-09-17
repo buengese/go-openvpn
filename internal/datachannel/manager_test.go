@@ -53,8 +53,8 @@ func TestManagerBasicRoundTrip(t *testing.T) {
 func TestManagerByteThreshold(t *testing.T) {
 	a, _ := makeGCMPair(t, 0x20)
 	mgr := datachannel.NewManager(a, &datachannel.ManagerConfig{
-		RenegSec:   0,    // disable time limit
-		RenegBytes: 100,  // trigger after 100 bytes
+		RenegSec:   0,   // disable time limit
+		RenegBytes: 100, // trigger after 100 bytes
 	})
 
 	if mgr.NeedsRekey() {

@@ -13,9 +13,9 @@
 // removes it on disconnect.
 //
 // These tests cover:
-//   1. parseRouteGateway — the netlink response parser (pure unit test, no root)
-//   2. LookupGateway — loopback sanity check (no root)
-//   3. AddBypassRoute / DeleteBypassRoute — real netlink writes (root required)
+//  1. parseRouteGateway — the netlink response parser (pure unit test, no root)
+//  2. LookupGateway — loopback sanity check (no root)
+//  3. AddBypassRoute / DeleteBypassRoute — real netlink writes (root required)
 package routing
 
 import (
@@ -41,9 +41,9 @@ func buildFakeRouteReply(gw net.IP) []byte {
 	totalLen := nlmsgHdrSize + rtmsgSize + len(gwAttr)
 	buf := make([]byte, totalLen)
 
-	binary.LittleEndian.PutUint32(buf[0:4], uint32(totalLen)) // nlmsg_len
+	binary.LittleEndian.PutUint32(buf[0:4], uint32(totalLen))  // nlmsg_len
 	binary.LittleEndian.PutUint16(buf[4:6], unix.RTM_NEWROUTE) // nlmsg_type
-	buf[nlmsgHdrSize] = unix.AF_INET                            // rtmsg.Family
+	buf[nlmsgHdrSize] = unix.AF_INET                           // rtmsg.Family
 
 	copy(buf[nlmsgHdrSize+rtmsgSize:], gwAttr)
 	return buf

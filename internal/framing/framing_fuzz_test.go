@@ -43,7 +43,7 @@ func FuzzParseControl(f *testing.F) {
 	ack = append(ack, framing.FirstByte(framing.P_ACK_V1, 0))
 	ack = append(ack, make([]byte, 8)...) // session_id
 	ack = append(ack, 1)                  // ack_array_len = 1
-	ack = append(ack, 0, 0, 0, 7)        // acked packet_id = 7
+	ack = append(ack, 0, 0, 0, 7)         // acked packet_id = 7
 	ack = append(ack, make([]byte, 8)...) // remote_session_id
 	f.Add(ack)
 

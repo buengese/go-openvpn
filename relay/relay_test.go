@@ -597,15 +597,6 @@ func (s *testRelayServer) waitConnected(t *testing.T, timeout time.Duration) {
 	}
 }
 
-func (s *testRelayServer) dropCurrentConn() {
-	s.mu.Lock()
-	conn := s.currentConn
-	s.mu.Unlock()
-	if conn != nil {
-		conn.Close()
-	}
-}
-
 func (s *testRelayServer) pushPhase2(sessionID, stateID, samlResponse, remoteIP, ovpnConfig string) {
 	msg, _ := json.Marshal(map[string]any{
 		"action":     "phase2",

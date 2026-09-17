@@ -98,7 +98,7 @@ func TestParseControlAck(t *testing.T) {
 	raw = append(raw, framing.FirstByte(framing.P_ACK_V1, 0))
 	raw = append(raw, make([]byte, 8)...) // session_id
 	raw = append(raw, 1)                  // ack_array_len = 1
-	raw = append(raw, 0, 0, 0, 7)        // acked packet_id = 7
+	raw = append(raw, 0, 0, 0, 7)         // acked packet_id = 7
 	raw = append(raw, make([]byte, 8)...) // remote_session_id
 
 	p, err := framing.ParseControl(raw)

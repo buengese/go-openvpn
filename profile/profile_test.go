@@ -216,7 +216,9 @@ func TestParsePath(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	f.WriteString("remote vpn.example.com 443\nproto tcp-client\n")
+	if _, err := f.WriteString("remote vpn.example.com 443\nproto tcp-client\n"); err != nil {
+		t.Fatal(err)
+	}
 	f.Close()
 
 	p, err := profile.ParsePath(f.Name())

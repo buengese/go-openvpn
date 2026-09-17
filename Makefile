@@ -96,9 +96,28 @@ build-bins:
 test-integration-cli: build-bins
 	bash scripts/cli-integration.sh
 
-## Run go vet
+## Run go vet (both build configurations) and golangci-lint
+## golangci-lint must be v2.x; the config uses the v2 schema. A binary built
+## with an older Go than go.mod's target refuses to start, so keep it current:
+##   go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@latest
 lint:
 	go vet ./...
+	go vet -tags=mockserver ./...
+	go vet -tags=docker ./...
+	go vet -tags=privileged ./...
+	go vet -tags=soak ./...
+	go vet -tags=mobileapi ./...
+	# The ios-tagged files are reachable only under a darwin GOOS, so vetting
+	# them needs the same spelling check-platforms builds them with. Without
+	# this, dns/dns_ios.go, routing/netlink_ios.go and tun/tun_ios.go were
+	# linted by nothing at all.
+	GOOS=darwin GOARCH=arm64 go vet -tags=ios ./...
+	@command -v golangci-lint >/dev/null 2>&1 || { \
+	  echo "golangci-lint not found — run:"; \
+	  echo "  go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@latest"; \
+	  exit 1; \
+	}
+	golangci-lint run ./...
 
 ## Remove build artefacts
 clean:

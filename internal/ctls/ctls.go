@@ -266,7 +266,7 @@ func Accept(inner net.Conn, cfg *tls.Config) (*Conn, error) {
 // and (via reflection or a custom crypto/tls build) the TLS master secret for
 // OpenVPN key derivation via prf.ExpandKeys.
 func (c *Conn) TLSState() tls.ConnectionState {
-	return c.Conn.ConnectionState()
+	return c.ConnectionState()
 }
 
 // NewPipeConnPair returns two ControlTransports wired together via net.Pipe.
@@ -286,12 +286,11 @@ type netPipeTransport struct {
 // timeoutError is a net.Error indicating a deadline exceeded.
 type timeoutError struct{}
 
-func (e *timeoutError) Error() string   { return "ctls: deadline exceeded" }
-func (e *timeoutError) Timeout() bool   { return true }
+// Error implements the error interface.
+func (e *timeoutError) Error() string { return "ctls: deadline exceeded" }
+
+// Timeout reports that this error is a timeout, satisfying net.Error.
+func (e *timeoutError) Timeout() bool { return true }
+
+// Temporary reports that this error is transient, satisfying net.Error.
 func (e *timeoutError) Temporary() bool { return true }
-
-type pipeAddr struct{}
-
-func (pipeAddr) Network() string { return "pipe" }
-func (pipeAddr) String() string  { return "pipe" }
-
