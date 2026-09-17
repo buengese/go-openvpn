@@ -1,119 +1,659 @@
-// Package compress implements the OpenVPN3 data-channel compression framing
-// stubs for the 'compress lz4' and 'comp-lzo' options pushed by the server.
+// Package compress implements OpenVPN's data-channel compression *framing*.
 //
-// Background:
+// It links no codec and compresses nothing, ever. What it does is put the
+// bytes on the wire that a peer configured for compression expects to see, and
+// take them off again — and refuse, loudly and by a typed error, a payload the
+// peer genuinely compressed.
 //
-// Some OpenVPN servers push a 'compress lz4' or 'comp-lzo' option inside
-// PUSH_REPLY. When active, each data-channel payload is prefixed with a
-// one-byte compression opcode:
+// # Why framing alone is enough, and why it is load-bearing
 //
-//	0x69 — data is NOT compressed (lz4 stub byte, used as a pass-through)
-//	0xfa — data IS lz4-compressed (not implemented; never sent by this client)
+// A peer with a compression directive frames *every* data packet, whether or
+// not it compressed that packet, and drops what it cannot parse. A client that
+// sends an unframed packet to such a peer is silently dropped, and a client
+// that strips the wrong number of bytes hands the tunnel an IP packet shifted
+// by one — one that decrypts cleanly, passes every authentication check, and
+// means nothing.
 //
-// go-openlawsvpn does not link liblz4 (CGO_ENABLED=0), so it only supports the
-// pass-through path (no actual compression). Sending 0x69 on every packet is
-// safe and interoperable with openvpn3-core: the server accepts it and does
-// not compress replies either, because the client never set the LZ4 capability
-// flag in the handshake options.
+// # The four framings
 //
-// Reference: openvpn3-core compress/compress.hpp, compress/lz4.hpp
+// There are four distinct shapes on the wire, and which one applies is decided
+// by the directive *and* its COMP_F_SWAP flag rather than by the algorithm's
+// name. All four were measured from real 2.4.12, 2.5.11 and 2.6.22 peers; see
+// docker/COMPRESSION-VECTORS.md §6 and testdata/vectors.json.
+//
+//	directive           payload           wire
+//	comp-lzo            not compressed    0xFA ‖ plain
+//	comp-lzo            compressed        0x66 ‖ LZO(plain)
+//	compress (bare)     not compressed    0xFB ‖ plain[1:] ‖ plain[0]
+//	compress lz4        not compressed    0xFB ‖ plain[1:] ‖ plain[0]
+//	compress lz4        compressed        0x69 ‖ LZ4(plain), swapped the same way
+//	compress lz4-v2     not compressed    plain, unchanged
+//	compress lz4-v2     compressed        0x50 0x01 ‖ LZ4(plain)
+//	compress stub-v2    not compressed    plain, unchanged
+//	comp-lzo no         not compressed    0xFA ‖ plain
+//
+// The swap is the one a reading of the header cannot predict: the framing byte
+// *replaces* the payload's first byte, which moves to the tail, so that the
+// rest of the payload keeps its alignment. Prepending where OpenVPN swaps
+// shifts every subsequent byte by one, which is the shape of corruption that
+// looks like a decryption failure.
+//
+// # References
+//
+// Read from the OpenVPN 2.4.12, 2.5.11 and 2.6.22 release tarballs the test rig
+// pins (SHA-256 in docker/openvpn-server/versions.env):
+//
+//   - src/openvpn/comp.h — the framing bytes and COMP_F_SWAP
+//   - src/openvpn/options.c, add_option() — which directive sets which flags
+//   - src/openvpn/lzo.c — lzo_compress(), lzo_decompress()
+//   - src/openvpn/compstub.c — stub_compress(), stubv2_decompress()
+//   - src/openvpn/comp-lz4.c — lz4_compress(), lz4v2_compress()
+//   - src/openvpn/comp.c — check_compression_settings_valid()
 package compress
 
 import (
+	"errors"
 	"fmt"
-	"log"
+	"strings"
 )
 
-// Mode describes the compression mode negotiated with the server.
+// OpenVPN's compression framing bytes, from src/openvpn/comp.h.
+//
+// 0x69 announces an LZ4-compressed payload and 0xFA an uncompressed one. A
+// reading of comp.h says so, and the vectors in testdata/vectors.json confirm
+// it from a real peer's wire bytes.
+const (
+	// lzoCompressByte is LZO_COMPRESS_BYTE: the payload behind it IS
+	// LZO-compressed.
+	lzoCompressByte = 0x66
+	// lz4CompressByte is LZ4_COMPRESS_BYTE: the payload behind it IS
+	// LZ4-compressed.
+	lz4CompressByte = 0x69
+	// noCompressByte is NO_COMPRESS_BYTE: prepended, payload not compressed.
+	noCompressByte = 0xFA
+	// noCompressByteSwap is NO_COMPRESS_BYTE_SWAP: payload not compressed,
+	// and its first byte has been moved to the tail to keep the remainder
+	// aligned.
+	noCompressByteSwap = 0xFB
+	// algV2IndicatorByte is COMP_ALGV2_INDICATOR_BYTE, the first byte of the
+	// two-byte v2 header.
+	algV2IndicatorByte = 0x50
+	// algV2UncompressedByte is COMP_ALGV2_UNCOMPRESSED_BYTE, the second byte
+	// of that header when the payload is not compressed. It is what every
+	// v2 *decoder* in 2.4.12, 2.5.11 and 2.6.22 checks for.
+	algV2UncompressedByte = 0x00
+	// algV2LZ4Byte is COMP_ALGV2_LZ4_BYTE, the second byte of that header
+	// when the payload is LZ4-compressed.
+	algV2LZ4Byte = 0x01
+	// algV2UncompressedAlgID is COMP_ALGV2_UNCOMPRESSED, the *algorithm id* 10,
+	// which compv2_escape_data_ifneeded() writes where its own decoder checks
+	// for algV2UncompressedByte — see the comment on Wrap's v2 case.
+	algV2UncompressedAlgID = 0x0A
+)
+
+// Framing is the wire framing a mode uses, which is not the same question as
+// which algorithm it names: COMP_F_SWAP is an option flag rather than a
+// property of the codec, so two modes over one algorithm can differ on it.
+type Framing int
+
+// The four framings OpenVPN puts on a data-channel payload. The prepending and
+// swapping forms are distinct: COMP_F_SWAP is set independently of the
+// algorithm, so the two cannot be one framing.
+const (
+	// FramingNone adds nothing on send and strips nothing on receive.
+	FramingNone Framing = iota
+	// FramingV1 prepends one byte: the algorithm's compress marker, or
+	// NO_COMPRESS_BYTE. Used by comp-lzo, and by the non-swapping stub that
+	// "comp-lzo no" selects.
+	FramingV1
+	// FramingV1Swap writes one byte in place of the payload's first byte and
+	// moves that byte to the tail. Used by bare "compress" and by
+	// "compress lz4" — every mode carrying COMP_F_SWAP.
+	FramingV1Swap
+	// FramingV2 writes nothing at all for an uncompressed payload, and a
+	// 0x50 indicator plus an algorithm byte otherwise. Used by
+	// "compress lz4-v2" and "compress stub-v2".
+	FramingV2
+)
+
+// String names the framing as this package's documentation does.
+func (f Framing) String() string {
+	switch f {
+	case FramingNone:
+		return "none"
+	case FramingV1:
+		return "v1-prepend"
+	case FramingV1Swap:
+		return "v1-swap"
+	case FramingV2:
+		return "v2"
+	default:
+		return fmt.Sprintf("Framing(%d)", int(f))
+	}
+}
+
+// Mode is the compression setting in force on the data channel: an algorithm
+// together with the option flags that decide its framing.
+//
+// It is deliberately finer-grained than the algorithm name. Bare "compress"
+// and "comp-lzo no" both select COMP_ALG_STUB and neither ever compresses, yet
+// they put different bytes on the wire, because only the first carries
+// COMP_F_SWAP — a flag the directive does not spell out.
 type Mode int
 
+// The compression modes this client can frame for. None of them compresses on
+// send; ModeLZO, ModeLZ4 and ModeLZ4v2 differ from the stubs only in that a
+// peer using them may compress, which Unwrap refuses with ErrCompressed.
 const (
-	// ModeNone means no compression framing (most servers, including AWS Client VPN).
+	// ModeNone is no compression framing at all: nothing is added on send
+	// and nothing is stripped on receive. It is what a profile with no
+	// compression directive gets, and what most servers push.
 	ModeNone Mode = iota
-	// ModeLZ4 means 'compress lz4' was pushed; stub byte 0x69 is prepended on send.
-	ModeLZ4
-	// ModeLZO means 'comp-lzo' was pushed; framing is not implemented.
-	// A warning is logged and packets pass through without modification.
+	// ModeStub is bare "compress" (and "compress stub"): COMP_ALG_STUB with
+	// COMP_F_SWAP.
+	ModeStub
+	// ModeStubNoSwap is "comp-lzo no": COMP_ALG_STUB with no flags, which is
+	// the only spelling that reaches the non-swapping stub framing.
+	ModeStubNoSwap
+	// ModeLZO is "comp-lzo", "comp-lzo yes", "comp-lzo adaptive" and
+	// "compress lzo": COMP_ALG_LZO, which never swaps —
+	// lzo_compress_init() asserts !(flags & COMP_F_SWAP).
 	ModeLZO
+	// ModeLZ4 is "compress lz4": COMP_ALG_LZ4 with COMP_F_SWAP, which
+	// lz4_compress_init() asserts is set.
+	ModeLZ4
+	// ModeLZ4v2 is "compress lz4-v2": COMP_ALGV2_LZ4, the v2 framing that
+	// adds nothing unless it compressed.
+	ModeLZ4v2
+	// ModeStubV2 is "compress stub-v2": COMP_ALGV2_UNCOMPRESSED, the v2
+	// framing with no codec behind it, which is a way of asking for no
+	// framing at all.
+	ModeStubV2
 )
 
-// stubByte is prepended to every outgoing payload when ModeLZ4 is active.
-// 0x69 signals "not compressed" in the openvpn3-core lz4 framing.
-// Reference: openvpn3-core compress/lz4.hpp COMPRESS_STUB_V2
-const stubByte = byte(0x69)
+// String returns the directive that selects this mode, as a .ovpn file or a
+// PUSH_REPLY spells it. It is the protocol's own vocabulary rather than a
+// diagnostic one, which is why it can serve both.
+func (m Mode) String() string {
+	switch m {
+	case ModeNone:
+		return "none"
+	case ModeStub:
+		return "compress"
+	case ModeStubNoSwap:
+		return "comp-lzo no"
+	case ModeLZO:
+		return "comp-lzo"
+	case ModeLZ4:
+		return "compress lz4"
+	case ModeLZ4v2:
+		return "compress lz4-v2"
+	case ModeStubV2:
+		return "compress stub-v2"
+	default:
+		return fmt.Sprintf("Mode(%d)", int(m))
+	}
+}
 
-// ParseMode inspects the options from a PUSH_REPLY string and returns the
-// appropriate compression Mode.  It scans for "compress lz4" or "comp-lzo"
-// among the comma-separated option tokens.
+// Algorithm returns OpenVPN's own name for the algorithm behind the mode:
+// "lzo", "stub", "stubv2", "lz4" or "lz4v2", matching the compress_alg.name
+// field the capture recorded. ModeNone has none and returns "".
+func (m Mode) Algorithm() string {
+	switch m {
+	case ModeNone:
+		return ""
+	case ModeStub, ModeStubNoSwap:
+		return "stub"
+	case ModeLZO:
+		return "lzo"
+	case ModeLZ4:
+		return "lz4"
+	case ModeLZ4v2:
+		return "lz4v2"
+	case ModeStubV2:
+		return "stubv2"
+	default:
+		return ""
+	}
+}
+
+// Framing returns the wire framing this mode uses.
+func (m Mode) Framing() Framing {
+	switch m {
+	case ModeNone:
+		return FramingNone
+	case ModeLZO, ModeStubNoSwap:
+		return FramingV1
+	case ModeStub, ModeLZ4:
+		return FramingV1Swap
+	case ModeLZ4v2, ModeStubV2:
+		return FramingV2
+	default:
+		return FramingNone
+	}
+}
+
+// Compresses reports whether a peer in this mode may put a genuinely
+// compressed payload on the wire. The stub modes never can: only ModeLZO,
+// ModeLZ4 and ModeLZ4v2 yield ErrCompressed, and only they are refused by
+// "allow-compression no".
+func (m Mode) Compresses() bool {
+	switch m {
+	case ModeLZO, ModeLZ4, ModeLZ4v2:
+		return true
+	default:
+		return false
+	}
+}
+
+// Overhead is the number of bytes this mode's framing adds to an uncompressed
+// payload on send: 1 for the two one-byte framings, 0 for the rest. A v2
+// framing adds nothing unless the payload's first byte collides with the
+// indicator, which no IP packet's does.
+func (m Mode) Overhead() int {
+	switch m.Framing() {
+	case FramingV1, FramingV1Swap:
+		return 1
+	default:
+		return 0
+	}
+}
+
+// compressMarker returns the framing byte that announces a genuinely
+// compressed payload in this mode, and whether the mode has one. For the v2
+// framings it is the *second* header byte rather than the first.
+func (m Mode) compressMarker() (byte, bool) {
+	switch m {
+	case ModeLZO:
+		return lzoCompressByte, true
+	case ModeLZ4:
+		return lz4CompressByte, true
+	case ModeLZ4v2:
+		return algV2LZ4Byte, true
+	default:
+		return 0, false
+	}
+}
+
+// AllowCompression is the --allow-compression policy, which 2.5 introduced and
+// which decides whether a compressing algorithm may be enabled at all.
+type AllowCompression int
+
+// The --allow-compression values, from src/openvpn/options.c, add_option().
+const (
+	// AllowUnset is the directive being absent, which is OpenVPN's default
+	// and places no restriction of its own.
+	AllowUnset AllowCompression = iota
+	// AllowNo is "allow-compression no": COMP_F_ALLOW_STUB_ONLY. A framing
+	// stub stays legal; an algorithm that can compress is refused, which is
+	// what check_compression_settings_valid() enforces.
+	AllowNo
+	// AllowAsym is "allow-compression asym": accept a compressed payload from
+	// the peer, never send one. This client does neither, so it is recorded
+	// and changes nothing.
+	AllowAsym
+	// AllowYes is "allow-compression yes": compression permitted in both
+	// directions. It is the only value under which a 2.5 or 2.6 peer will
+	// compress on send at all.
+	AllowYes
+)
+
+// String names the policy as the directive spells its argument.
+func (a AllowCompression) String() string {
+	switch a {
+	case AllowUnset:
+		return "unset"
+	case AllowNo:
+		return "no"
+	case AllowAsym:
+		return "asym"
+	case AllowYes:
+		return "yes"
+	default:
+		return fmt.Sprintf("AllowCompression(%d)", int(a))
+	}
+}
+
+// ParseAllowCompression maps the argument of an --allow-compression directive
+// to a policy, reporting false for a value OpenVPN would refuse.
+func ParseAllowCompression(arg string) (AllowCompression, bool) {
+	switch strings.ToLower(strings.TrimSpace(arg)) {
+	case "no":
+		return AllowNo, true
+	case "asym":
+		return AllowAsym, true
+	case "yes":
+		return AllowYes, true
+	default:
+		return AllowUnset, false
+	}
+}
+
+// ModeForDirective maps a compression directive — keyword and optional
+// argument — to the Mode whose framing it selects, reporting false for a
+// keyword that is not a compression directive or an argument OpenVPN refuses.
 //
-// If 'comp-lzo' is detected a warning is logged; the tunnel will continue but
-// may not carry traffic correctly if the server actually compresses payloads.
-func ParseMode(pushReply string) Mode {
-	// Split by comma and scan each token.
-	for i := 0; i < len(pushReply); {
-		j := i
-		for j < len(pushReply) && pushReply[j] != ',' {
-			j++
-		}
-		token := trim(pushReply[i:j])
-		i = j + 1
+// This is the single place the directive-to-flags table lives: the profile
+// parser, the PUSH_REPLY parser and ParseMode all go through it, because a
+// mode the profile spells one way and the push spells another must still frame
+// the same.
+//
+// Reference: src/openvpn/options.c, add_option(), the "comp-lzo" and
+// "compress" cases, verified against the 2.4.12 tarball the rig pins.
+func ModeForDirective(keyword, arg string) (Mode, bool) {
+	keyword = strings.ToLower(strings.TrimSpace(keyword))
+	arg = strings.ToLower(strings.TrimSpace(arg))
 
-		switch token {
-		case "compress lz4", "compress lz4-v2":
-			return ModeLZ4
-		case "comp-lzo", "comp-lzo no":
-			log.Println("compress: comp-lzo not supported, tunnel may fail if server compresses payloads")
-			return ModeLZO
+	switch keyword {
+	case "comp-lzo":
+		// Bare and "adaptive" differ from "yes" only in COMP_F_ADAPTIVE,
+		// which decides how eagerly the peer *attempts* compression. The
+		// framing is identical, so all three are ModeLZO.
+		switch arg {
+		case "", "yes", "adaptive":
+			return ModeLZO, true
+		case "no":
+			// COMP_ALG_STUB with flags 0 — the only spelling in OpenVPN
+			// that reaches the non-swapping stub.
+			return ModeStubNoSwap, true
+		default:
+			return ModeNone, false
 		}
+	case "compress":
+		switch arg {
+		case "", "stub":
+			// Both are COMP_ALG_STUB|COMP_F_SWAP. "stub" additionally sets
+			// COMP_F_ADVERTISE_STUBS_ONLY, which is a peer-info matter and
+			// not a framing one.
+			return ModeStub, true
+		case "stub-v2":
+			return ModeStubV2, true
+		case "lzo":
+			return ModeLZO, true
+		case "lz4":
+			return ModeLZ4, true
+		case "lz4-v2":
+			return ModeLZ4v2, true
+		default:
+			return ModeNone, false
+		}
+	default:
+		return ModeNone, false
 	}
-	return ModeNone
 }
 
-// Wrap prepends the compression stub byte to payload when mode requires it.
-// For ModeNone and ModeLZO the payload is returned unchanged.
-// For ModeLZ4 a new slice is returned with 0x69 prepended.
-func Wrap(mode Mode, payload []byte) []byte {
-	if mode != ModeLZ4 {
-		return payload
+// ParseMode inspects a comma-separated option list — a PUSH_REPLY, or a single
+// directive on its own — and returns the compression Mode it asks for.
+//
+// The last compression directive wins, as it does in OpenVPN, where each
+// option is applied in turn over the same options struct; a list with no
+// compression directive yields ModeNone. Every mode that reaches the data
+// channel reaches it through here, so a framing that is right for a Mode this
+// parser never produces is not right for anything.
+func ParseMode(options string) Mode {
+	mode := ModeNone
+	for _, token := range strings.Split(options, ",") {
+		fields := strings.Fields(token)
+		if len(fields) == 0 {
+			continue
+		}
+		arg := ""
+		if len(fields) > 1 {
+			arg = fields[1]
+		}
+		if m, ok := ModeForDirective(fields[0], arg); ok {
+			mode = m
+		}
 	}
-	out := make([]byte, 1+len(payload))
-	out[0] = stubByte
-	copy(out[1:], payload)
-	return out
+	return mode
 }
 
-// Unwrap strips the compression stub byte from payload when mode requires it.
-// For ModeNone the payload is returned unchanged.
-// For ModeLZ4 it expects 0x69 as the first byte (uncompressed path);
-// if the first byte indicates actual lz4 compression (0xfa) an error is returned.
-// For ModeLZO the payload is returned unchanged with no byte stripped.
-func Unwrap(mode Mode, payload []byte) ([]byte, error) {
-	if mode == ModeNone || mode == ModeLZO {
+// ErrCompressed reports a peer that actually compressed a payload. No codec is
+// linked here, so the payload cannot be recovered; returning it as though it
+// were an IP packet is the failure Unwrap exists to prevent. Unwrap returns a
+// *CompressedPayloadError, which names the algorithm and satisfies errors.Is
+// against this sentinel.
+var ErrCompressed = errors.New("compress: peer sent a compressed payload and no codec is linked")
+
+// CompressedPayloadError is the error Unwrap returns for a genuinely
+// compressed payload. It carries the algorithm so that the caller can name it
+// in a ClassUnsupported failure rather than reporting an anonymous bad byte.
+type CompressedPayloadError struct {
+	// Algorithm is OpenVPN's name for the codec the peer used: "lzo",
+	// "lz4" or "lz4v2".
+	Algorithm string
+	// Marker is the framing byte that announced the compression.
+	Marker byte
+	// Length is the size of the compressed payload that was refused.
+	Length int
+}
+
+// Error describes the refused payload, naming the algorithm and the marker.
+func (e *CompressedPayloadError) Error() string {
+	return fmt.Sprintf("compress: peer compressed this payload with %s (marker 0x%02x, %d bytes) "+
+		"and no codec is linked", e.Algorithm, e.Marker, e.Length)
+}
+
+// Unwrap returns ErrCompressed so that errors.Is identifies the class of
+// failure without the caller having to know the algorithm.
+func (e *CompressedPayloadError) Unwrap() error { return ErrCompressed }
+
+// Wrap applies m's outgoing framing to payload.
+//
+// The payload is never compressed: the byte written is always the uncompressed
+// marker for the framing in force. A peer accepts that marker in every mode,
+// and OpenVPN's own compressors emit exactly this whenever compression would
+// not shrink the packet.
+//
+// For ModeNone, and for a v2 framing over a payload that needs no escaping, the
+// payload is returned unchanged and unaliased-from; every other case returns a
+// fresh slice.
+func Wrap(m Mode, payload []byte) ([]byte, error) {
+	framing := m.Framing()
+	if framing == FramingNone {
 		return payload, nil
 	}
-	// ModeLZ4
 	if len(payload) == 0 {
-		return nil, fmt.Errorf("compress: lz4: empty payload, missing stub byte")
+		// OpenVPN's compressors return early on an empty buffer rather than
+		// framing one: an empty payload is not a packet, and the swapping
+		// form has no first byte to move.
+		return nil, fmt.Errorf("compress: %s: refusing to frame an empty payload", m)
 	}
-	switch payload[0] {
-	case stubByte: // 0x69 — not compressed, strip stub byte
-		return payload[1:], nil
-	case 0xfa: // lz4-compressed — not supported
-		return nil, fmt.Errorf("compress: lz4: server sent compressed payload (0xfa); decompression not supported")
+
+	switch framing {
+	case FramingV1:
+		// lzo_compress() and the non-swapping stub_compress() both prepend
+		// one byte and leave the payload alone.
+		out := make([]byte, 1+len(payload))
+		out[0] = noCompressByte
+		copy(out[1:], payload)
+		return out, nil
+
+	case FramingV1Swap:
+		// stub_compress() and lz4_compress() under COMP_F_SWAP: the framing
+		// byte takes the place of the payload's first byte, which moves to
+		// the tail. lz4_compress() does this whether or not it compressed.
+		out := make([]byte, 1+len(payload))
+		out[0] = noCompressByteSwap
+		copy(out[1:], payload[1:])
+		out[len(out)-1] = payload[0]
+		return out, nil
+
+	case FramingV2:
+		// stubv2_compress() and lz4v2_compress() add nothing at all unless
+		// the payload's first byte collides with the indicator, in which
+		// case compv2_escape_data_ifneeded() prepends a two-byte header.
+		if payload[0] != algV2IndicatorByte {
+			return payload, nil
+		}
+		// UNTESTED against a real peer, and it cannot be tested by this
+		// rig: the first byte of an IPv4 packet is 0x45 and of an IPv6
+		// packet 0x6…, never 0x50, so no kernel produces a packet that
+		// reaches this branch and no captured vector covers it.
+		//
+		// The byte written is COMP_ALGV2_UNCOMPRESSED_BYTE (0), which is
+		// what stubv2_decompress() and lz4v2_decompress() check for.
+		// compv2_escape_data_ifneeded() itself writes COMP_ALGV2_UNCOMPRESSED
+		// (the algorithm id, 10) here — identically in 2.4.12, 2.5.11 and
+		// 2.6.22 — so upstream's own encoder emits a header its own decoder
+		// rejects. We encode from the decoder's constant: what we send has
+		// to be readable by the peer, not by us. Unwrap accepts both.
+		out := make([]byte, 2+len(payload))
+		out[0] = algV2IndicatorByte
+		out[1] = algV2UncompressedByte
+		copy(out[2:], payload)
+		return out, nil
+
 	default:
-		return nil, fmt.Errorf("compress: lz4: unexpected stub byte 0x%02x", payload[0])
+		return nil, fmt.Errorf("compress: %s: unknown framing %s", m, framing)
 	}
 }
 
-// trim removes leading and trailing ASCII spaces and tabs from s.
-func trim(s string) string {
-	start := 0
-	for start < len(s) && (s[start] == ' ' || s[start] == '\t') {
-		start++
+// Unwrap strips m's incoming framing from payload and returns the IP packet.
+//
+// A payload the peer genuinely compressed returns a *CompressedPayloadError,
+// which errors.Is matches against ErrCompressed. So does a framing byte that
+// belongs to no known state: OpenVPN drops such a packet, and so must this,
+// because the alternative is handing the tunnel bytes that are not an IP
+// packet.
+func Unwrap(m Mode, payload []byte) ([]byte, error) {
+	framing := m.Framing()
+	if framing == FramingNone {
+		return payload, nil
 	}
-	end := len(s)
-	for end > start && (s[end-1] == ' ' || s[end-1] == '\t') {
-		end--
+	if len(payload) == 0 {
+		return nil, fmt.Errorf("compress: %s: empty payload, missing framing byte", m)
 	}
-	return s[start:end]
+	marker, hasMarker := m.compressMarker()
+
+	switch framing {
+	case FramingV1:
+		// lzo_decompress() and the non-swapping stub_decompress(): read the
+		// leading byte, drop it, and accept only NO_COMPRESS_BYTE or the
+		// algorithm's own compress marker.
+		switch head := payload[0]; {
+		case head == noCompressByte:
+			return payload[1:], nil
+		case hasMarker && head == marker:
+			return nil, &CompressedPayloadError{
+				Algorithm: m.Algorithm(), Marker: head, Length: len(payload) - 1,
+			}
+		default:
+			return nil, fmt.Errorf("compress: %s: bad framing byte 0x%02x, want 0x%02x",
+				m, head, noCompressByte)
+		}
+
+	case FramingV1Swap:
+		// The inverse of the swap: the framing byte is read off the front,
+		// the payload's own first byte comes back from the tail, and the
+		// middle keeps its position.
+		head := payload[0]
+		if len(payload) < 2 {
+			return nil, fmt.Errorf("compress: %s: %d-byte payload carries a framing byte and no packet",
+				m, len(payload))
+		}
+		switch {
+		case head == noCompressByteSwap:
+			out := make([]byte, len(payload)-1)
+			out[0] = payload[len(payload)-1]
+			copy(out[1:], payload[1:len(payload)-1])
+			return out, nil
+		case hasMarker && head == marker:
+			return nil, &CompressedPayloadError{
+				Algorithm: m.Algorithm(), Marker: head, Length: len(payload) - 1,
+			}
+		default:
+			return nil, fmt.Errorf("compress: %s: bad framing byte 0x%02x, want 0x%02x",
+				m, head, noCompressByteSwap)
+		}
+
+	case FramingV2:
+		// stubv2_decompress() and lz4v2_decompress(): a payload that does
+		// not begin with the indicator carries no header and is returned as
+		// it stands. This is the branch every stub-v2 packet takes.
+		if payload[0] != algV2IndicatorByte {
+			return payload, nil
+		}
+		if len(payload) < 2 {
+			return nil, fmt.Errorf("compress: %s: v2 indicator with no algorithm byte", m)
+		}
+		switch alg := payload[1]; alg {
+		case algV2UncompressedByte, algV2UncompressedAlgID:
+			// 0 is what every v2 decoder checks for; 10 is what
+			// compv2_escape_data_ifneeded() actually writes. Both are
+			// accepted so that a peer's escape is readable whichever of its
+			// own two constants it used.
+			return payload[2:], nil
+		case algV2LZ4Byte:
+			return nil, &CompressedPayloadError{
+				Algorithm: "lz4v2", Marker: alg, Length: len(payload) - 2,
+			}
+		default:
+			return nil, fmt.Errorf("compress: %s: bad v2 algorithm byte 0x%02x", m, alg)
+		}
+
+	default:
+		return nil, fmt.Errorf("compress: %s: unknown framing %s", m, framing)
+	}
+}
+
+// EffectiveMode returns the compression the data channel must use.
+//
+// A pushed directive outranks the profile's, because the server names the
+// framing it will actually apply and a client that keeps its own frames every
+// packet wrong. A profile directive applies when the server pushes nothing,
+// the usual case: OpenVPN 2.4's server does not push its compression setting
+// at all, so a config saying comp-lzo and a server saying comp-lzo agree
+// without a word about it on the wire.
+//
+// "allow-compression no" refuses a compressing algorithm from *either* source:
+// COMP_F_ALLOW_STUB_ONLY, which check_compression_settings_valid() fails the
+// connection over rather than quietly downgrading. A framing stub survives.
+// pushedMode is ModeNone when the server pushed nothing; "comp-lzo no" pushes
+// ModeStubNoSwap, which is distinguishable from it.
+func EffectiveMode(profileMode, pushedMode Mode, allow AllowCompression) (Mode, error) {
+	mode, source := profileMode, "the profile"
+	if pushedMode != ModeNone {
+		mode, source = pushedMode, "the server's PUSH_REPLY"
+	}
+	if allow == AllowNo && mode.Compresses() {
+		return ModeNone, fmt.Errorf("compress: %q from %s is refused by "+
+			"\"allow-compression no\", which permits framing stubs only", mode, source)
+	}
+	return mode, nil
+}
+
+// PeerDeclaresFraming reports whether a peer's options string says it has a
+// compression framework enabled.
+//
+// The options string is OpenVPN's OCC block, exchanged inside the key-method-2
+// packet, and it is the only place a peer states its compression setting: 2.4,
+// 2.5 and 2.6 all omit the directive from PUSH_REPLY entirely.
+//
+// What it can answer is narrower than it looks, and was measured rather than
+// assumed. OpenVPN writes the literal token "comp-lzo" whenever any framework
+// is on, the v2 stub included: a server configured "compress stub-v2", with no
+// comp-lzo directive anywhere, still advertises "comp-lzo" here, while a server
+// with no compression advertises nothing. So this answers whether the peer
+// expects a framing at all, and never which one — the profile answers that. A
+// client that framed on its own profile against a peer that declared nothing
+// would put a leading byte on every packet the peer discards: a handshake that
+// completes over a tunnel that carries nothing.
+func PeerDeclaresFraming(occ string) bool {
+	for _, tok := range strings.Split(occ, ",") {
+		field := strings.Fields(strings.TrimSpace(tok))
+		if len(field) == 0 {
+			continue
+		}
+		switch field[0] {
+		case "comp-lzo":
+			// "comp-lzo no" is the explicit off form: framing stays on, and
+			// OpenVPN writes it here exactly because the peer still expects
+			// the byte.
+			return true
+		case "compress":
+			return true
+		}
+	}
+	return false
 }

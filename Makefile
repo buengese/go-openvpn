@@ -21,6 +21,7 @@ endif
 
 .PHONY: all aar aar-sha256 cli build-macos-cli relay-server run-local-relay check-platforms test lint clean \
         build-bins test-integration-cli matrix-images matrix-clean \
+        comp-vectors \
 
 all: aar
 
@@ -91,10 +92,25 @@ integration-test:
 matrix-images:
 	bash docker/openvpn-server/build.sh
 
+## Recapture internal/compress/testdata/vectors.json.
+## The compression analogue of prf-vectors and tls-wrap-vectors: separately
+## tagged instrumented OpenVPN 2.4, 2.5 and 2.6 images — never the stock matrix
+## tags — drive real handshakes and record every data packet on both sides of
+## the compression framing, in both directions, from both peers. All three
+## series, because 2.4 compresses on send by default and 2.5/2.6 do not.
+## Needs Docker and /dev/net/tun. The committed vectors are already good; this
+## only needs running to extend or re-derive them.
+## See docker/COMPRESSION-VECTORS.md.
+comp-vectors:
+	bash docker/openvpn-server/build-compdebug.sh
+	bash docker/openvpn-server/comp-capture.sh
+
 ## Remove any matrix containers, networks and images left behind.
 matrix-clean:
 	-docker ps -aq --filter label=com.openlawsvpn.testenv=matrix | xargs -r docker rm -f
+	-docker ps -aq --filter label=com.openlawsvpn.testenv=comp-capture | xargs -r docker rm -f
 	-docker network ls -q --filter label=com.openlawsvpn.testenv=matrix | xargs -r docker network rm
+	-docker network ls -q --filter label=com.openlawsvpn.testenv=comp-capture | xargs -r docker network rm
 	-docker images -q openlawsvpn-test/openvpn-server | xargs -r docker rmi -f
 
 ## Build CLI + mock-server binaries into bin/

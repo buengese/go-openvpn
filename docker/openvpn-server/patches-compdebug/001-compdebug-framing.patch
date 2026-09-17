@@ -1,0 +1,154 @@
+--- a/src/openvpn/comp.c
++++ b/src/openvpn/comp.c
+@@ -37,6 +37,142 @@
+ 
+ #include "memdbg.h"
+ 
++/*
++ * go-openlawsvpn compression-framing instrumentation.
++ *
++ * Prints one greppable line per data packet that crosses the compression
++ * layer, carrying the buffer on *both* sides of the framing:
++ *
++ *   COMPDEBUG <alg> <flags> <compress|decompress> <pre-hex> <post-hex>
++ *
++ * <alg> is OpenVPN's own name for the algorithm ("lzo", "stub", "stubv2",
++ * "lz4", "lz4v2") and <flags> is compctx->flags as options.c computed it, so
++ * COMP_F_SWAP (1<<2) is recorded rather than inferred from the directive.
++ *
++ * Both stages are on one line deliberately.  The compression layer sees the
++ * OCC probes, the keepalive pings and the capture's own packets interleaved,
++ * and pairing a "before" line with the "after" line that belongs to it would
++ * be a guess.  One call, one line, no pairing.
++ *
++ * The hook is installed by rewriting the two function pointers in the
++ * per-context copy of struct compress_alg, which is why one insertion point in
++ * comp_init() covers every algorithm and every OpenVPN series this rig pins.
++ * The originals are kept in a small table keyed on alg.name -- which the hook
++ * does not touch -- so a process that ends up with two different algorithms
++ * still dispatches each context to its own implementation.
++ *
++ * Like the tls-wrap instrumentation this bypasses msg(): msg() formats into
++ * ERR_BUF_SIZE (1280) and then formats again to prepend the peer address, so a
++ * full-MTU packet would be clipped at a length that depends on how long the
++ * peer's address is.  A silently truncated vector is worse than a missing one,
++ * because it still looks like a vector.
++ *
++ * This exists only in the throwaway "compdebug" image.  It prints every
++ * tunnelled IP packet in the clear into the container log and must never be
++ * built into anything that carries real traffic.
++ * See docker/COMPRESSION-VECTORS.md.
++ */
++#define COMPDEBUG_MAX  4096
++#define COMPDEBUG_ALGS 8
++
++static const char compdebug_digits[] = "0123456789abcdef";
++static char compdebug_pre[2 * COMPDEBUG_MAX + 32];
++static char compdebug_post[2 * COMPDEBUG_MAX + 32];
++static struct compress_alg compdebug_orig[COMPDEBUG_ALGS];
++static int compdebug_n_orig = 0;
++
++static void
++compdebug_hex(char *out, const struct buffer *buf)
++{
++    const uint8_t *p = BPTR(buf);
++    int len = BLEN(buf);
++    int i;
++
++    if (len < 0 || len > COMPDEBUG_MAX)
++    {
++        openvpn_snprintf(out, 32, "<oversized:%d>", len);
++        return;
++    }
++    for (i = 0; i < len; ++i)
++    {
++        out[i * 2] = compdebug_digits[p[i] >> 4];
++        out[i * 2 + 1] = compdebug_digits[p[i] & 0x0f];
++    }
++    out[len * 2] = '\0';
++}
++
++static const struct compress_alg *
++compdebug_find(const struct compress_context *compctx)
++{
++    int i;
++
++    for (i = 0; i < compdebug_n_orig; ++i)
++    {
++        if (!strcmp(compdebug_orig[i].name, compctx->alg.name))
++        {
++            return &compdebug_orig[i];
++        }
++    }
++    return NULL;
++}
++
++static void
++compdebug_emit(const struct compress_context *compctx, const char *dir)
++{
++    fprintf(stderr, "COMPDEBUG %s %u %s %s %s\n",
++            compctx->alg.name, compctx->flags, dir,
++            compdebug_pre, compdebug_post);
++    fflush(stderr);
++}
++
++static void
++compdebug_compress(struct buffer *buf, struct buffer work,
++                   struct compress_context *compctx,
++                   const struct frame *frame)
++{
++    const struct compress_alg *orig = compdebug_find(compctx);
++
++    ASSERT(orig);
++    compdebug_hex(compdebug_pre, buf);
++    (*orig->compress)(buf, work, compctx, frame);
++    compdebug_hex(compdebug_post, buf);
++    compdebug_emit(compctx, "compress");
++}
++
++static void
++compdebug_decompress(struct buffer *buf, struct buffer work,
++                     struct compress_context *compctx,
++                     const struct frame *frame)
++{
++    const struct compress_alg *orig = compdebug_find(compctx);
++
++    ASSERT(orig);
++    compdebug_hex(compdebug_pre, buf);
++    (*orig->decompress)(buf, work, compctx, frame);
++    compdebug_hex(compdebug_post, buf);
++    compdebug_emit(compctx, "decompress");
++}
++
++static void
++compdebug_hook(struct compress_context *compctx)
++{
++    if (compctx->alg.compress == compdebug_compress)
++    {
++        return;
++    }
++    if (!compdebug_find(compctx))
++    {
++        ASSERT(compdebug_n_orig < COMPDEBUG_ALGS);
++        compdebug_orig[compdebug_n_orig++] = compctx->alg;
++    }
++    compctx->alg.compress = compdebug_compress;
++    compctx->alg.decompress = compdebug_decompress;
++    fprintf(stderr, "COMPDEBUG alg %s flags %u\n",
++            compctx->alg.name, compctx->flags);
++    fflush(stderr);
++}
++/* --- end framing instrumentation -------------------------------------- */
++
+ struct compress_context *
+ comp_init(const struct compress_options *opt)
+ {
+@@ -80,6 +216,8 @@
+     if (compctx)
+     {
+         (*compctx->alg.compress_init)(compctx);
++        /* framing instrumentation; compdebug build only. */
++        compdebug_hook(compctx);
+     }
+ 
+     return compctx;

@@ -107,7 +107,10 @@ func (m *Manager) Encrypt(plaintext []byte) ([]byte, error) {
 	cmode := m.compress
 	m.mu.RUnlock()
 
-	inner := compress.Wrap(cmode, plaintext)
+	inner, err := compress.Wrap(cmode, plaintext)
+	if err != nil {
+		return nil, err
+	}
 	pkt, err := ch.Encrypt(inner)
 	if err != nil {
 		return nil, err

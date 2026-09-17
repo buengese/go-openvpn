@@ -41,6 +41,13 @@ and releases follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   the release tag is the version, and the release workflows no longer check it
   against a spec, a PKGBUILD or a Cargo manifest.
 
+### Fixed
+
+- The compression framing bytes were inverted, and the client announced
+  `0x69` — *this payload is LZ4-compressed* — over plaintext on every packet of
+  a `compress lz4` session. `0x69` means compressed and `0xFA` means not; both
+  are now read from a peer's own captured bytes.
+
 ## [1.2.3] - 2026-08-19
 
 ### Fixed
