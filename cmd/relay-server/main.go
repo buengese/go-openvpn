@@ -101,10 +101,11 @@ func (s *store) unregisterConn(connID string) {
 			log.Printf("agent offline: id=%s", a.AgentID)
 		}
 	}
-	if ch, ok := s.conns[connID]; ok {
-		close(ch)
-		delete(s.conns, connID)
-	}
+	// Dropping the map entry is the whole retirement. The channel is not closed:
+	// the writer goroutine stops on its own when the reader loop ends, so a close
+	// would only serve to race pushToAgent, which releases the read lock before
+	// it sends and would then send on a closed channel.
+	delete(s.conns, connID)
 }
 
 func (s *store) listAgents(token string) []agentRecord {
@@ -392,13 +393,23 @@ func (srv *server) handleWS(w http.ResponseWriter, r *http.Request) {
 	defer srv.st.unregisterConn(connID)
 
 	outCh := srv.st.connChan(connID)
-	done := make(chan struct{})
+	readerDone := make(chan struct{})
+	writerDone := make(chan struct{})
 
-	// Writer goroutine: pushes messages from the channel to the WS.
+	// Writer goroutine: pushes messages from the channel to the WS. It watches
+	// readerDone as well as the channel, because nothing else releases it —
+	// the channel is retired by unregisterConn, and unregisterConn is deferred
+	// behind this handler's own wait for the writer, so ranging over the
+	// channel alone is a wait on ourselves.
 	go func() {
-		defer close(done)
-		for msg := range outCh {
-			if err := wsSendText(conn, msg); err != nil {
+		defer close(writerDone)
+		for {
+			select {
+			case msg := <-outCh:
+				if err := wsSendText(conn, msg); err != nil {
+					return
+				}
+			case <-readerDone:
 				return
 			}
 		}
@@ -421,7 +432,8 @@ func (srv *server) handleWS(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 done:
-	<-done
+	close(readerDone)
+	<-writerDone
 }
 
 // readAuthFrame reads the agent's opening registration frame, which carries the

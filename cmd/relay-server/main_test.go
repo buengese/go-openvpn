@@ -4,9 +4,11 @@ import (
 	"bufio"
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net"
 	"net/http"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -157,6 +159,106 @@ func postJSON(t *testing.T, url string, body any) (int, []byte) {
 		t.Fatal(err)
 	}
 	return resp.StatusCode, out
+}
+
+// ── connection teardown ───────────────────────────────────────────────────────
+
+// TestAgentGoesOfflineWhenConnectionDrops covers the handler deadlock: the
+// writer goroutine parked on the outbound channel, which only unregisterConn
+// closes, and unregisterConn is deferred behind the wait for that writer. The
+// agent then stays "standby" in the store for the life of the process.
+func TestAgentGoesOfflineWhenConnectionDrops(t *testing.T) {
+	srv, addr := newTestServer(t)
+
+	agent := dialAgent(t, addr)
+	agent.authenticate(t, "tok", "agent-offline", "host-1")
+	waitFor(t, 3*time.Second, "agent registration", func() bool {
+		return srv.st.getAgent("agent-offline") != nil
+	})
+
+	agent.close()
+
+	waitFor(t, 3*time.Second, "agent to be marked offline", func() bool {
+		a := srv.st.getAgent("agent-offline")
+		return a != nil && a.Status == "offline" && a.ConnID == ""
+	})
+	if got := srv.st.listAgents("tok"); len(got) != 0 {
+		t.Errorf("listAgents after disconnect = %d agents, want 0", len(got))
+	}
+}
+
+// TestConnectionTeardownDoesNotLeakGoroutines covers the other half of the same
+// deadlock: every connection leaked its handler goroutine, its writer goroutine
+// and the hijacked net.Conn they both held.
+func TestConnectionTeardownDoesNotLeakGoroutines(t *testing.T) {
+	_, addr := newTestServer(t)
+
+	// One connection first, so the HTTP server's own goroutines are up before
+	// the baseline is taken.
+	warmup := dialAgent(t, addr)
+	warmup.authenticate(t, "tok", "agent-warmup", "host")
+	warmup.close()
+	time.Sleep(200 * time.Millisecond)
+	runtime.GC()
+	baseline := runtime.NumGoroutine()
+
+	const conns = 8
+	for i := 0; i < conns; i++ {
+		a := dialAgent(t, addr)
+		a.authenticate(t, "tok", fmt.Sprintf("agent-leak-%d", i), "host")
+		a.close()
+	}
+
+	// Two goroutines per connection is the leak; allow a couple of stragglers
+	// from the HTTP server itself.
+	want := baseline + 4
+	got := runtime.NumGoroutine()
+	for deadline := time.Now().Add(5 * time.Second); got > want && time.Now().Before(deadline); {
+		time.Sleep(50 * time.Millisecond)
+		got = runtime.NumGoroutine()
+	}
+	if got > want {
+		t.Fatalf("goroutines did not drain: baseline=%d, after %d closed connections=%d, want ≤%d",
+			baseline, conns, got, want)
+	}
+	t.Logf("goroutines: baseline=%d, after %d closed connections=%d", baseline, conns, got)
+}
+
+// TestExecuteAfterAgentDisconnectIsRejected pins that an agent left unmarked
+// after a disconnect does not let the app be told its credentials reached a
+// connection that is gone.
+func TestExecuteAfterAgentDisconnectIsRejected(t *testing.T) {
+	srv, addr := newTestServer(t)
+
+	agent := dialAgent(t, addr)
+	agent.authenticate(t, "tok", "agent-gone", "host")
+	waitFor(t, 3*time.Second, "agent registration", func() bool {
+		return srv.st.getAgent("agent-gone") != nil
+	})
+
+	code, body := postJSON(t, "http://"+addr+"/api/v1/connect",
+		map[string]string{"token": "tok", "agent_id": "agent-gone"})
+	if code != http.StatusOK {
+		t.Fatalf("connect = %d: %s", code, body)
+	}
+	var sess struct {
+		SessionID string `json:"session_id"`
+	}
+	if err := json.Unmarshal(body, &sess); err != nil {
+		t.Fatal(err)
+	}
+
+	agent.close()
+	waitFor(t, 3*time.Second, "agent to be marked offline", func() bool {
+		a := srv.st.getAgent("agent-gone")
+		return a != nil && a.ConnID == ""
+	})
+
+	code, body = postJSON(t, "http://"+addr+"/api/v1/session/"+sess.SessionID+"/execute",
+		map[string]string{"ovpn_config": "remote vpn.example.com 443"})
+	if code != http.StatusConflict {
+		t.Errorf("execute after disconnect = %d, want %d: %s", code, http.StatusConflict, body)
+	}
 }
 
 // ── protocol round trip ───────────────────────────────────────────────────────

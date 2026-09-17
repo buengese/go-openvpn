@@ -65,9 +65,13 @@ and releases follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   anything is allocated. The same reader truncated 64-bit lengths to their low
   32 bits, turning a declared 2^32 into a zero-length frame and 2^32+n into an
   n-byte one, which then desynchronised it against the stream.
-- The local relay server refused its own agent's registration. It demanded
-  `token`, `agent_id` and `hostname` as URL query parameters, answering 400
-  before the upgrade, while the agent sends them in its first text frame.
+- The local relay server leaked a goroutine per connection and refused its own
+  agent's registration. Its writer goroutine ranged over a channel that only the
+  deferred `unregisterConn` closed, and that defer could not run until the
+  handler returned, which was waiting on the writer — a circular wait leaking
+  both goroutines and the hijacked `net.Conn` per dropped connection. And it
+  demanded `token`, `agent_id` and `hostname` as URL query parameters, answering
+  400 before the upgrade, while the agent sends them in its first text frame.
 
 ## [1.2.3] - 2026-08-19
 
