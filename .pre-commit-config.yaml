@@ -7,13 +7,6 @@ repos:
 
   - repo: local
     hooks:
-      - id: rpmlint
-        name: rpmlint spec
-        language: system
-        entry: rpmlint --strict packaging/openlawsvpn.spec
-        pass_filenames: false
-        files: ^packaging/.*\.spec$
-
       - id: cross-platform-build
         name: cross-platform build (linux/android/ios/darwin)
         language: system

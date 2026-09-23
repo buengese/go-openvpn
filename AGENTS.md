@@ -15,7 +15,8 @@ replace is now fully retired and archived (see "Status" below).
 
 **openlawsvpn** is an open-source AWS Client VPN client with SAML/SSO support.
 This repo is the current engine for all platforms:
-- Linux CLI + daemon + GTK4 GUI: this repo (`cmd/cli`, `cmd/daemon`, `gui-gtk/`)
+- Linux/macOS CLI: this repo (`cmd/cli`)
+- Linux desktop app (GTK GUI + D-Bus daemon + RPM/AUR packaging): https://github.com/openlawsvpn/openlawsvpn-linux (consumes this module)
 - Android client: https://github.com/openlawsvpn/openlawsvpn-android-go (consumes the `.aar`)
 - Website: https://openlawsvpn.com
 
@@ -25,34 +26,21 @@ gomobile `.aar` produced by `aar.yml`.
 ### Status
 
 The protocol is fully implemented and tested against a real AWS Client VPN
-endpoint. Working end-to-end on Linux (CLI + daemon + GTK4 GUI) and Android
-(via the gomobile `.aar`). Verify the current release with
+endpoint. Working end-to-end on Linux and macOS (CLI), on Android and iOS (via
+the gomobile bindings) and on the Linux desktop through openlawsvpn-linux.
+Verify the current release with
 `git tag --list 'v*' --sort=-v:refname | head -1`; do not copy a version from
-prose. RPMs
-are built by COPR `vorona/openlawsvpn` (Fedora 43/44/rawhide,
-x86_64/aarch64/ppc64le). AUR package: `openlawsvpn`
-(x86_64/aarch64/powerpc64le); AUR releases use `pkg/x.y.z-N` tags (separate
-from `v*` library tags).
+prose. The desktop packages (COPR, AUR) are released from openlawsvpn-linux on
+its own versions.
 
-### Bumping the version
+### Releasing
 
-Never edit an individual version field for a release. Run
-`scripts/bump-version.sh <new-version>`, which updates all authoritative
-in-tree version fields and verifies that they agree:
-- `packaging/openlawsvpn.spec` — `Version:` field
-- `gui-gtk/Cargo.toml` — `version =` (controls what the About/Legal screens show)
-- `packaging/PKGBUILD` — `pkgver=`
-
-After running the script, move the entries under `Unreleased` in `CHANGELOG.md`
-to the new version and date, then create a fresh empty `Unreleased` section.
-Add a concise matching `%changelog` entry in `packaging/openlawsvpn.spec`
-manually (RPM changelog format requires a date and author line), then run
-`make check-version` again before committing or tagging. Do not create a
-release tag if this check fails. COPR does **not** auto-pick new tags — the
-spec must be pushed to trigger a rebuild.
-
-The `vX.Y.Z` release tag must also match these fields. Release workflows call
-`scripts/check-version.sh vX.Y.Z` and fail before building if it differs.
+The library's version is its tag; no file in the tree carries it. Move the
+entries under `Unreleased` in `CHANGELOG.md` to the new version and date,
+create a fresh empty `Unreleased` section, commit, then tag `vX.Y.Z`. The
+release workflows (`release.yml`, `aar.yml`, `xcframework.yml`) run on the
+tag. The desktop app, its RPM spec and its PKGBUILD are versioned and released
+from openlawsvpn-linux.
 
 ### Retired / archived — do NOT treat as current
 
@@ -227,7 +215,6 @@ go-openlawsvpn/
   mock/mockserver/  — pure-Go mock OpenVPN3 server (no openvpn3-core dependency)
   testenv/          — integration test harness (starts mock server in-process)
   cmd/cli/          — Linux CLI with SAML flow and reconnect loop
-  cmd/daemon/       — D-Bus system service (used by GTK GUI)
   cmd/relay-server/ — relay server binary
 ```
 

@@ -8,11 +8,13 @@ See [CHANGELOG.md](CHANGELOG.md) for project-wide release notes.
 
 ## Status
 
-Working end-to-end on Linux (CLI + daemon + GTK4 GUI) and Android (via the
-gomobile `.aar`). Find the current release with
+Working end-to-end on Linux and macOS (CLI), on Android and iOS (via the
+gomobile bindings), and on the Linux desktop through
+[openlawsvpn-linux](https://github.com/openlawsvpn/openlawsvpn-linux), which
+consumes this module. Find the current release with
 `git tag --list 'v*' --sort=-v:refname | head -1`. The `.aar` build pipeline is in
-`.github/workflows/aar.yml`; RPMs are built by COPR `vorona/openlawsvpn`;
-Arch Linux packages on AUR as `openlawsvpn`.
+`.github/workflows/aar.yml`. The desktop packages (RPM via COPR, Arch via
+the AUR) are released from openlawsvpn-linux.
 
 > **AWS support boundary:** AWS documents SAML-based Client VPN connections as
 > supported only with the AWS-provided client. This repository implements the
@@ -23,24 +25,12 @@ Arch Linux packages on AUR as `openlawsvpn`.
 
 | Component | Description |
 |---|---|
-| `cmd/daemon` | `openlawsvpn-daemon` — D-Bus session service; manages the VPN tunnel with CAP\_NET\_ADMIN (no root) |
 | `cmd/cli` | `openlawsvpn-cli` — CLI client with SAML flow, reconnect loop, and relay agent mode (`-relay`) |
 | `cmd/relay-server` | Local relay server for dev/testing without hitting production |
-| `gui-gtk/` | GTK4 + libadwaita desktop GUI; communicates with the daemon over D-Bus; includes Relay screen |
 
 ## Build
 
 ```bash
-# Daemon
-CGO_ENABLED=0 go build -o openlawsvpn-daemon ./cmd/daemon
-# Grant CAP_NET_ADMIN so the daemon can open TUN devices without root:
-sudo setcap cap_net_admin+eip ./openlawsvpn-daemon
-./openlawsvpn-daemon &
-
-# GTK4 GUI (requires gtk4-devel, libadwaita-devel, dbus-devel)
-cd gui-gtk && cargo build --release
-./target/release/openlawsvpn-gui
-
 # Linux CLI (direct, no daemon)
 CGO_ENABLED=0 go build -o openlawsvpn-cli ./cmd/cli
 sudo ./openlawsvpn-cli -config your.ovpn
@@ -66,49 +56,6 @@ validity period, DNS names, and SHA-256 fingerprint. This is the certificate
 used to authenticate the VPN server; it is not the user's SAML or client
 certificate.
 
-### RPM packages (Fedora / RHEL)
-
-```bash
-make srpm    # builds openlawsvpn-*.src.rpm
-make rpm     # builds binary RPMs via mock
-```
-
-Produces three sub-packages: `openlawsvpn-daemon`, `openlawsvpn-gui`, and
-`openlawsvpn` (meta).
-
-### Arch Linux (AUR)
-
-```bash
-# Using an AUR helper:
-paru -S openlawsvpn
-
-# Or manually:
-git clone https://aur.archlinux.org/openlawsvpn.git
-cd openlawsvpn && makepkg -si
-```
-
-Installs `openlawsvpn-daemon`, `openlawsvpn-cli`, and `openlawsvpn-gui`.
-
-### Daemon D-Bus interface
-
-The daemon exposes `com.openlawsvpn.Daemon` on the **session** bus:
-
-| Method / Signal | Signature | Description |
-|---|---|---|
-| `Connect(path)` | `(s)` | Start VPN using the given `.ovpn` config |
-| `Disconnect()` | `()` | Tear down the active tunnel |
-| `Status()` | `→ (s,s,s,s)` | state, server\_ip, assigned\_ip, profile\_path |
-| `StateChanged` | `(s,s,s)` | state, server\_ip, assigned\_ip |
-| `LogLine` | `(s)` | Log message |
-| `StatsUpdate` | `(t,t,t)` | bytes\_sent, bytes\_recv, uptime\_secs |
-| `SAMLRequired` | `(s)` | SAML browser URL |
-
-### DNS / polkit
-
-The daemon sets per-interface DNS via `systemd-resolved`. The polkit rule in
-`packaging/10-openlawsvpn-dns.rules` grants the daemon permission to call
-`org.freedesktop.resolve1` methods without a password prompt.
-
 ## Test
 
 ```bash
@@ -123,47 +70,25 @@ go test -v -tags=integration -timeout 120s .
 
 | Workflow | Trigger | What it does |
 |---|---|---|
-| **CI** (`ci.yml`) | push / PR to `main` | checks Rust dependency licenses and verifies release versions, Go builds, race tests, and vet |
+| **CI** (`ci.yml`) | push / PR to `main` | Go builds, race tests, and vet |
 | **Build AAR** (`aar.yml`) | push tag `v*` or manual | builds `go-openlawsvpn.aar` via `gomobile bind`, publishes GitHub Release, opens a version-bump PR on `openlawsvpn-android-go` |
-| **Release** (`release.yml`) | push tag `v*` or manual | builds static `cli` + `daemon` binaries for amd64 / arm64 / ppc64le, attaches them to the GitHub Release |
+| **Release** (`release.yml`) | push tag `v*` or manual | builds static `cli` binaries for amd64 / arm64 / ppc64le, attaches them to the GitHub Release |
 | **VPN Integration** (`vpn-integration.yml`) | manual | integration run against a live endpoint |
-
-RPM packages are **not** built in this repo's CI — they are built by COPR
-(`vorona/openlawsvpn`) from the spec in `packaging/openlawsvpn.spec`.
 
 ### Publishing a new release
 
-Use the version script; do not edit only the RPM spec, Cargo manifest, or
-PKGBUILD. The Cargo manifest controls the version displayed by the GUI.
+The library's version is its tag; no file in the tree carries it. Move the
+`Unreleased` entries in `CHANGELOG.md` to the new version and date, add a
+fresh empty `Unreleased` section, commit, then tag:
 
 ```bash
-scripts/bump-version.sh X.Y.Z
-# Move CHANGELOG.md's Unreleased entries to X.Y.Z and add a new Unreleased section.
-# Add a concise matching entry to packaging/openlawsvpn.spec's %changelog.
-make check-version
-git diff --check
-# Commit the complete version bump before tagging it.
 git tag vX.Y.Z
 git push origin vX.Y.Z
 ```
 
-Before pushing the tag, confirm that the bump includes
-`packaging/openlawsvpn.spec`, `packaging/PKGBUILD`, and `gui-gtk/Cargo.toml`.
-CI rejects a commit when these versions differ, and release workflows reject a
-tag that does not match them.
-
 The `aar.yml` workflow builds the AAR, attaches it (with SHA-256) to the GitHub
 Release, then triggers `bump-aar.yml` on `openlawsvpn-android-go` — which opens a
 PR bumping the pinned AAR version automatically.
-
-**AUR release:** push a `pkg/x.y.z-N` tag to trigger PKGBUILD updates:
-
-```bash
-git tag pkg/X.Y.Z-1
-git push origin pkg/X.Y.Z-1
-make aur-release VERSION=X.Y.Z-1   # updates PKGBUILD, hash, .SRCINFO in ../aur-openlawsvpn
-# then: cd ../aur-openlawsvpn && git add -A && git commit -m "..." && git push
-```
 
 **Cross-repo auth:** writes use the `openlawsvpn-ci` GitHub App via
 `actions/create-github-app-token` — secrets `CI_APP_ID` / `CI_APP_PRIVATE_KEY`.

@@ -3,10 +3,20 @@
 All notable user-facing changes to go-openlawsvpn are documented in this file.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and releases follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
-The RPM `%changelog` remains a concise packaging record rather than the
-canonical project history.
 
 ## [Unreleased]
+
+### Removed
+
+- The Linux desktop app — the GTK GUI, the D-Bus system daemon and the RPM/AUR
+  packaging — moved to its own repository,
+  [openlawsvpn-linux](https://github.com/openlawsvpn/openlawsvpn-linux), with
+  its history, its security architecture document and its version scripts.
+  This module is the engine and `openlawsvpn-cli`; the desktop app consumes it
+  as a dependency, the way the Android and iOS apps do, and builds the CLI it
+  packages from this module. Nothing in this tree carries a version any more:
+  the release tag is the version, and the release workflows no longer check it
+  against a spec, a PKGBUILD or a Cargo manifest.
 
 ## [1.2.3] - 2026-08-19
 
