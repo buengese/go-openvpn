@@ -73,12 +73,12 @@ jobs:
         run: |
           mkdir -p bin
           go build -o bin/mock-server ./testenv/mockserver
-          CGO_ENABLED=0 go build -o bin/openlawsvpn-cli ./cmd/cli
+          CGO_ENABLED=0 go build -o bin/go-openvpn-cli ./cmd/cli
 
       - name: Run CLI integration test
         run: bash scripts/cli-integration.sh
         env:
-          CLI_BIN: bin/openlawsvpn-cli
+          CLI_BIN: bin/go-openvpn-cli
           MOCK_BIN: bin/mock-server
           SUDO: sudo
           MOCK_REDIRECT_GATEWAY: ${{ matrix.redirect_gateway }}
@@ -88,5 +88,5 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: cli-integration-logs-${{ matrix.os }}-rg${{ matrix.redirect_gateway }}
-          path: tmp/openlawsvpn-cli.*.log
+          path: tmp/go-openvpn-cli.*.log
           if-no-files-found: ignore

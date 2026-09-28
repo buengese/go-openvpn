@@ -1,4 +1,4 @@
-# shapes the fixtures exercise — go-openlawsvpn
+# shapes the fixtures exercise — go-openvpn
 #
 # Written from caps/fixtures_test.go. It is the published claim about what the
 # fixtures cover: a consumer holding a corpus of real profiles checks its own
@@ -97,6 +97,7 @@ directive
   user
   verb
   verify-x509-name
+  x-go-openvpn-flow
   x-openlawsvpn-flow
 
 argument shape
@@ -196,6 +197,7 @@ argument shape
   verb: number
   verify-x509-name: dotted name
   verify-x509-name: lower-case word
+  x-go-openvpn-flow: lower-case word
   x-openlawsvpn-flow: lower-case word
 
 lexical shape

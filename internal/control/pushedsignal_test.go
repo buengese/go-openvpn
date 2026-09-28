@@ -6,7 +6,7 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/openlawsvpn/go-openlawsvpn/internal/control"
+	"github.com/buengese/go-openvpn/internal/control"
 )
 
 // A server that pushes RESTART or HALT is ending a session that was working.

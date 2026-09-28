@@ -20,10 +20,10 @@ import (
 	"testing"
 	"time"
 
-	vpn "github.com/openlawsvpn/go-openlawsvpn"
-	"github.com/openlawsvpn/go-openlawsvpn/netstack"
-	"github.com/openlawsvpn/go-openlawsvpn/profile"
-	"github.com/openlawsvpn/go-openlawsvpn/testenv"
+	vpn "github.com/buengese/go-openvpn"
+	"github.com/buengese/go-openvpn/netstack"
+	"github.com/buengese/go-openvpn/profile"
+	"github.com/buengese/go-openvpn/testenv"
 )
 
 // disconnectEntry is the entry the cycles run against, and the simplest entry
@@ -41,7 +41,7 @@ const failureEntry = "v26-gcm256-sha256-plain-udp"
 
 // disconnectCyclesEnv overrides the cycle count per shape. The committed
 // default keeps the suite quick; a run meant to settle the question uses 200.
-const disconnectCyclesEnv = "OPENLAWSVPN_DISCONNECT_CYCLES"
+const disconnectCyclesEnv = "GO_OPENVPN_DISCONNECT_CYCLES"
 
 // defaultDisconnectCycles is the committed sample size.
 const defaultDisconnectCycles = 50

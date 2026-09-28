@@ -9,8 +9,8 @@ package vpn_test
 import (
 	"testing"
 
-	vpn "github.com/openlawsvpn/go-openlawsvpn"
-	"github.com/openlawsvpn/go-openlawsvpn/profile"
+	vpn "github.com/buengese/go-openvpn"
+	"github.com/buengese/go-openvpn/profile"
 )
 
 func makeTestProfile() *profile.Profile {

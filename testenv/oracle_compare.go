@@ -7,7 +7,7 @@ package testenv
 import (
 	"fmt"
 
-	"github.com/openlawsvpn/go-openlawsvpn/diag"
+	"github.com/buengese/go-openvpn/diag"
 )
 
 // The four-cell comparison

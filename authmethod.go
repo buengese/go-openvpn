@@ -20,11 +20,11 @@ import (
 	"errors"
 	"fmt"
 
-	"github.com/openlawsvpn/go-openlawsvpn/auth/saml"
-	"github.com/openlawsvpn/go-openlawsvpn/diag"
-	"github.com/openlawsvpn/go-openlawsvpn/internal/control"
-	"github.com/openlawsvpn/go-openlawsvpn/internal/keymethod2"
-	"github.com/openlawsvpn/go-openlawsvpn/profile"
+	"github.com/buengese/go-openvpn/auth/saml"
+	"github.com/buengese/go-openvpn/diag"
+	"github.com/buengese/go-openvpn/internal/control"
+	"github.com/buengese/go-openvpn/internal/keymethod2"
+	"github.com/buengese/go-openvpn/profile"
 )
 
 // authReply is what a method makes of the server's answer to PUSH_REQUEST.

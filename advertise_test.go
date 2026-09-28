@@ -13,11 +13,11 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/openlawsvpn/go-openlawsvpn/internal/crypto"
-	"github.com/openlawsvpn/go-openlawsvpn/internal/datachannel"
-	"github.com/openlawsvpn/go-openlawsvpn/internal/keymethod2"
-	"github.com/openlawsvpn/go-openlawsvpn/profile"
-	"github.com/openlawsvpn/go-openlawsvpn/routing"
+	"github.com/buengese/go-openvpn/internal/crypto"
+	"github.com/buengese/go-openvpn/internal/datachannel"
+	"github.com/buengese/go-openvpn/internal/keymethod2"
+	"github.com/buengese/go-openvpn/profile"
+	"github.com/buengese/go-openvpn/routing"
 )
 
 // TestIVCiphersIsHonest keeps the advertised cipher list to ciphers this client

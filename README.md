@@ -1,4 +1,4 @@
-# go-openlawsvpn
+# go-openvpn
 
 Pure-Go implementation of the OpenVPN client protocol — certificate,
 username/password, and AWS Client VPN's federated SAML/CRV1 authentication.
@@ -11,11 +11,11 @@ See [CHANGELOG.md](CHANGELOG.md) for project-wide release notes.
 
 Working end-to-end on Linux and macOS (CLI), on Android and iOS (via the
 gomobile bindings), and on the Linux desktop through
-[openlawsvpn-linux](https://github.com/openlawsvpn/openlawsvpn-linux), which
+[go-openvpn-linux](https://github.com/buengese/go-openvpn-linux), which
 consumes this module. Find the current release with
 `git tag --list 'v*' --sort=-v:refname | head -1`. The `.aar` build pipeline is in
 `.github/workflows/aar.yml`. The desktop packages (RPM via COPR, Arch via
-the AUR) are released from openlawsvpn-linux.
+the AUR) are released from go-openvpn-linux.
 
 > **AWS support boundary:** AWS documents SAML-based Client VPN connections as
 > supported only with the AWS-provided client. This repository implements the
@@ -26,7 +26,7 @@ the AUR) are released from openlawsvpn-linux.
 
 | Component | Description |
 |---|---|
-| `cmd/cli` | `openlawsvpn-cli` — CLI client with `-auth-user-pass`, the SAML browser flow, a reconnect loop, and relay agent mode (`-relay`) |
+| `cmd/cli` | `go-openvpn-cli` — CLI client with `-auth-user-pass`, the SAML browser flow, a reconnect loop, and relay agent mode (`-relay`) |
 | `cmd/relay-server` | Local relay server for dev/testing without hitting production |
 
 ## Use as a library
@@ -90,22 +90,22 @@ certificates and pushed options are scrubbed before serialisation.
 
 ```bash
 # Linux CLI (direct, no daemon)
-CGO_ENABLED=0 go build -o openlawsvpn-cli ./cmd/cli
-sudo ./openlawsvpn-cli -config your.ovpn
+CGO_ENABLED=0 go build -o go-openvpn-cli ./cmd/cli
+sudo ./go-openvpn-cli -config your.ovpn
 
 # Add "verb 4" to the profile to log the verified server certificate.
 
 # Public relay demo.
-sudo ./openlawsvpn-cli -relay default -daemon \
+sudo ./go-openvpn-cli -relay default -daemon \
   -logfile /tmp/vpn.log -pidfile /tmp/vpn.pid
 
 # Private relay token (CI/CD headless auth); token file must be mode 0600.
-sudo ./openlawsvpn-cli -relay-token-file /run/user/$UID/openlawsvpn-relay-token \
+sudo ./go-openvpn-cli -relay-token-file /run/user/$UID/go-openvpn-relay-token \
   -daemon -logfile /tmp/vpn.log -pidfile /tmp/vpn.pid
 
 # Android .aar (requires gomobile + Android NDK)
-gomobile bind -o go-openlawsvpn.aar -target android -androidapi 31 \
-    github.com/openlawsvpn/go-openlawsvpn
+gomobile bind -o go-openvpn.aar -target android -androidapi 31 \
+    github.com/buengese/go-openvpn
 ```
 
 With `verb 4`, the client logs the verified server certificate during every
@@ -134,8 +134,8 @@ lists every pass, the one command that runs it, and what it costs.
 | Workflow | Trigger | What it does |
 |---|---|---|
 | **CI** (`ci.yml`) | push / PR to `main` or `dev` | Go builds, race tests, and vet; also drives the CLI against the mock server on ubuntu and macOS, with and without `redirect-gateway` |
-| **Build AAR** (`aar.yml`) | push tag `v*` or manual | builds `go-openlawsvpn.aar` via `gomobile bind`, publishes GitHub Release, opens a version-bump PR on `openlawsvpn-android-go` |
-| **Build xcframework** (`xcframework.yml`) | push tag `v*` or manual | builds `go-openlawsvpn.xcframework` for ios / iossimulator / macos, attaches the zip and its SHA-256 to the GitHub Release, dispatches a `bump-xcframework` event to `openlawsvpn-ios` |
+| **Build AAR** (`aar.yml`) | push tag `v*` or manual | builds `go-openvpn.aar` via `gomobile bind`, publishes GitHub Release, opens a version-bump PR on `openlawsvpn-android-go` |
+| **Build xcframework** (`xcframework.yml`) | push tag `v*` or manual | builds `go-openvpn.xcframework` for ios / iossimulator / macos, attaches the zip and its SHA-256 to the GitHub Release, dispatches a `bump-xcframework` event to `openlawsvpn-ios` |
 | **Release** (`release.yml`) | push tag `v*` or manual | builds the static `cli` binary for linux amd64 / arm64 / ppc64le and darwin arm64 / amd64, GPG-signs and attests each, attaches them to the GitHub Release |
 | **VPN Integration** (`vpn-integration.yml`) | manual | integration run against a live endpoint |
 
@@ -154,7 +154,7 @@ The `aar.yml` workflow builds the AAR, attaches it (with SHA-256) to the GitHub
 Release, then triggers `bump-aar.yml` on `openlawsvpn-android-go` — which opens a
 PR bumping the pinned AAR version automatically.
 
-**Cross-repo auth:** writes use the `openlawsvpn-ci` GitHub App via
+**Cross-repo auth:** writes use the `go-openvpn-ci` GitHub App via
 `actions/create-github-app-token` — secrets `CI_APP_ID` / `CI_APP_PRIVATE_KEY`.
 There is no `ANDROID_GO_PAT` PAT.
 

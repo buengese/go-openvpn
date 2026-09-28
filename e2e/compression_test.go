@@ -22,7 +22,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/openlawsvpn/go-openlawsvpn/diag"
+	"github.com/buengese/go-openvpn/diag"
 )
 
 // compressionEntries is the framing ladder: one entry per wire framing this

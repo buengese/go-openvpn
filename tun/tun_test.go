@@ -8,7 +8,7 @@
 //
 // Run with:
 //
-//	sudo OPENLAWSVPN_PRIVILEGED_TESTS=1 \
+//	sudo GO_OPENVPN_PRIVILEGED_TESTS=1 \
 //	  go test -v -tags=privileged -timeout=60s ./tun/
 package tun
 
@@ -21,7 +21,7 @@ import (
 // privilegedEnv is the opt-in switch for every test in this file. Root alone
 // is not enough: a root test run in a container should not silently start
 // creating interfaces in that container.
-const privilegedEnv = "OPENLAWSVPN_PRIVILEGED_TESTS"
+const privilegedEnv = "GO_OPENVPN_PRIVILEGED_TESTS"
 
 // requirePrivileged skips unless the test may open /dev/net/tun and configure
 // the interface it gets back.

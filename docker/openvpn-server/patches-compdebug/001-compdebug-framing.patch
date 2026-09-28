@@ -5,7 +5,7 @@
  #include "memdbg.h"
  
 +/*
-+ * go-openlawsvpn compression-framing instrumentation.
++ * go-openvpn compression-framing instrumentation.
 + *
 + * Prints one greppable line per data packet that crosses the compression
 + * layer, carrying the buffer on *both* sides of the framing:

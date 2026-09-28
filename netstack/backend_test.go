@@ -13,7 +13,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/openlawsvpn/go-openlawsvpn/device"
+	"github.com/buengese/go-openvpn/device"
 
 	"gvisor.dev/gvisor/pkg/tcpip/header"
 )

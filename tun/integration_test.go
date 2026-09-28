@@ -29,9 +29,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/openlawsvpn/go-openlawsvpn/dns"
-	"github.com/openlawsvpn/go-openlawsvpn/routing"
-	"github.com/openlawsvpn/go-openlawsvpn/tun"
+	"github.com/buengese/go-openvpn/dns"
+	"github.com/buengese/go-openvpn/routing"
+	"github.com/buengese/go-openvpn/tun"
 )
 
 // syntheticPushReply is a PUSH_REPLY of the shape a server sends after a

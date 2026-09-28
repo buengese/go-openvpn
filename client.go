@@ -1,4 +1,4 @@
-// Package vpn is the top-level go-openlawsvpn package.
+// Package vpn is the top-level go-openvpn package.
 //
 // It provides an OpenVPN client that runs the whole connection lifecycle: the
 // control channel and its TLS session, authentication, the data channel, and
@@ -44,14 +44,14 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/openlawsvpn/go-openlawsvpn/device"
-	"github.com/openlawsvpn/go-openlawsvpn/diag"
-	"github.com/openlawsvpn/go-openlawsvpn/internal/compress"
-	"github.com/openlawsvpn/go-openlawsvpn/internal/datachannel"
-	"github.com/openlawsvpn/go-openlawsvpn/internal/prf"
-	"github.com/openlawsvpn/go-openlawsvpn/internal/wrap"
-	"github.com/openlawsvpn/go-openlawsvpn/profile"
-	"github.com/openlawsvpn/go-openlawsvpn/routing"
+	"github.com/buengese/go-openvpn/device"
+	"github.com/buengese/go-openvpn/diag"
+	"github.com/buengese/go-openvpn/internal/compress"
+	"github.com/buengese/go-openvpn/internal/datachannel"
+	"github.com/buengese/go-openvpn/internal/prf"
+	"github.com/buengese/go-openvpn/internal/wrap"
+	"github.com/buengese/go-openvpn/profile"
+	"github.com/buengese/go-openvpn/routing"
 )
 
 // SAMLChallenge holds the parsed fields from a CRV1 SAML challenge.
@@ -74,7 +74,7 @@ var ErrReauthRequired = fmt.Errorf("vpn: SAML re-authentication required: token 
 
 // Version is the release this build came from, stamped at link time:
 //
-//	-ldflags "-X github.com/openlawsvpn/go-openlawsvpn.Version=v1.2.3"
+//	-ldflags "-X github.com/buengese/go-openvpn.Version=v1.2.3"
 //
 // It is empty in a plain `go build`, where BuildVersion falls back to what the
 // toolchain recorded.
@@ -140,7 +140,7 @@ func (s state) String() string {
 	}
 }
 
-// Client is a go-openlawsvpn VPN client. It is not safe for concurrent use by
+// Client is a go-openvpn VPN client. It is not safe for concurrent use by
 // multiple goroutines except where noted — Stats and WaitForDisconnect may be
 // called concurrently with the data channel.
 type Client struct {

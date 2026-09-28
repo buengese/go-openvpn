@@ -5,7 +5,7 @@ import (
 	"encoding/binary"
 	"testing"
 
-	"github.com/openlawsvpn/go-openlawsvpn/internal/mssfix"
+	"github.com/buengese/go-openvpn/internal/mssfix"
 )
 
 // buildSYN4 constructs a minimal IPv4 TCP SYN packet with an MSS option.

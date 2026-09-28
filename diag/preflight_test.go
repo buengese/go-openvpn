@@ -4,7 +4,7 @@ import (
 	"encoding/json"
 	"testing"
 
-	"github.com/openlawsvpn/go-openlawsvpn/diag"
+	"github.com/buengese/go-openvpn/diag"
 )
 
 // TestPreflightModeZeroValueIsFailFast pins that a zero value — a report with

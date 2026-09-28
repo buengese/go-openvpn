@@ -5,7 +5,7 @@
 # in daemon mode, asserts the tunnel comes up, then cleans up.
 #
 # Environment overrides:
-#   CLI_BIN   — path to openlawsvpn-cli (default: bin/openlawsvpn-cli)
+#   CLI_BIN   — path to go-openvpn-cli (default: bin/go-openvpn-cli)
 #   MOCK_BIN  — path to mock-server     (default: bin/mock-server)
 #   SUDO      — sudo command prefix      (default: sudo; set to "" to disable)
 #
@@ -15,7 +15,7 @@
 set -euo pipefail
 
 REPO_ROOT=$(cd "$(dirname "$0")/.." && pwd)
-CLI_BIN=${CLI_BIN:-"$REPO_ROOT/bin/openlawsvpn-cli"}
+CLI_BIN=${CLI_BIN:-"$REPO_ROOT/bin/go-openvpn-cli"}
 MOCK_BIN=${MOCK_BIN:-"$REPO_ROOT/bin/mock-server"}
 SUDO=${SUDO:-sudo}
 
@@ -25,8 +25,8 @@ SUDO=${SUDO:-sudo}
 mkdir -p "$REPO_ROOT/tmp"
 MOCK_LOG=$(mktemp "$REPO_ROOT/tmp/mock-server.XXXXXX.log")
 MOCK_CA=$(mktemp "$REPO_ROOT/tmp/mock-server-ca.XXXXXX.pem")
-CLI_LOG=$(mktemp "$REPO_ROOT/tmp/openlawsvpn-cli.XXXXXX.log")
-CLI_PID_FILE=$(mktemp "$REPO_ROOT/tmp/openlawsvpn-cli.XXXXXX.pid")
+CLI_LOG=$(mktemp "$REPO_ROOT/tmp/go-openvpn-cli.XXXXXX.log")
+CLI_PID_FILE=$(mktemp "$REPO_ROOT/tmp/go-openvpn-cli.XXXXXX.pid")
 TEST_OVPN=$(mktemp "$REPO_ROOT/tmp/test.XXXXXX.ovpn")
 MOCK_PID=
 
@@ -55,7 +55,7 @@ if [[ ! -x "$MOCK_BIN" ]]; then
 fi
 
 if [[ ! -x "$CLI_BIN" ]]; then
-    echo "Building openlawsvpn-cli..."
+    echo "Building go-openvpn-cli..."
     cd "$REPO_ROOT"
     CGO_ENABLED=0 go build -o "$CLI_BIN" ./cmd/cli
 fi

@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/openlawsvpn/go-openlawsvpn/diag"
+	"github.com/buengese/go-openvpn/diag"
 )
 
 func TestStageString(t *testing.T) {

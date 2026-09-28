@@ -13,7 +13,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/openlawsvpn/go-openlawsvpn/diag"
+	"github.com/buengese/go-openvpn/diag"
 )
 
 // These tests drive the unexported newACSServer rather than NewACSServer, so

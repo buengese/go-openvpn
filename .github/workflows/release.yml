@@ -49,9 +49,9 @@ jobs:
           GOOS: linux
           GOARCH: ${{ matrix.goarch }}
         run: |
-          OUT="openlawsvpn-cli-linux-${{ matrix.goarch }}"
+          OUT="go-openvpn-cli-linux-${{ matrix.goarch }}"
           go build \
-            -ldflags "-s -w -X github.com/openlawsvpn/go-openlawsvpn.Version=${{ steps.version.outputs.tag }}" \
+            -ldflags "-s -w -X github.com/buengese/go-openvpn.Version=${{ steps.version.outputs.tag }}" \
             -o "$OUT" \
             ./cmd/cli
           sha256sum "$OUT" > "$OUT.sha256"
@@ -61,22 +61,22 @@ jobs:
           GPG_PRIVATE_KEY: ${{ secrets.GPG_PRIVATE_KEY }}
         run: |
           echo "$GPG_PRIVATE_KEY" | base64 --decode | gpg --batch --import
-          OUT="openlawsvpn-cli-linux-${{ matrix.goarch }}"
+          OUT="go-openvpn-cli-linux-${{ matrix.goarch }}"
           gpg --batch --detach-sign --armor "$OUT"
 
       - name: GitHub Artifact Attestation
         uses: actions/attest-build-provenance@v1
         with:
-          subject-path: openlawsvpn-cli-linux-${{ matrix.goarch }}
+          subject-path: go-openvpn-cli-linux-${{ matrix.goarch }}
 
       - name: Upload to release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ steps.version.outputs.tag }}
           files: |
-            openlawsvpn-cli-linux-${{ matrix.goarch }}
-            openlawsvpn-cli-linux-${{ matrix.goarch }}.sha256
-            openlawsvpn-cli-linux-${{ matrix.goarch }}.asc
+            go-openvpn-cli-linux-${{ matrix.goarch }}
+            go-openvpn-cli-linux-${{ matrix.goarch }}.sha256
+            go-openvpn-cli-linux-${{ matrix.goarch }}.asc
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
@@ -114,9 +114,9 @@ jobs:
           GOOS: darwin
           GOARCH: ${{ matrix.goarch }}
         run: |
-          OUT="openlawsvpn-cli-macos-${{ matrix.goarch }}"
+          OUT="go-openvpn-cli-macos-${{ matrix.goarch }}"
           go build \
-            -ldflags "-s -w -X github.com/openlawsvpn/go-openlawsvpn.Version=${{ steps.version.outputs.tag }}" \
+            -ldflags "-s -w -X github.com/buengese/go-openvpn.Version=${{ steps.version.outputs.tag }}" \
             -o "$OUT" \
             ./cmd/cli
           shasum -a 256 "$OUT" > "$OUT.sha256"
@@ -126,21 +126,21 @@ jobs:
           GPG_PRIVATE_KEY: ${{ secrets.GPG_PRIVATE_KEY }}
         run: |
           echo "$GPG_PRIVATE_KEY" | base64 --decode | gpg --batch --import
-          OUT="openlawsvpn-cli-macos-${{ matrix.goarch }}"
+          OUT="go-openvpn-cli-macos-${{ matrix.goarch }}"
           gpg --batch --detach-sign --armor "$OUT"
 
       - name: GitHub Artifact Attestation
         uses: actions/attest-build-provenance@v1
         with:
-          subject-path: openlawsvpn-cli-macos-${{ matrix.goarch }}
+          subject-path: go-openvpn-cli-macos-${{ matrix.goarch }}
 
       - name: Upload to release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ steps.version.outputs.tag }}
           files: |
-            openlawsvpn-cli-macos-${{ matrix.goarch }}
-            openlawsvpn-cli-macos-${{ matrix.goarch }}.sha256
-            openlawsvpn-cli-macos-${{ matrix.goarch }}.asc
+            go-openvpn-cli-macos-${{ matrix.goarch }}
+            go-openvpn-cli-macos-${{ matrix.goarch }}.sha256
+            go-openvpn-cli-macos-${{ matrix.goarch }}.asc
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

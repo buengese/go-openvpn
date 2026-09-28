@@ -1,4 +1,4 @@
-// Package relay implements the CLI agent side of the openlawsvpn SAML relay protocol.
+// Package relay implements the CLI agent side of the go-openvpn SAML relay protocol.
 //
 // An agent opens a persistent outbound WebSocket to the relay server, registers with
 // its organisation token, then stands by. When the mobile/desktop app completes the

@@ -18,11 +18,11 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/openlawsvpn/go-openlawsvpn/diag"
-	"github.com/openlawsvpn/go-openlawsvpn/internal/control"
-	"github.com/openlawsvpn/go-openlawsvpn/internal/keymethod2"
-	"github.com/openlawsvpn/go-openlawsvpn/profile"
-	"github.com/openlawsvpn/go-openlawsvpn/routing"
+	"github.com/buengese/go-openvpn/diag"
+	"github.com/buengese/go-openvpn/internal/control"
+	"github.com/buengese/go-openvpn/internal/keymethod2"
+	"github.com/buengese/go-openvpn/profile"
+	"github.com/buengese/go-openvpn/routing"
 )
 
 // methodTestClient returns a client whose profile selects one authentication

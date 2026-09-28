@@ -11,8 +11,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/openlawsvpn/go-openlawsvpn/internal/crypto"
-	"github.com/openlawsvpn/go-openlawsvpn/internal/datachannel"
+	"github.com/buengese/go-openvpn/internal/crypto"
+	"github.com/buengese/go-openvpn/internal/datachannel"
 )
 
 // TestUnsupportedCipherErrorNamesIt pins that datachannel.ResolveParams names

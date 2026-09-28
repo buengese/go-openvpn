@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/openlawsvpn/go-openlawsvpn/internal/control"
+	"github.com/buengese/go-openvpn/internal/control"
 )
 
 func TestReadServerReplyPushReply(t *testing.T) {

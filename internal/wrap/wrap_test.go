@@ -9,7 +9,7 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/openlawsvpn/go-openlawsvpn/internal/crypto"
+	"github.com/buengese/go-openvpn/internal/crypto"
 )
 
 // The identity wrap, the fixtures every wrap's unit tests share, and the

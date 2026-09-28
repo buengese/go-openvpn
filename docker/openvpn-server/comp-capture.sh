@@ -45,8 +45,8 @@ repo_root="$(cd "$here/../.." && pwd)"
 
 DOCKER="${DOCKER:-docker}"
 COMPDEBUG_SUFFIX="-compdebug"
-NET="openlawsvpn-compcapture-$$"
-LABEL="com.openlawsvpn.testenv=comp-capture"
+NET="go-openvpn-compcapture-$$"
+LABEL="net.bngs.goopenvpn.testenv=comp-capture"
 OUT="$repo_root/internal/compress/testdata/vectors.json"
 PATCH="docker/openvpn-server/patches-compdebug/001-compdebug-framing.patch"
 KEEP=0
@@ -178,7 +178,7 @@ gen() {
         -days 1 -sha256 -extfile "$2" -out "$1.crt" 2>/dev/null
 }
 openssl req -x509 -nodes -newkey rsa:2048 -sha256 -days 1 \
-    -subj "/CN=openlawsvpn-comp-capture-ca" -keyout ca.key -out ca.crt 2>/dev/null
+    -subj "/CN=go-openvpn-comp-capture-ca" -keyout ca.key -out ca.crt 2>/dev/null
 gen server ext-server.cnf
 gen client ext.cnf
 echo "SERVERPKI $(tar -cf - ca.crt server.crt server.key | base64 -w0)"

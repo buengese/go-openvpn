@@ -13,8 +13,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/openlawsvpn/go-openlawsvpn/diag"
-	"github.com/openlawsvpn/go-openlawsvpn/profile"
+	"github.com/buengese/go-openvpn/diag"
+	"github.com/buengese/go-openvpn/profile"
 )
 
 // caPEM is a plausible CA body. Nothing parses it as a certificate here; the

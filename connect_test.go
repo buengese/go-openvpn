@@ -20,12 +20,12 @@ import (
 	"testing"
 	"time"
 
-	"github.com/openlawsvpn/go-openlawsvpn/diag"
-	"github.com/openlawsvpn/go-openlawsvpn/internal/control"
-	"github.com/openlawsvpn/go-openlawsvpn/internal/datachannel"
-	"github.com/openlawsvpn/go-openlawsvpn/internal/framing"
-	"github.com/openlawsvpn/go-openlawsvpn/profile"
-	"github.com/openlawsvpn/go-openlawsvpn/routing"
+	"github.com/buengese/go-openvpn/diag"
+	"github.com/buengese/go-openvpn/internal/control"
+	"github.com/buengese/go-openvpn/internal/datachannel"
+	"github.com/buengese/go-openvpn/internal/framing"
+	"github.com/buengese/go-openvpn/profile"
+	"github.com/buengese/go-openvpn/routing"
 )
 
 // ---- the exchange ---------------------------------------------------------

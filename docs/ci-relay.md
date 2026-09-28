@@ -1,6 +1,6 @@
-# Using openlawsvpn-cli relay mode in CI/CD pipelines
+# Using go-openvpn-cli relay mode in CI/CD pipelines
 
-`openlawsvpn-cli` relay mode lets a CI runner connect to an internal VPN network
+`go-openvpn-cli` relay mode lets a CI runner connect to an internal VPN network
 without exposing its relay token in process arguments. The SAML auth flow runs on
 the operator's phone or desktop; the runner receives the completed tunnel
 credentials via the relay and brings the VPN up as a background daemon. The relay
@@ -16,7 +16,7 @@ show; private organisation tokens should use the file form on shared systems.
 ```
 CI runner                       Relay (AWS)              Operator (phone/desktop)
 ─────────                       ───────────              ───────────────────────
-openlawsvpn-cli -relay-token-file <mode-0600-file>
+go-openvpn-cli -relay-token-file <mode-0600-file>
   -daemon                ──WS──▶  relay.openlawsvpn.com  ◀──REST──  app lists agents
   registers, then blocks                                              taps Connect
   waiting for the operator                                            SAML browser flow
@@ -40,21 +40,21 @@ The background daemon keeps the tunnel alive for the rest of the job.
 ## GitHub Actions example
 
 ```yaml
-- name: Build openlawsvpn-cli
-  run: CGO_ENABLED=0 go build -o /usr/local/bin/openlawsvpn-cli ./cmd/cli
+- name: Build go-openvpn-cli
+  run: CGO_ENABLED=0 go build -o /usr/local/bin/go-openvpn-cli ./cmd/cli
 
 - name: Start relay agent (daemon)
   timeout-minutes: 5
   env:
     RELAY_TOKEN: ${{ secrets.RELAY_TOKEN }}
   run: |
-    install -m 600 /dev/null /tmp/openlawsvpn-relay-token
-    printf '%s\n' "$RELAY_TOKEN" > /tmp/openlawsvpn-relay-token
-    sudo openlawsvpn-cli \
-      -relay-token-file /tmp/openlawsvpn-relay-token \
+    install -m 600 /dev/null /tmp/go-openvpn-relay-token
+    printf '%s\n' "$RELAY_TOKEN" > /tmp/go-openvpn-relay-token
+    sudo go-openvpn-cli \
+      -relay-token-file /tmp/go-openvpn-relay-token \
       -daemon \
-      -pidfile /tmp/openlawsvpn.pid \
-      -logfile /tmp/openlawsvpn.log
+      -pidfile /tmp/go-openvpn.pid \
+      -logfile /tmp/go-openvpn.log
     # blocks until the app approves (tunnel up), then exits 0
     # the daemon continues running in the background
 
@@ -66,15 +66,15 @@ The background daemon keeps the tunnel alive for the rest of the job.
 - name: Disconnect VPN and remove token file
   if: always()
   run: |
-    sudo kill "$(cat /tmp/openlawsvpn.pid)" 2>/dev/null || true
-    rm -f /tmp/openlawsvpn-relay-token
+    sudo kill "$(cat /tmp/go-openvpn.pid)" 2>/dev/null || true
+    rm -f /tmp/go-openvpn-relay-token
 
 - name: Upload relay agent log
   if: always()
   uses: actions/upload-artifact@v4
   with:
     name: vpn-log
-    path: /tmp/openlawsvpn.log
+    path: /tmp/go-openvpn.log
 ```
 
 The `-daemon` flag forks the process to the background once the tunnel is up.
@@ -143,7 +143,7 @@ Use the in-process relay server to test without hitting production:
 go run ./cmd/relay-server -addr :18080
 
 # Terminal 2 — CI agent (foreground for easier debugging; omit -daemon)
-sudo openlawsvpn-cli -relay testtoken \
+sudo go-openvpn-cli -relay testtoken \
   -relay-endpoint ws://localhost:18080/ws \
   -config tunnel.ovpn
 

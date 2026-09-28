@@ -7,8 +7,8 @@ package datachannel
 import (
 	"fmt"
 
-	"github.com/openlawsvpn/go-openlawsvpn/internal/crypto"
-	"github.com/openlawsvpn/go-openlawsvpn/internal/prf"
+	"github.com/buengese/go-openvpn/internal/crypto"
+	"github.com/buengese/go-openvpn/internal/prf"
 )
 
 // Params is the negotiated data-channel configuration for a

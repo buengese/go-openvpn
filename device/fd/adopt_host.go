@@ -4,7 +4,7 @@
 
 package fd
 
-import "github.com/openlawsvpn/go-openlawsvpn/tun"
+import "github.com/buengese/go-openvpn/tun"
 
 // adopt wraps a descriptor supplied by the platform's VPN host. The build tags
 // mirror tun's own split: android has tun.OpenFd for VpnService, darwin and ios

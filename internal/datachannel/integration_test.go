@@ -31,7 +31,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/openlawsvpn/go-openlawsvpn/internal/datachannel"
+	"github.com/buengese/go-openvpn/internal/datachannel"
 )
 
 // TestPingThroughDataChannel establishes an in-process TLS session using the
@@ -190,7 +190,7 @@ func TestPingThroughDataChannel(t *testing.T) {
 	//   [64:128] = HMAC|ENCRYPT|NORMAL    → nonce tail = [64:72] (8 bytes)
 	//   [128:192]= CIPHER|DECRYPT|NORMAL  → cipher key = [128:160]
 	//   [192:256]= HMAC|DECRYPT|NORMAL    → nonce tail = [192:200] (8 bytes)
-	const ekLabel = "EXPORTER-go-openlawsvpn-datachannel-test"
+	const ekLabel = "EXPORTER-go-openvpn-datachannel-test"
 	keyMat, err := cs.ExportKeyingMaterial(ekLabel, nil, 256)
 	if err != nil {
 		t.Fatalf("ExportKeyingMaterial: %v", err)
@@ -209,7 +209,7 @@ func TestPingThroughDataChannel(t *testing.T) {
 
 	// ---- Build and send a synthetic ICMP echo-request IP packet -------------
 	// Minimal IPv4 + ICMP echo-request: 20-byte IP header + 8-byte ICMP header.
-	ping := buildICMPEchoRequest(t, 1, 42, []byte("go-openlawsvpn ping test"))
+	ping := buildICMPEchoRequest(t, 1, 42, []byte("go-openvpn ping test"))
 	t.Logf("sending ping (%d bytes)", len(ping))
 
 	pktWire, err := clientCh.Encrypt(ping)
@@ -362,7 +362,7 @@ func runMockServer(rawConn net.Conn, tlsCfg *tls.Config, echoCh chan<- []byte) e
 	}
 
 	// Key derivation — same label and layout as the client.
-	const ekLabel = "EXPORTER-go-openlawsvpn-datachannel-test"
+	const ekLabel = "EXPORTER-go-openvpn-datachannel-test"
 	keyMat, err := cs.ExportKeyingMaterial(ekLabel, nil, 256)
 	if err != nil {
 		return err

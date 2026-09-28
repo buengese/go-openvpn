@@ -15,7 +15,7 @@ import (
 	"os"
 	"testing"
 
-	"github.com/openlawsvpn/go-openlawsvpn/internal/prf"
+	"github.com/buengese/go-openvpn/internal/prf"
 )
 
 // vectorsPath is the captured ground truth, relative to this package.

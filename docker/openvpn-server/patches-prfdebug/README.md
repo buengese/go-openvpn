@@ -2,7 +2,7 @@
 
 Selected with `--build-arg PATCH_DIR=patches-prfdebug`, which only
 `../build-prfdebug.sh` passes. It tags the result
-`openlawsvpn-test/openvpn-server:2.4.12-prfdebug`.
+`go-openvpn-test/openvpn-server:2.4.12-prfdebug`.
 
 `001-prfdebug-key-expansion.patch` instruments `generate_key_expansion()` in
 `src/openvpn/ssl.c` so that every derivation prints, in hex, both peers' key

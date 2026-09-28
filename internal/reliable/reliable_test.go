@@ -3,8 +3,8 @@ package reliable_test
 import (
 	"testing"
 
-	"github.com/openlawsvpn/go-openlawsvpn/internal/framing"
-	"github.com/openlawsvpn/go-openlawsvpn/internal/reliable"
+	"github.com/buengese/go-openvpn/internal/framing"
+	"github.com/buengese/go-openvpn/internal/reliable"
 )
 
 // --- SendQueue tests ---

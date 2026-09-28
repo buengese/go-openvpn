@@ -20,10 +20,10 @@ import (
 	"testing"
 	"time"
 
-	vpn "github.com/openlawsvpn/go-openlawsvpn"
-	"github.com/openlawsvpn/go-openlawsvpn/diag"
-	"github.com/openlawsvpn/go-openlawsvpn/profile"
-	"github.com/openlawsvpn/go-openlawsvpn/testenv"
+	vpn "github.com/buengese/go-openvpn"
+	"github.com/buengese/go-openvpn/diag"
+	"github.com/buengese/go-openvpn/profile"
+	"github.com/buengese/go-openvpn/testenv"
 )
 
 // assertReportReachedData checks the report a mock-server run must produce: the
@@ -113,7 +113,7 @@ func startMock(t *testing.T, crv1 bool) (*testenv.Server, *profile.Profile) {
 
 // mockProfile returns an AWS-flow profile pointing to a local mock server.
 //
-// It declares the flow rather than inferring it: x-openlawsvpn-flow saml is how
+// It declares the flow rather than inferring it: x-go-openvpn-flow saml is how
 // a profile says "AWS flow" for a server whose hostname is not an
 // amazonaws.com endpoint, which 127.0.0.1 is not. Inferred, this profile is
 // FlowUserPass, which would present the wrong credentials to a server that

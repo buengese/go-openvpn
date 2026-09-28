@@ -65,7 +65,7 @@ const (
 	// MatrixClientCN is the common name on every matrix client certificate.
 	MatrixClientCN = "matrix-client"
 	// MatrixCACN is the common name on the throwaway CA.
-	MatrixCACN = "openlawsvpn-matrix-ca"
+	MatrixCACN = "go-openvpn-matrix-ca"
 )
 
 // ContainerPort is the port the server listens on inside the container. The

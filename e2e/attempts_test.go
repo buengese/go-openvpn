@@ -9,7 +9,7 @@ package e2e
 import (
 	"fmt"
 
-	vpn "github.com/openlawsvpn/go-openlawsvpn"
+	vpn "github.com/buengese/go-openvpn"
 )
 
 // summariseAttempts renders a reconnect's attempts for a failure message: what

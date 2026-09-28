@@ -14,7 +14,7 @@
 # Both matter. The instrumented build prints the control-channel key material
 # and every control packet, plaintext and wrapped, into its log — and, because
 # init_key_ctx() is shared, the data-channel keys as well. It must never answer
-# to the plain `openlawsvpn-test/openvpn-server:2.4.12` tag that
+# to the plain `go-openvpn-test/openvpn-server:2.4.12` tag that
 # `testenv.StartMatrix` and every other test resolve. Overwriting that tag would
 # quietly turn the whole matrix into a key-material leak.
 #

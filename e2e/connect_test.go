@@ -20,11 +20,11 @@ import (
 	"testing"
 	"time"
 
-	vpn "github.com/openlawsvpn/go-openlawsvpn"
-	"github.com/openlawsvpn/go-openlawsvpn/diag"
-	"github.com/openlawsvpn/go-openlawsvpn/netstack"
-	"github.com/openlawsvpn/go-openlawsvpn/profile"
-	"github.com/openlawsvpn/go-openlawsvpn/testenv"
+	vpn "github.com/buengese/go-openvpn"
+	"github.com/buengese/go-openvpn/diag"
+	"github.com/buengese/go-openvpn/netstack"
+	"github.com/buengese/go-openvpn/profile"
+	"github.com/buengese/go-openvpn/testenv"
 )
 
 // dataPathEntry is the simplest entry that exercises a stream transport end to

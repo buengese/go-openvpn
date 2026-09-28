@@ -166,7 +166,7 @@ bash docker/openvpn-server/build-compdebug.sh          # 2.4, 2.5 and 2.6
 bash docker/openvpn-server/build-compdebug.sh 2.4      # one series
 ```
 
-Produces `openlawsvpn-test/openvpn-server:{2.4.12,2.5.11,2.6.22}-compdebug` from
+Produces `go-openvpn-test/openvpn-server:{2.4.12,2.5.11,2.6.22}-compdebug` from
 the same Dockerfile, the same pinned tarballs (SHA-256 verified) and the same
 pinned base images as the stock matrix build, with two differences:
 
@@ -177,7 +177,7 @@ pinned base images as the stock matrix build, with two differences:
 
 **Both matter.** The instrumented build prints every tunnelled IP packet in the
 clear into its log. It must never answer to a plain
-`openlawsvpn-test/openvpn-server:<ver>` tag that `testenv.StartMatrix` and every
+`go-openvpn-test/openvpn-server:<ver>` tag that `testenv.StartMatrix` and every
 other test resolve. `build-compdebug.sh` refuses to run if a suffix ever
 computes to a stock tag, refuses if the patch directory is empty, and — after
 each build — greps the resulting binary for the instrumentation's format string,
@@ -466,6 +466,6 @@ package carries seven modes rather than three. Keep the parser in the path.
 `make matrix-clean` removes matrix containers, networks and images, including
 the `-compdebug` tags. The capture script removes its own containers and network
 on the way out, and on failure too unless `-k` is given. Its label is
-`com.openlawsvpn.testenv=comp-capture`, distinct from the matrix's and from the
+`net.bngs.goopenvpn.testenv=comp-capture`, distinct from the matrix's and from the
 other two captures', so `TestMatrixLeavesNoStrays` neither sees it nor is
 confused by it.

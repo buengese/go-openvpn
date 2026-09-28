@@ -20,11 +20,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/openlawsvpn/go-openlawsvpn/internal/framing"
+	"github.com/buengese/go-openvpn/internal/framing"
 
-	"github.com/openlawsvpn/go-openlawsvpn/internal/prf"
-	"github.com/openlawsvpn/go-openlawsvpn/profile"
-	"github.com/openlawsvpn/go-openlawsvpn/routing"
+	"github.com/buengese/go-openvpn/internal/prf"
+	"github.com/buengese/go-openvpn/profile"
+	"github.com/buengese/go-openvpn/routing"
 )
 
 func makeTestProfile() *profile.Profile {

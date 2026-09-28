@@ -8,7 +8,7 @@ import (
 	"context"
 	"errors"
 
-	"github.com/openlawsvpn/go-openlawsvpn/device"
+	"github.com/buengese/go-openvpn/device"
 )
 
 // ErrHostSuppliesDescriptor is returned by Open on Android and iOS, where an

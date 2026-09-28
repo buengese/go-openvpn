@@ -11,9 +11,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/openlawsvpn/go-openlawsvpn/device"
-	"github.com/openlawsvpn/go-openlawsvpn/dns"
-	"github.com/openlawsvpn/go-openlawsvpn/routing"
+	"github.com/buengese/go-openvpn/device"
+	"github.com/buengese/go-openvpn/dns"
+	"github.com/buengese/go-openvpn/routing"
 )
 
 // testNet builds a Net over a stack addressed the way a PUSH_REPLY would

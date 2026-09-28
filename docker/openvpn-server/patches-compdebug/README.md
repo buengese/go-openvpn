@@ -2,7 +2,7 @@
 
 Selected with `--build-arg PATCH_DIR=patches-compdebug`, which only
 `../build-compdebug.sh` passes. It tags the results
-`openlawsvpn-test/openvpn-server:{2.4.12,2.5.11,2.6.22}-compdebug`.
+`go-openvpn-test/openvpn-server:{2.4.12,2.5.11,2.6.22}-compdebug`.
 
 `001-compdebug-framing.patch` instruments one place in `src/openvpn/comp.c`:
 

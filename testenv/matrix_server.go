@@ -39,7 +39,7 @@ const matrixReadyMarker = "Initialization Sequence Completed"
 
 // MatrixLabel is applied to every container StartMatrix creates, so strays can
 // be found and removed with `make matrix-clean`.
-const MatrixLabel = "com.openlawsvpn.testenv=matrix"
+const MatrixLabel = "net.bngs.goopenvpn.testenv=matrix"
 
 // MatrixPKI is the ephemeral certificate material generated for one matrix
 // server run. It is created in memory by StartMatrix, handed to the container
@@ -347,7 +347,7 @@ func createMatrixNetwork() (string, error) {
 	if _, err := rand.Read(b[:]); err != nil {
 		return "", err
 	}
-	name := "openlawsvpn-matrix-" + hex.EncodeToString(b[:4])
+	name := "go-openvpn-matrix-" + hex.EncodeToString(b[:4])
 	subnet := fmt.Sprintf("fd00:4f4c:5650:%02x%02x::/64", b[4], b[5])
 
 	out, err := exec.Command("docker", "network", "create",

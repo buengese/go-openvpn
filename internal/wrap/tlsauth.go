@@ -7,7 +7,7 @@ import (
 	"hash"
 	"strconv"
 
-	"github.com/openlawsvpn/go-openlawsvpn/internal/crypto"
+	"github.com/buengese/go-openvpn/internal/crypto"
 )
 
 // tls-auth: an HMAC and a replay header on every control packet. The wire

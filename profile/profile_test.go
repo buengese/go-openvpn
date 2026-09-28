@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/openlawsvpn/go-openlawsvpn/profile"
+	"github.com/buengese/go-openvpn/profile"
 )
 
 const minimal = `
@@ -845,18 +845,31 @@ func TestParseRemoteRandomHostname(t *testing.T) {
 	}
 }
 
-// TestParseFlowDirectiveAsksForSAML covers x-openlawsvpn-flow, this project's
+// TestParseFlowDirectiveAsksForSAML covers x-go-openvpn-flow, this project's
 // own directive rather than OpenVPN's: it is how a server asks for the
 // federated flow, and "saml" is the only argument it answers to. A bare
 // directive, or one naming anything else, must not put the client on a browser
 // flow.
+//
+// x-openlawsvpn-flow is the same directive under the name it had before the
+// project was renamed, and every case is asserted for both spellings: a
+// profile written against the old name has to keep behaving exactly as it did,
+// including in the cases that must NOT select the federated flow.
 func TestParseFlowDirectiveAsksForSAML(t *testing.T) {
 	for _, tc := range []struct {
 		line string
 		want bool
 	}{
-		{"x-openlawsvpn-flow saml", true},
+		{"x-go-openvpn-flow saml", true},
 		// The argument is folded, like the directive name above it.
+		{"x-go-openvpn-flow SAML", true},
+		{"x-go-openvpn-flow Saml", true},
+		{"x-go-openvpn-flow", false},
+		{"x-go-openvpn-flow cert", false},
+		{"x-go-openvpn-flow samlx", false},
+
+		// The deprecated spelling, still answering the same way.
+		{"x-openlawsvpn-flow saml", true},
 		{"x-openlawsvpn-flow SAML", true},
 		{"x-openlawsvpn-flow Saml", true},
 		{"x-openlawsvpn-flow", false},

@@ -20,11 +20,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/openlawsvpn/go-openlawsvpn/diag"
-	"github.com/openlawsvpn/go-openlawsvpn/internal/crypto"
-	"github.com/openlawsvpn/go-openlawsvpn/internal/framing"
-	"github.com/openlawsvpn/go-openlawsvpn/internal/wrap"
-	"github.com/openlawsvpn/go-openlawsvpn/profile"
+	"github.com/buengese/go-openvpn/diag"
+	"github.com/buengese/go-openvpn/internal/crypto"
+	"github.com/buengese/go-openvpn/internal/framing"
+	"github.com/buengese/go-openvpn/internal/wrap"
+	"github.com/buengese/go-openvpn/profile"
 )
 
 // ---- choosing the control-channel wrap -------------------------------------

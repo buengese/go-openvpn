@@ -14,7 +14,7 @@
 #
 # Both matter. The instrumented build prints every tunnelled IP packet in the
 # clear on both sides of the compression framing, into its container log. It
-# must never answer to the plain `openlawsvpn-test/openvpn-server:<ver>` tags
+# must never answer to the plain `go-openvpn-test/openvpn-server:<ver>` tags
 # that `testenv.StartMatrix` and every other test resolve. Overwriting one of
 # those would quietly turn the whole matrix into a plaintext traffic leak.
 #

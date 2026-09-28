@@ -22,8 +22,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/openlawsvpn/go-openlawsvpn/diag"
-	"github.com/openlawsvpn/go-openlawsvpn/profile"
+	"github.com/buengese/go-openvpn/diag"
+	"github.com/buengese/go-openvpn/profile"
 )
 
 // testPKI is a throwaway certificate authority, of which this package uses only

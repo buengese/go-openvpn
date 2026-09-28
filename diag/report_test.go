@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/openlawsvpn/go-openlawsvpn/diag"
+	"github.com/buengese/go-openvpn/diag"
 )
 
 // secretValues is the table of known secrets the redaction test scans for. Every

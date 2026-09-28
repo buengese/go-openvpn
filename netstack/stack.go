@@ -27,8 +27,8 @@ import (
 	"fmt"
 	"net/netip"
 
-	"github.com/openlawsvpn/go-openlawsvpn/device"
-	"github.com/openlawsvpn/go-openlawsvpn/routing"
+	"github.com/buengese/go-openvpn/device"
+	"github.com/buengese/go-openvpn/routing"
 
 	"gvisor.dev/gvisor/pkg/tcpip"
 	"gvisor.dev/gvisor/pkg/tcpip/header"

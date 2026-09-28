@@ -13,7 +13,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/openlawsvpn/go-openlawsvpn/profile"
+	"github.com/buengese/go-openvpn/profile"
 )
 
 // The key-method-2 exchange: keep what we send, and parse what the peer sends.

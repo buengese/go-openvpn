@@ -22,8 +22,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/openlawsvpn/go-openlawsvpn/diag"
-	"github.com/openlawsvpn/go-openlawsvpn/testenv"
+	"github.com/buengese/go-openvpn/diag"
+	"github.com/buengese/go-openvpn/testenv"
 )
 
 // matrixStartBudget is the per-entry start budget. Image builds are not part

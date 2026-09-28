@@ -25,7 +25,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/openlawsvpn/go-openlawsvpn/device"
+	"github.com/buengese/go-openvpn/device"
 )
 
 // readDeadline bounds a single blocking read so ReadPacket can observe a

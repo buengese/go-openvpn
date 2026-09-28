@@ -29,7 +29,7 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/openlawsvpn/go-openlawsvpn/diag"
+	"github.com/buengese/go-openvpn/diag"
 )
 
 // IsAWSEndpoint reports whether host is an AWS Client VPN endpoint, matching the

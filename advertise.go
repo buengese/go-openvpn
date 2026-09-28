@@ -5,9 +5,9 @@
 package vpn
 
 import (
-	"github.com/openlawsvpn/go-openlawsvpn/internal/datachannel"
-	"github.com/openlawsvpn/go-openlawsvpn/internal/keymethod2"
-	"github.com/openlawsvpn/go-openlawsvpn/profile"
+	"github.com/buengese/go-openvpn/internal/datachannel"
+	"github.com/buengese/go-openvpn/internal/keymethod2"
+	"github.com/buengese/go-openvpn/profile"
 )
 
 // DataV2Advertisement selects whether this client's IV_PROTO advertisement

@@ -26,9 +26,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/openlawsvpn/go-openlawsvpn/caps"
-	"github.com/openlawsvpn/go-openlawsvpn/diag"
-	"github.com/openlawsvpn/go-openlawsvpn/profile"
+	"github.com/buengese/go-openvpn/caps"
+	"github.com/buengese/go-openvpn/diag"
+	"github.com/buengese/go-openvpn/profile"
 )
 
 // updateGolden rewrites this package's committed artifacts — the registry
@@ -229,7 +229,7 @@ func recognised(g diag.Gap) bool {
 
 // goldenHeader opens the committed matrix. It is part of the file so a reader
 // who opens it without the test knows what it is and how to regenerate it.
-const goldenHeader = `# capability matrix over the generated fixtures — go-openlawsvpn
+const goldenHeader = `# capability matrix over the generated fixtures — go-openvpn
 #
 # Aggregate of caps.Inspect over the fixtures in caps/fixtures_test.go, which
 # instantiate every registry row. A change here is a change in how a directive

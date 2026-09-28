@@ -11,7 +11,7 @@
     "openvpn_sha256": "66952d9c95490e5875f04c9f8fa313b5e816d1b7b4d6cda3fb2ff749ad405dee",
     "base_image": "debian:bullseye-slim@sha256:e5b6442dd2e9684cf5e87d8338b5968f3b348636fc0be6d7850a381e3731a2bd",
     "configure_flags": "--prefix=/usr --enable-iproute2 --enable-lzo --enable-lz4 --disable-plugin-auth-pam",
-    "image": "openlawsvpn-test/openvpn-server:2.4.12-prfdebug",
+    "image": "go-openvpn-test/openvpn-server:2.4.12-prfdebug",
     "patch": "docker/openvpn-server/patches-prfdebug/001-prfdebug-key-expansion.patch",
     "instrumented_function": "generate_key_expansion() in src/openvpn/ssl.c",
     "capture_method": "two containers of the instrumented image complete a real handshake; the dump is taken from the server, whose key_source2 holds both peers' material, and cross-checked against the client's own dump",

@@ -17,8 +17,8 @@ import (
 	"testing"
 	"time"
 
-	vpn "github.com/openlawsvpn/go-openlawsvpn"
-	"github.com/openlawsvpn/go-openlawsvpn/device"
+	vpn "github.com/buengese/go-openvpn"
+	"github.com/buengese/go-openvpn/device"
 )
 
 // ---- A tunnel device that needs no privilege -----------------------------
@@ -71,7 +71,7 @@ func expiringDemoToken(t *testing.T, ttl time.Duration) string {
 	t.Helper()
 	xml := fmt.Sprintf(
 		`<samlp:Response xmlns:samlp="urn:oasis:names:tc:SAML:2.0:protocol" `+
-			`ID="openlawsvpn-reconnect"><Conditions NotOnOrAfter="%s"/></samlp:Response>`,
+			`ID="go-openvpn-reconnect"><Conditions NotOnOrAfter="%s"/></samlp:Response>`,
 		time.Now().Add(ttl).UTC().Format("2006-01-02T15:04:05Z"))
 	token := base64.StdEncoding.EncodeToString([]byte(xml))
 	// The mock reads this when it validates a Phase 2 CRV1 password, and

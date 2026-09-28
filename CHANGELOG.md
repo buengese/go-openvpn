@@ -1,6 +1,6 @@
 # Changelog
 
-All notable user-facing changes to go-openlawsvpn are documented in this file.
+All notable user-facing changes to go-openvpn are documented in this file.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and releases follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
@@ -223,6 +223,27 @@ and releases follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- **Breaking:** the project is renamed. The Go module is
+  `github.com/buengese/go-openvpn` and every import path moves with it; the
+  repository lives at <https://github.com/buengese/go-openvpn>. An importer has
+  to update its import paths — there is no compatibility alias for the old
+  module path.
+
+  The names the module produces move too. The CLI is `go-openvpn-cli`, and the
+  variables it and the test suite read are `GO_OPENVPN_*` rather than
+  `OPENLAWSVPN_*`. The gomobile artifacts are `go-openvpn.aar` and
+  `go-openvpn.xcframework`, whose inner framework gomobile now names
+  `Go-Openvpn.framework`, so the Android and iOS apps have to be pointed at the
+  new file and framework names. Containers the test matrix starts are labelled
+  `net.bngs.goopenvpn.testenv`, and the images it builds are
+  `go-openvpn-test/openvpn-server` — a local repository, so `make
+  matrix-images` has to run again before the matrix tests will find them.
+
+  Nothing on the wire changed and no profile stops working. The
+  `x-openlawsvpn-flow` directive is still recognised — `x-go-openvpn-flow` is
+  the spelling new profiles should use, and both sit in the capability registry
+  — and the relay and demo endpoints are untouched.
+
 - **Breaking:** `dns.Apply` is now
   `Apply(cfg *Config, ifName string) (Backend, string, error)`. It took a
   `backupPath` and returned `(Backend, error)`; the backup path is now chosen by
@@ -339,9 +360,9 @@ and releases follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 - The Linux desktop app — the GTK GUI, the D-Bus system daemon and the RPM/AUR
   packaging — moved to its own repository,
-  [openlawsvpn-linux](https://github.com/openlawsvpn/openlawsvpn-linux), with
+  [go-openvpn-linux](https://github.com/buengese/go-openvpn-linux), with
   its history, its security architecture document and its version scripts.
-  This module is the engine and `openlawsvpn-cli`; the desktop app consumes it
+  This module is the engine and `go-openvpn-cli`; the desktop app consumes it
   as a dependency, the way the Android and iOS apps do, and builds the CLI it
   packages from this module. Nothing in this tree carries a version any more:
   the release tag is the version, and the release workflows no longer check it
@@ -489,7 +510,7 @@ and releases follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   before calling `Apply`, unconditionally, and `Apply` wrote it only on the path
   that edits `/etc/resolv.conf` — so a host served by systemd-resolved or
   scutil, or pushed no DNS at all, collected a zero-byte
-  `openlawsvpn-resolv-*.conf` per attempt, one per reconnect. The backup is now
+  `go-openvpn-resolv-*.conf` per attempt, one per reconnect. The backup is now
   made by the one path that uses it, which is why `Apply` hands the path back.
 - The relay agent allocated whatever a frame header declared. `readMessage` read
   the WebSocket length field and called `make` on it before a single payload
@@ -513,7 +534,7 @@ and releases follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   stage — instead of as an unexplained listen error. AWS fixes the callback to
   `127.0.0.1:35001` and the ACS server now runs in the system daemon, where the
   port is not partitioned by user: whatever holds it receives the identity
-  provider's POST, which carries the assertion. `openlawsvpn-cli` no longer
+  provider's POST, which carries the assertion. `go-openvpn-cli` no longer
   answers a lost bind by prompting for a pasted assertion, which asked the user
   to complete, by hand, a login whose credential had already gone elsewhere; it
   refuses and names the port so the holder can be found. The paste route is
@@ -623,7 +644,7 @@ and releases follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Configure full and split DNS for VPC-private resources on iOS.
 - Refresh the GTK profile list immediately after deleting a profile.
 
-[Unreleased]: https://github.com/openlawsvpn/go-openlawsvpn/compare/v1.2.3...HEAD
+[Unreleased]: https://github.com/buengese/go-openvpn/compare/v1.2.3...HEAD
 [1.2.3]: https://github.com/openlawsvpn/go-openlawsvpn/compare/v1.2.2...v1.2.3
 [1.2.2]: https://github.com/openlawsvpn/go-openlawsvpn/compare/v1.2.1...v1.2.2
 [1.2.1]: https://github.com/openlawsvpn/go-openlawsvpn/compare/v1.2.0...v1.2.1

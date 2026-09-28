@@ -1,4 +1,4 @@
-// Command mockserver is the go-openlawsvpn mock OpenVPN server.
+// Command mockserver is the go-openvpn mock OpenVPN server.
 //
 // It handles the full control-channel + TLS + key-method-2 auth packet exchange
 // needed by integration tests. Every event is logged to stdout as one JSON
@@ -45,9 +45,9 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/openlawsvpn/go-openlawsvpn/internal/datachannel"
-	"github.com/openlawsvpn/go-openlawsvpn/internal/occ"
-	"github.com/openlawsvpn/go-openlawsvpn/internal/prf"
+	"github.com/buengese/go-openvpn/internal/datachannel"
+	"github.com/buengese/go-openvpn/internal/occ"
+	"github.com/buengese/go-openvpn/internal/prf"
 )
 
 // event is a structured log line emitted to stdout.
@@ -170,7 +170,7 @@ func loadOrGenerateTLS(certDir string) (*tls.Config, []byte, error) {
 	}
 	caTemplate := &x509.Certificate{
 		SerialNumber:          big.NewInt(1),
-		Subject:               pkix.Name{CommonName: "mock-ca", Organization: []string{"openlawsvpn-test"}},
+		Subject:               pkix.Name{CommonName: "mock-ca", Organization: []string{"go-openvpn-test"}},
 		NotBefore:             time.Now().Add(-time.Minute),
 		NotAfter:              time.Now().Add(30 * 24 * time.Hour),
 		KeyUsage:              x509.KeyUsageCertSign | x509.KeyUsageCRLSign,
@@ -192,7 +192,7 @@ func loadOrGenerateTLS(certDir string) (*tls.Config, []byte, error) {
 	}
 	srvTemplate := &x509.Certificate{
 		SerialNumber: big.NewInt(2),
-		Subject:      pkix.Name{CommonName: "mock-server", Organization: []string{"openlawsvpn-test"}},
+		Subject:      pkix.Name{CommonName: "mock-server", Organization: []string{"go-openvpn-test"}},
 		NotBefore:    time.Now().Add(-time.Minute),
 		NotAfter:     time.Now().Add(30 * 24 * time.Hour),
 		KeyUsage:     x509.KeyUsageDigitalSignature,

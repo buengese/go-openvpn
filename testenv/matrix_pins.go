@@ -10,7 +10,7 @@ package testenv
 
 // MatrixImageRepo is the local-only image repository the matrix server images
 // are tagged into. Images are built by `make matrix-images` and never pushed.
-const MatrixImageRepo = "openlawsvpn-test/openvpn-server"
+const MatrixImageRepo = "go-openvpn-test/openvpn-server"
 
 // Pinned OpenVPN releases built into the matrix images. Never a floating tag:
 // a moving version makes every captured result irreproducible.

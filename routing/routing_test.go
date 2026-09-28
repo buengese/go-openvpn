@@ -6,7 +6,7 @@ import (
 	"net"
 	"testing"
 
-	"github.com/openlawsvpn/go-openlawsvpn/internal/compress"
+	"github.com/buengese/go-openvpn/internal/compress"
 )
 
 // ---- ParsePushReply ----------------------------------------------------------

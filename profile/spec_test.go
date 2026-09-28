@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/openlawsvpn/go-openlawsvpn/profile"
+	"github.com/buengese/go-openvpn/profile"
 )
 
 // render writes a Spec as the .ovpn text a file would have carried. It exists

@@ -6,8 +6,8 @@ import (
 	"encoding/json"
 	"net"
 
-	"github.com/openlawsvpn/go-openlawsvpn/dns"
-	"github.com/openlawsvpn/go-openlawsvpn/routing"
+	"github.com/buengese/go-openvpn/dns"
+	"github.com/buengese/go-openvpn/routing"
 )
 
 // IfconfigJSON serialises the TUN configuration as a JSON string for the host's

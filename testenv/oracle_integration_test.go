@@ -19,8 +19,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/openlawsvpn/go-openlawsvpn/diag"
-	"github.com/openlawsvpn/go-openlawsvpn/testenv"
+	"github.com/buengese/go-openvpn/diag"
+	"github.com/buengese/go-openvpn/testenv"
 )
 
 // oracleTestWindow shortens openvpn's handshake window for the tests. The

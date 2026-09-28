@@ -23,9 +23,9 @@ import (
 	"fmt"
 	"sync"
 
-	"github.com/openlawsvpn/go-openlawsvpn/device"
-	"github.com/openlawsvpn/go-openlawsvpn/device/fd"
-	"github.com/openlawsvpn/go-openlawsvpn/profile"
+	"github.com/buengese/go-openvpn/device"
+	"github.com/buengese/go-openvpn/device/fd"
+	"github.com/buengese/go-openvpn/profile"
 )
 
 // MobileCallbacks is a gomobile interface implemented by the host platform.

@@ -13,7 +13,7 @@
     "openvpn_sha256": "66952d9c95490e5875f04c9f8fa313b5e816d1b7b4d6cda3fb2ff749ad405dee",
     "base_image": "debian:bullseye-slim@sha256:e5b6442dd2e9684cf5e87d8338b5968f3b348636fc0be6d7850a381e3731a2bd",
     "configure_flags": "--prefix=/usr --enable-iproute2 --enable-lzo --enable-lz4 --disable-plugin-auth-pam",
-    "image": "openlawsvpn-test/openvpn-server:2.4.12-tlswrapdebug",
+    "image": "go-openvpn-test/openvpn-server:2.4.12-tlswrapdebug",
     "patch": "docker/openvpn-server/patches-tlswrapdebug/001-tlswrapdebug-control-channel.patch",
     "instrumented_function": "write_control_auth() in src/openvpn/ssl.c and init_key_ctx() in src/openvpn/crypto.c",
     "capture_method": "two containers of the instrumented image complete a real handshake; every outgoing control packet is dumped plain, mid-wrap and on the wire, on both peers, and the key bytes each direction installed are located inside the static key rather than assumed",

@@ -9,7 +9,7 @@
 //	relay-server [-addr :18080]
 //
 //	# CLI agent (same machine or LAN):
-//	openlawsvpn-cli -config tunnel.ovpn -relay testtoken -relay-endpoint ws://192.168.1.12:18080/ws
+//	go-openvpn-cli -config tunnel.ovpn -relay testtoken -relay-endpoint ws://192.168.1.12:18080/ws
 //
 //	# Android app: set relay endpoint to http://192.168.1.12:18080/api/v1
 //	#              and org token to  mytoken

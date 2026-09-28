@@ -14,7 +14,7 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/openlawsvpn/go-openlawsvpn/internal/compress"
+	"github.com/buengese/go-openvpn/internal/compress"
 )
 
 // TestParseModeReadsEveryDirective walks the directive-to-mode table: a

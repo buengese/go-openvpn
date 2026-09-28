@@ -19,9 +19,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/openlawsvpn/go-openlawsvpn/netstack"
-	"github.com/openlawsvpn/go-openlawsvpn/profile"
-	"github.com/openlawsvpn/go-openlawsvpn/testenv"
+	"github.com/buengese/go-openvpn/netstack"
+	"github.com/buengese/go-openvpn/profile"
+	"github.com/buengese/go-openvpn/testenv"
 )
 
 // The three renegotiation vehicles, one per direction and format.

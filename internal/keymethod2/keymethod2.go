@@ -17,8 +17,8 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/openlawsvpn/go-openlawsvpn/internal/crypto"
-	"github.com/openlawsvpn/go-openlawsvpn/profile"
+	"github.com/buengese/go-openvpn/internal/crypto"
+	"github.com/buengese/go-openvpn/profile"
 )
 
 // The IV_PROTO bits this client implements, and their sum.

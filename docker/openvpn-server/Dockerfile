@@ -103,9 +103,9 @@ RUN chmod 0755 /usr/local/bin/entrypoint.sh; \
 
 ENV OPENVPN_VERSION=${OPENVPN_VERSION}
 
-LABEL org.opencontainers.image.title="openlawsvpn openvpn matrix server" \
-      org.opencontainers.image.description="Pinned OpenVPN server for the go-openlawsvpn e2e test matrix" \
-      com.openlawsvpn.openvpn-version="${OPENVPN_VERSION}"
+LABEL org.opencontainers.image.title="go-openvpn openvpn matrix server" \
+      org.opencontainers.image.description="Pinned OpenVPN server for the go-openvpn e2e test matrix" \
+      net.bngs.goopenvpn.openvpn-version="${OPENVPN_VERSION}"
 
 # The container needs --cap-add=NET_ADMIN and --device=/dev/net/tun to bring up
 # a tun device; testenv.StartMatrix passes both.

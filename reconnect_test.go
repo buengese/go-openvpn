@@ -19,9 +19,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/openlawsvpn/go-openlawsvpn/diag"
-	"github.com/openlawsvpn/go-openlawsvpn/internal/control"
-	"github.com/openlawsvpn/go-openlawsvpn/profile"
+	"github.com/buengese/go-openvpn/diag"
+	"github.com/buengese/go-openvpn/internal/control"
+	"github.com/buengese/go-openvpn/profile"
 )
 
 // unreachableClient returns a client whose only remote is a closed loopback

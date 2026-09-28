@@ -1,7 +1,7 @@
 NDK_VERSION      := 30.0.14904198
 ANDROID_API      := 31
 ANDROID_SDK_HOME ?= $(HOME)/Android/Sdk
-MODULE           := github.com/openlawsvpn/go-openlawsvpn
+MODULE           := github.com/buengese/go-openvpn
 VERSION          ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo "dev")
 GOPATH           ?= $(shell go env GOPATH)
 
@@ -26,9 +26,9 @@ endif
 all: aar
 
 ## Build the Android .aar
-aar: go-openlawsvpn.aar
+aar: go-openvpn.aar
 
-go-openlawsvpn.aar:
+go-openvpn.aar:
 	@command -v gomobile >/dev/null 2>&1 || { \
 	  echo "gomobile not found — run: go install golang.org/x/mobile/cmd/gomobile@latest && gomobile init"; \
 	  exit 1; \
@@ -39,33 +39,33 @@ go-openlawsvpn.aar:
 	  exit 1; \
 	}
 	ANDROID_NDK_HOME=$(ANDROID_NDK_HOME) gomobile bind -v \
-	  -o go-openlawsvpn.aar \
+	  -o go-openvpn.aar \
 	  -target android \
 	  -androidapi $(ANDROID_API) \
 	  -ldflags "-X $(MODULE).Version=$(VERSION)" \
 	  $(MODULE)
 
 ## Compute SHA-256 checksum alongside the .aar
-aar-sha256: go-openlawsvpn.aar
-	sha256sum go-openlawsvpn.aar > go-openlawsvpn.aar.sha256
+aar-sha256: go-openvpn.aar
+	sha256sum go-openvpn.aar > go-openvpn.aar.sha256
 
 ## Build the Linux CLI binary (CGO_ENABLED=0 → fully static)
 cli:
-	CGO_ENABLED=0 go build -o openlawsvpn-cli ./cmd/cli
+	CGO_ENABLED=0 go build -o go-openvpn-cli ./cmd/cli
 
 ## Build macOS CLI binaries (arm64 + amd64; requires sudo to run — utun needs root).
 build-macos-cli:
 	CGO_ENABLED=0 GOOS=darwin GOARCH=arm64 go build \
-		-o openlawsvpn-cli-macos-arm64 ./cmd/cli
+		-o go-openvpn-cli-macos-arm64 ./cmd/cli
 	CGO_ENABLED=0 GOOS=darwin GOARCH=amd64 go build \
-		-o openlawsvpn-cli-macos-amd64 ./cmd/cli
+		-o go-openvpn-cli-macos-amd64 ./cmd/cli
 
 ## Build the local relay-server test binary
 relay-server:
 	CGO_ENABLED=0 go build -o relay-server ./cmd/relay-server
 
 ## Start the local relay server for testing (default port 18080, override with RELAY_ADDR)
-## Agent:  openlawsvpn-cli -config tunnel.ovpn -relay <token> -relay-endpoint ws://localhost:18080/ws
+## Agent:  go-openvpn-cli -config tunnel.ovpn -relay <token> -relay-endpoint ws://localhost:18080/ws
 ## App:    set endpoint to http://<host>:18080/api/v1
 RELAY_ADDR ?= :18080
 run-local-relay:
@@ -101,12 +101,12 @@ test-e2e:
 
 ## Privileged pass: needs root. See docs/testing.md.
 test-privileged:
-	sudo OPENLAWSVPN_PRIVILEGED_TESTS=1 go test -v -tags=privileged -timeout 60s ./tun ./device/kernel
+	sudo GO_OPENVPN_PRIVILEGED_TESTS=1 go test -v -tags=privileged -timeout 60s ./tun ./device/kernel
 
 ## Soak: `make test-soak SOAK=1h`. See docs/testing.md.
 SOAK ?= 1h
 test-soak:
-	OPENLAWSVPN_SOAK=$(SOAK) go test -tags=soak -timeout 150m -run TestSoak ./e2e
+	GO_OPENVPN_SOAK=$(SOAK) go test -tags=soak -timeout 150m -run TestSoak ./e2e
 
 ## Build the pinned OpenVPN 2.4/2.5/2.6 server images for the e2e matrix.
 ## Slow (source builds); run once, then matrix entries start in well under a
@@ -149,21 +149,21 @@ comp-vectors:
 
 ## Remove any matrix containers, networks and images left behind.
 matrix-clean:
-	-docker ps -aq --filter label=com.openlawsvpn.testenv=matrix | xargs -r docker rm -f
-	-docker ps -aq --filter label=com.openlawsvpn.testenv=prf-capture | xargs -r docker rm -f
-	-docker ps -aq --filter label=com.openlawsvpn.testenv=tls-wrap-capture | xargs -r docker rm -f
-	-docker ps -aq --filter label=com.openlawsvpn.testenv=comp-capture | xargs -r docker rm -f
-	-docker network ls -q --filter label=com.openlawsvpn.testenv=matrix | xargs -r docker network rm
-	-docker network ls -q --filter label=com.openlawsvpn.testenv=prf-capture | xargs -r docker network rm
-	-docker network ls -q --filter label=com.openlawsvpn.testenv=tls-wrap-capture | xargs -r docker network rm
-	-docker network ls -q --filter label=com.openlawsvpn.testenv=comp-capture | xargs -r docker network rm
-	-docker images -q openlawsvpn-test/openvpn-server | xargs -r docker rmi -f
+	-docker ps -aq --filter label=net.bngs.goopenvpn.testenv=matrix | xargs -r docker rm -f
+	-docker ps -aq --filter label=net.bngs.goopenvpn.testenv=prf-capture | xargs -r docker rm -f
+	-docker ps -aq --filter label=net.bngs.goopenvpn.testenv=tls-wrap-capture | xargs -r docker rm -f
+	-docker ps -aq --filter label=net.bngs.goopenvpn.testenv=comp-capture | xargs -r docker rm -f
+	-docker network ls -q --filter label=net.bngs.goopenvpn.testenv=matrix | xargs -r docker network rm
+	-docker network ls -q --filter label=net.bngs.goopenvpn.testenv=prf-capture | xargs -r docker network rm
+	-docker network ls -q --filter label=net.bngs.goopenvpn.testenv=tls-wrap-capture | xargs -r docker network rm
+	-docker network ls -q --filter label=net.bngs.goopenvpn.testenv=comp-capture | xargs -r docker network rm
+	-docker images -q go-openvpn-test/openvpn-server | xargs -r docker rmi -f
 
 ## Build CLI + mock-server binaries into bin/
 build-bins:
 	mkdir -p bin
 	go build -o bin/mock-server ./testenv/mockserver
-	CGO_ENABLED=0 go build -o bin/openlawsvpn-cli ./cmd/cli
+	CGO_ENABLED=0 go build -o bin/go-openvpn-cli ./cmd/cli
 
 ## CLI binary integration test: starts mock server, connects CLI in daemon mode, asserts tunnel up.
 ## Requires sudo (TUN device creation). Binaries are built automatically if missing.
@@ -195,5 +195,5 @@ lint:
 
 ## Remove build artefacts
 clean:
-	rm -f go-openlawsvpn.aar go-openlawsvpn.aar.sha256 go-openlawsvpn-sources.jar openlawsvpn-cli relay-server cli
+	rm -f go-openvpn.aar go-openvpn.aar.sha256 go-openvpn-sources.jar go-openvpn-cli relay-server cli
 	rm -rf bin/

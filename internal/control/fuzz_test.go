@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/openlawsvpn/go-openlawsvpn/internal/control"
+	"github.com/buengese/go-openvpn/internal/control"
 )
 
 // FuzzReadServerReply feeds random byte slices to ReadServerReply to verify it

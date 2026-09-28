@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/openlawsvpn/go-openlawsvpn/device"
+	"github.com/buengese/go-openvpn/device"
 )
 
 // pipeTUN stands in for the descriptor a VpnService or NEPacketTunnelProvider

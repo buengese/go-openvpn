@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/openlawsvpn/go-openlawsvpn/profile"
+	"github.com/buengese/go-openvpn/profile"
 )
 
 // FuzzParseString feeds random strings to ParseString to verify it never

@@ -5,8 +5,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/openlawsvpn/go-openlawsvpn/diag"
-	"github.com/openlawsvpn/go-openlawsvpn/testenv"
+	"github.com/buengese/go-openvpn/diag"
+	"github.com/buengese/go-openvpn/testenv"
 )
 
 // The logs below were captured verbatim from the pinned 2.4.12, 2.5.11 and
@@ -29,7 +29,7 @@ Sun Aug 30 18:38:27 2026 Initialization Sequence Completed`
 Sun Aug 30 18:26:53 2026 OpenVPN 2.4.12 x86_64-pc-linux-gnu [SSL (OpenSSL)] [LZO] [LZ4] [EPOLL] [MH/PKTINFO] [AEAD] built on Aug 30 2026
 Sun Aug 30 18:26:53 2026 UDP link remote: [AF_INET]172.28.0.2:1194
 Sun Aug 30 18:26:53 2026 TLS: Initial packet from [AF_INET]172.28.0.2:1194, sid=35f9b29b 8ea9c90b
-Sun Aug 30 18:26:53 2026 VERIFY ERROR: depth=1, error=self signed certificate in certificate chain: CN=openlawsvpn-matrix-ca, serial=1
+Sun Aug 30 18:26:53 2026 VERIFY ERROR: depth=1, error=self signed certificate in certificate chain: CN=go-openvpn-matrix-ca, serial=1
 Sun Aug 30 18:26:53 2026 OpenSSL: error:1416F086:SSL routines:tls_process_server_certificate:certificate verify failed
 Sun Aug 30 18:26:53 2026 TLS_ERROR: BIO read tls_read_plaintext error
 Sun Aug 30 18:26:53 2026 TLS Error: TLS object -> incoming plaintext read error
@@ -160,7 +160,7 @@ func TestClassifyReferenceLog(t *testing.T) {
 		{
 			name: "bad CA", log: logBadCA,
 			rule: "cert-verify-failed", class: diag.ClassTLS, stage: diag.StageTLS,
-			evidence: "VERIFY ERROR: depth=1, error=self signed certificate in certificate chain: CN=openlawsvpn-matrix-ca, serial=1",
+			evidence: "VERIFY ERROR: depth=1, error=self signed certificate in certificate chain: CN=go-openvpn-matrix-ca, serial=1",
 		},
 		{
 			name: "unresolvable remote", log: logResolveFailed,

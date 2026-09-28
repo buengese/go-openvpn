@@ -1,4 +1,4 @@
-# capability matrix over the generated fixtures — go-openlawsvpn
+# capability matrix over the generated fixtures — go-openvpn
 #
 # Aggregate of caps.Inspect over the fixtures in caps/fixtures_test.go, which
 # instantiate every registry row. A change here is a change in how a directive
@@ -14,16 +14,16 @@ fixtures
   groups                                8
   configs                              45
   refused                               1
-  directive lines                     286
+  directive lines                     287
   inline blocks                        54
-  gaps                                341
+  gaps                                342
   implied gaps                          1
   configs with implied gaps             1
   unrecognised directives               0
   unrecognised blocks                   0
 
 severity totals
-  supported                           286
+  supported                           287
   ignored                              33
   degraded                             19
   fatal                                 3
@@ -40,7 +40,7 @@ per group
   crypto                                6         43         37          1          5          0
   lexical                               3         24         23          0          1          0
   misc                                  4         60         26         26          7          1
-  session                               5         43         39          3          1          0
+  session                               5         44         40          3          1          0
   transport                             7         47         46          0          1          0
   trust                                 5         30         29          1          0          0
   wrap                                  7         44         41          1          0          2
@@ -135,4 +135,5 @@ per directive
   user                                  1          1          0          1          0          0
   verb                                  3          3          3          0          0          0
   verify-x509-name                      1          1          1          0          0          0
+  x-go-openvpn-flow                     1          1          1          0          0          0
   x-openlawsvpn-flow                    1          1          1          0          0          0

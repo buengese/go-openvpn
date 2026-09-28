@@ -1,6 +1,6 @@
 // Package profile parses OpenVPN .ovpn configuration files.
 //
-// It handles the directives that go-openlawsvpn needs: remote, port, proto,
+// It handles the directives that go-openvpn needs: remote, port, proto,
 // inline PEM blocks (<ca>, <cert>, <key>), the static-key blocks <tls-auth>
 // and <tls-crypt>, cipher, auth, rekey timing, and common extra options such
 // as comp-lzo / compress.
@@ -31,9 +31,9 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/openlawsvpn/go-openlawsvpn/internal/compress"
+	"github.com/buengese/go-openvpn/internal/compress"
 
-	"github.com/openlawsvpn/go-openlawsvpn/dns"
+	"github.com/buengese/go-openvpn/dns"
 )
 
 // Directive is one directive line exactly as the parser saw it, recorded
@@ -398,7 +398,8 @@ type Profile struct {
 	VerifyX509NameMatch X509NameMatch
 
 	// Federated is set when the profile contains 'auth-federate' or
-	// 'x-openlawsvpn-flow saml': the profile authenticates against an identity
+	// 'x-go-openvpn-flow saml' (or its former spelling
+	// 'x-openlawsvpn-flow saml'): the profile authenticates against an identity
 	// provider rather than with anything it carries itself.
 	//
 	// It reads the file and nothing else; recognising a federated endpoint by

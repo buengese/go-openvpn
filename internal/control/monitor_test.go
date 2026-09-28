@@ -12,7 +12,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/openlawsvpn/go-openlawsvpn/internal/control"
+	"github.com/buengese/go-openvpn/internal/control"
 )
 
 // TestSessionMonitorReportsWhyTheSessionEnded covers what the monitor puts on

@@ -9,8 +9,8 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/openlawsvpn/go-openlawsvpn/device"
-	"github.com/openlawsvpn/go-openlawsvpn/routing"
+	"github.com/buengese/go-openvpn/device"
+	"github.com/buengese/go-openvpn/routing"
 )
 
 // TestOpenReportsHostSuppliesDescriptor checks that the mobile platforms refuse

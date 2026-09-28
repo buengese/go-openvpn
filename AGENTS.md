@@ -1,4 +1,4 @@
-# Agent context for go-openlawsvpn
+# Agent context for go-openvpn
 
 ## What this repo is
 
@@ -34,28 +34,28 @@ covers what you are about to change:
 |---|---|
 | [`docs/testing.md`](docs/testing.md) | every test pass, and the one command that runs it |
 | [`docs/openvpn3-reference-policy.md`](docs/openvpn3-reference-policy.md) | how openvpn3 may be read and cited |
-| [`docs/ci-relay.md`](docs/ci-relay.md) | `openlawsvpn-cli` relay mode in CI |
+| [`docs/ci-relay.md`](docs/ci-relay.md) | `go-openvpn-cli` relay mode in CI |
 
 ## Parent project context
 
-**openlawsvpn** is an open-source AWS Client VPN client with SAML/SSO support.
+**go-openvpn** is an open-source AWS Client VPN client with SAML/SSO support.
 This repo is the current engine for all platforms:
 - Linux/macOS CLI: this repo (`cmd/cli`)
-- Linux desktop app (GTK GUI + D-Bus daemon + RPM/AUR packaging): https://github.com/openlawsvpn/openlawsvpn-linux (consumes this module)
+- Linux desktop app (GTK GUI + D-Bus daemon + RPM/AUR packaging): https://github.com/buengese/go-openvpn-linux (consumes this module)
 - Android client: https://github.com/openlawsvpn/openlawsvpn-android-go (consumes the `.aar`)
 - Website: https://openlawsvpn.com
 
-Consumers pin the engine via a `go-openlawsvpn.version` file and consume the
+Consumers pin the engine via a `go-openvpn.version` file and consume the
 gomobile `.aar` produced by `aar.yml`.
 
 ### Status
 
 The protocol is fully implemented and tested against a real AWS Client VPN
 endpoint. Working end-to-end on Linux and macOS (CLI), on Android and iOS (via
-the gomobile bindings) and on the Linux desktop through openlawsvpn-linux.
+the gomobile bindings) and on the Linux desktop through go-openvpn-linux.
 Verify the current release with
 `git tag --list 'v*' --sort=-v:refname | head -1`; do not copy a version from
-prose. The desktop packages (COPR, AUR) are released from openlawsvpn-linux on
+prose. The desktop packages (COPR, AUR) are released from go-openvpn-linux on
 its own versions.
 
 ### Releasing
@@ -65,14 +65,14 @@ entries under `Unreleased` in `CHANGELOG.md` to the new version and date,
 create a fresh empty `Unreleased` section, commit, then tag `vX.Y.Z`. The
 release workflows (`release.yml`, `aar.yml`, `xcframework.yml`) run on the
 tag. The desktop app, its RPM spec and its PKGBUILD are versioned and released
-from openlawsvpn-linux.
+from go-openvpn-linux.
 
 ### Retired / archived — do NOT treat as current
 
 - `openlawsvpn/openlawsvpn` (archived) — old C++/openvpn3-core engine + Linux CLI.
 - `openlawsvpn/openlawsvpn-android` (archived) — old Kotlin+JNI/NDK app.
 
-There is no longer a `libopenlawsvpn` C library, no JNI, no NDK, and no
+There is no longer a `libgoopenvpn` C library, no JNI, no NDK, and no
 openvpn3-core *dependency* anywhere in the shipping stack. Reading the openvpn3
 *source* remains current practice — see "What this repo is" above.
 
@@ -275,7 +275,7 @@ All in openvpn3-core (https://github.com/OpenVPN/openvpn3):
 
 ## The client API
 
-The old `libopenlawsvpn` C API that used to be transcribed here has been
+The old `libgoopenvpn` C API that used to be transcribed here has been
 removed. It described a library that exists in no shipping component, and its
 names no longer map onto anything: an agent reading `clientConnectPhase1` /
 `clientConnectPhase2` would go looking for Go methods of those names, which is
@@ -304,7 +304,7 @@ rather than one `client.go`. Nothing named `client_tun_linux.go` or
 seam.
 
 ```
-go-openlawsvpn/
+go-openvpn/
   AGENTS.md         — this file (agent/contributor context)
   README.md         — user-facing docs, build instructions, known limitations
   docs/             — the governing documents; see "The other documents" above
@@ -425,8 +425,8 @@ make test-mock
 
 To build and run the CLI (requires root for TUN):
 ```bash
-go build -o /tmp/openlawsvpn-cli ./cmd/cli
-sudo /tmp/openlawsvpn-cli -config path/to/profile.ovpn
+go build -o /tmp/go-openvpn-cli ./cmd/cli
+sudo /tmp/go-openvpn-cli -config path/to/profile.ovpn
 ```
 
 **NOTE:** The CLI uses `-config <path>` as a named flag. There is no positional

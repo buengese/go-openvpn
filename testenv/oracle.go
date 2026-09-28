@@ -24,7 +24,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/openlawsvpn/go-openlawsvpn/diag"
+	"github.com/buengese/go-openvpn/diag"
 )
 
 // ---------------------------------------------------------------------------
@@ -185,7 +185,7 @@ type OracleResult struct {
 	Classification
 
 	// Image is the exact image tag that ran, for example
-	// "openlawsvpn-test/openvpn-server:2.6.22".
+	// "go-openvpn-test/openvpn-server:2.6.22".
 	Image string
 	// Banner is the openvpn version banner from the run, for example
 	// "OpenVPN 2.6.22 x86_64-pc-linux-gnu [SSL (OpenSSL)] ... built on ...".

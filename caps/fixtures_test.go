@@ -253,7 +253,7 @@ var fixtureShapes = []fixtureShape{
 
 	{Group: "session", Name: "credential-flow",
 		directives: "auth-user-pass\nauth-nocache\nauth-retry nointeract\nauth-federate\n" +
-			"x-openlawsvpn-flow aws\n",
+			"x-go-openvpn-flow aws\nx-openlawsvpn-flow aws\n",
 		inline: []string{"ca"}},
 
 	// ---- Coverage ------------------------------------------------------

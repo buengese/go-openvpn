@@ -6,7 +6,7 @@ import (
 	"bytes"
 	"testing"
 
-	"github.com/openlawsvpn/go-openlawsvpn/internal/occ"
+	"github.com/buengese/go-openvpn/internal/occ"
 )
 
 // Everything here is a transcribed constant, so a typo produces a plaintext the

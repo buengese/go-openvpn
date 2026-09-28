@@ -16,10 +16,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/openlawsvpn/go-openlawsvpn/diag"
-	"github.com/openlawsvpn/go-openlawsvpn/netstack"
-	"github.com/openlawsvpn/go-openlawsvpn/profile"
-	"github.com/openlawsvpn/go-openlawsvpn/testenv"
+	"github.com/buengese/go-openvpn/diag"
+	"github.com/buengese/go-openvpn/netstack"
+	"github.com/buengese/go-openvpn/profile"
+	"github.com/buengese/go-openvpn/testenv"
 )
 
 // protoLine matches the generated profile's --proto directive, which these

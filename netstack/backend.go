@@ -31,8 +31,8 @@ import (
 	"sync"
 	"sync/atomic"
 
-	"github.com/openlawsvpn/go-openlawsvpn/device"
-	"github.com/openlawsvpn/go-openlawsvpn/dns"
+	"github.com/buengese/go-openvpn/device"
+	"github.com/buengese/go-openvpn/dns"
 
 	"gvisor.dev/gvisor/pkg/buffer"
 	"gvisor.dev/gvisor/pkg/tcpip"

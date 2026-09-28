@@ -17,8 +17,8 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/openlawsvpn/go-openlawsvpn/diag"
-	"github.com/openlawsvpn/go-openlawsvpn/profile"
+	"github.com/buengese/go-openvpn/diag"
+	"github.com/buengese/go-openvpn/profile"
 )
 
 // Support is the registry's verdict on one directive: how far the client's
@@ -115,8 +115,13 @@ var registry = map[string]entry{
 		"authentication is attempted once; reconnect policy is the caller's concern"),
 	"auth-federate": sup(supported,
 		"selects the AWS CRV1/SAML two-phase flow"),
-	"x-openlawsvpn-flow": sup(supported,
+	"x-go-openvpn-flow": sup(supported,
 		"non-standard: forces the CRV1/SAML flow for a non-AWS server"),
+	// The same directive under the name it had before the project was
+	// renamed. Profiles already written against it keep working; the registry
+	// says so rather than failing them as unrecognised.
+	"x-openlawsvpn-flow": sup(supported,
+		"deprecated spelling of x-go-openvpn-flow; forces the CRV1/SAML flow"),
 
 	// ---- Certificates and TLS ---------------------------------------
 

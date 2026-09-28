@@ -11,15 +11,15 @@ import (
 	"net"
 	"time"
 
-	"github.com/openlawsvpn/go-openlawsvpn/diag"
-	"github.com/openlawsvpn/go-openlawsvpn/internal/ctls"
-	"github.com/openlawsvpn/go-openlawsvpn/internal/datachannel"
-	"github.com/openlawsvpn/go-openlawsvpn/internal/framing"
-	"github.com/openlawsvpn/go-openlawsvpn/internal/keymethod2"
-	"github.com/openlawsvpn/go-openlawsvpn/internal/prf"
-	"github.com/openlawsvpn/go-openlawsvpn/internal/reliable"
-	"github.com/openlawsvpn/go-openlawsvpn/internal/tlsverify"
-	"github.com/openlawsvpn/go-openlawsvpn/routing"
+	"github.com/buengese/go-openvpn/diag"
+	"github.com/buengese/go-openvpn/internal/ctls"
+	"github.com/buengese/go-openvpn/internal/datachannel"
+	"github.com/buengese/go-openvpn/internal/framing"
+	"github.com/buengese/go-openvpn/internal/keymethod2"
+	"github.com/buengese/go-openvpn/internal/prf"
+	"github.com/buengese/go-openvpn/internal/reliable"
+	"github.com/buengese/go-openvpn/internal/tlsverify"
+	"github.com/buengese/go-openvpn/routing"
 )
 
 // rekeyLoop monitors the data-channel key epoch and initiates renegotiation

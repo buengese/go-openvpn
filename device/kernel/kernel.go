@@ -24,10 +24,10 @@ import (
 	"sync"
 	"time"
 
-	"github.com/openlawsvpn/go-openlawsvpn/device"
-	"github.com/openlawsvpn/go-openlawsvpn/dns"
-	"github.com/openlawsvpn/go-openlawsvpn/routing"
-	"github.com/openlawsvpn/go-openlawsvpn/tun"
+	"github.com/buengese/go-openvpn/device"
+	"github.com/buengese/go-openvpn/dns"
+	"github.com/buengese/go-openvpn/routing"
+	"github.com/buengese/go-openvpn/tun"
 )
 
 // Backend opens a kernel TUN interface and installs the host state that goes

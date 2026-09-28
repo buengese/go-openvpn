@@ -10,7 +10,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/openlawsvpn/go-openlawsvpn/profile"
+	"github.com/buengese/go-openvpn/profile"
 )
 
 // mustParse parses src and fails the test if it does not.

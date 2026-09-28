@@ -20,7 +20,7 @@ import (
 	"gvisor.dev/gvisor/pkg/tcpip/adapters/gonet"
 	"gvisor.dev/gvisor/pkg/tcpip/header"
 
-	"github.com/openlawsvpn/go-openlawsvpn/dns"
+	"github.com/buengese/go-openvpn/dns"
 )
 
 // defaultDNSPort is where a pushed DNS server is assumed to listen. OpenVPN's

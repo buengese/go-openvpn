@@ -4,7 +4,7 @@ import (
 	"encoding/binary"
 	"testing"
 
-	"github.com/openlawsvpn/go-openlawsvpn/internal/reliable"
+	"github.com/buengese/go-openvpn/internal/reliable"
 )
 
 // FuzzRecvWindowReceive feeds random (packetID, payload) pairs to

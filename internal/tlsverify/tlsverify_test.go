@@ -21,7 +21,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/openlawsvpn/go-openlawsvpn/profile"
+	"github.com/buengese/go-openvpn/profile"
 )
 
 // The tests in this file cover the SSLKEYLOGFILE branch of BuildConfig, which

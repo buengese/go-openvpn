@@ -137,7 +137,7 @@ That is the whole procedure. It runs the two steps below in order.
 bash docker/openvpn-server/build-prfdebug.sh
 ```
 
-Produces `openlawsvpn-test/openvpn-server:2.4.12-prfdebug` from the same
+Produces `go-openvpn-test/openvpn-server:2.4.12-prfdebug` from the same
 Dockerfile, the same pinned tarball (SHA-256 verified) and the same pinned base
 image as the stock matrix build, with two differences:
 
@@ -148,7 +148,7 @@ image as the stock matrix build, with two differences:
 
 **Both matter.** The instrumented build prints the data-channel key block into
 its log on every handshake. It must never answer to the plain
-`openlawsvpn-test/openvpn-server:2.4.12` tag that `testenv.StartMatrix` and
+`go-openvpn-test/openvpn-server:2.4.12` tag that `testenv.StartMatrix` and
 every other test resolve — overwriting that tag would quietly turn the entire
 test matrix into a key-material leak. `build-prfdebug.sh` refuses to run if the
 suffix ever computes to the stock tag, and refuses if the patch directory is

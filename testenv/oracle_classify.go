@@ -11,7 +11,7 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/openlawsvpn/go-openlawsvpn/diag"
+	"github.com/buengese/go-openvpn/diag"
 )
 
 // Classification

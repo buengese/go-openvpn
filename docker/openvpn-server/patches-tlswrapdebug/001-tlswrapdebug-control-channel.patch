@@ -5,7 +5,7 @@
                    const char *prefix);
  
 +/*
-+ * go-openlawsvpn control-channel wrap instrumentation.
++ * go-openvpn control-channel wrap instrumentation.
 + * Defined in crypto.c, called from crypto.c and ssl.c. Present only in the
 + * throwaway "tlswrapdebug" image; see docker/TLS-WRAP-VECTORS.md.
 + */
@@ -22,7 +22,7 @@
  }
  
 +/*
-+ * go-openlawsvpn control-channel wrap instrumentation.
++ * go-openvpn control-channel wrap instrumentation.
 + *
 + * Prints one greppable line:  TLSWRAPDEBUG <tag> <hex> [<trailer>]
 + *
@@ -114,7 +114,7 @@
  #undef SWAP_BUF_SIZE
  
  /*
-+ * go-openlawsvpn control-channel wrap instrumentation.
++ * go-openvpn control-channel wrap instrumentation.
 + *
 + * One line per stage of write_control_auth(), tagged with the wrap mode and
 + * the opcode so the capture can pick the first packet of each shape:

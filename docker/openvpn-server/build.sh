@@ -5,7 +5,7 @@
 #   ./build.sh 2.4 2.6    # build only the named series
 #
 # Images are tagged with their exact upstream version, never "latest":
-#   openlawsvpn-test/openvpn-server:2.4.12
+#   go-openvpn-test/openvpn-server:2.4.12
 #
 # testenv.StartMatrix refuses to run if the tag for an entry's series is absent
 # and tells you to run `make matrix-images`.

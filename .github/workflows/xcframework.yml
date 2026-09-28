@@ -42,51 +42,51 @@ jobs:
       - name: Build xcframework
         run: |
           gomobile bind -v \
-            -o go-openlawsvpn.xcframework \
+            -o go-openvpn.xcframework \
             -target ios,iossimulator,macos \
-            -ldflags "-X github.com/openlawsvpn/go-openlawsvpn.Version=${{ steps.version.outputs.tag }}" \
-            github.com/openlawsvpn/go-openlawsvpn
+            -ldflags "-X github.com/buengese/go-openvpn.Version=${{ steps.version.outputs.tag }}" \
+            github.com/buengese/go-openvpn
 
       - name: Patch xcframework
         run: |
-          # gomobile names inner frameworks with a hyphen (Go-Openlawsvpn.framework).
-          # Swift's -F search looks for Go_Openlawsvpn.framework (underscore). Symlink both.
-          ln -sf Go-Openlawsvpn.framework \
-            go-openlawsvpn.xcframework/ios-arm64_x86_64-simulator/Go_Openlawsvpn.framework
-          ln -sf Go-Openlawsvpn.framework \
-            go-openlawsvpn.xcframework/macos-arm64_x86_64/Go_Openlawsvpn.framework
-          sed -i '' 's/framework module "Go-Openlawsvpn"/framework module "Go_Openlawsvpn"/' \
-            go-openlawsvpn.xcframework/ios-arm64_x86_64-simulator/Go-Openlawsvpn.framework/Modules/module.modulemap
-          sed -i '' 's/framework module "Go-Openlawsvpn"/framework module "Go_Openlawsvpn"/' \
-            go-openlawsvpn.xcframework/macos-arm64_x86_64/Go-Openlawsvpn.framework/Modules/module.modulemap
+          # gomobile names inner frameworks with a hyphen (Go-Openvpn.framework).
+          # Swift's -F search looks for Go_Openvpn.framework (underscore). Symlink both.
+          ln -sf Go-Openvpn.framework \
+            go-openvpn.xcframework/ios-arm64_x86_64-simulator/Go_Openvpn.framework
+          ln -sf Go-Openvpn.framework \
+            go-openvpn.xcframework/macos-arm64_x86_64/Go_Openvpn.framework
+          sed -i '' 's/framework module "Go-Openvpn"/framework module "Go_Openvpn"/' \
+            go-openvpn.xcframework/ios-arm64_x86_64-simulator/Go-Openvpn.framework/Modules/module.modulemap
+          sed -i '' 's/framework module "Go-Openvpn"/framework module "Go_Openvpn"/' \
+            go-openvpn.xcframework/macos-arm64_x86_64/Go-Openvpn.framework/Modules/module.modulemap
 
       - name: Package and checksum
         id: checksum
         run: |
-          zip -ry go-openlawsvpn.xcframework.zip go-openlawsvpn.xcframework
-          sha256sum go-openlawsvpn.xcframework.zip > go-openlawsvpn.xcframework.zip.sha256
-          echo "sha256=$(awk '{print $1}' go-openlawsvpn.xcframework.zip.sha256)" >> $GITHUB_OUTPUT
+          zip -ry go-openvpn.xcframework.zip go-openvpn.xcframework
+          sha256sum go-openvpn.xcframework.zip > go-openvpn.xcframework.zip.sha256
+          echo "sha256=$(awk '{print $1}' go-openvpn.xcframework.zip.sha256)" >> $GITHUB_OUTPUT
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ steps.version.outputs.tag }}
-          name: "go-openlawsvpn ${{ steps.version.outputs.tag }}"
+          name: "go-openvpn ${{ steps.version.outputs.tag }}"
           body: |
             Pure-Go OpenVPN3 client library for iOS and macOS.
 
             ## Consuming this release
 
-            In `xcframeworks/`, add `go-openlawsvpn.xcframework`, then link it
+            In `xcframeworks/`, add `go-openvpn.xcframework`, then link it
             in Xcode under Frameworks, Libraries, and Embedded Content.
 
             Verify the download:
             ```
-            sha256sum -c go-openlawsvpn.xcframework.zip.sha256
+            sha256sum -c go-openvpn.xcframework.zip.sha256
             ```
           files: |
-            go-openlawsvpn.xcframework.zip
-            go-openlawsvpn.xcframework.zip.sha256
+            go-openvpn.xcframework.zip
+            go-openvpn.xcframework.zip.sha256
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 

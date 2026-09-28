@@ -3,7 +3,7 @@ package saml_test
 import (
 	"testing"
 
-	"github.com/openlawsvpn/go-openlawsvpn/auth/saml"
+	"github.com/buengese/go-openvpn/auth/saml"
 )
 
 // FuzzParseCRV1 feeds random strings to ParseCRV1 to verify it never panics.

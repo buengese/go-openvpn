@@ -10,7 +10,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/openlawsvpn/go-openlawsvpn/device"
+	"github.com/buengese/go-openvpn/device"
 )
 
 // TestOpenWithoutAHostFails pins what the fd backend does where nothing hands

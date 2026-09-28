@@ -15,10 +15,10 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/openlawsvpn/go-openlawsvpn/diag"
-	"github.com/openlawsvpn/go-openlawsvpn/dns"
-	"github.com/openlawsvpn/go-openlawsvpn/internal/compress"
-	"github.com/openlawsvpn/go-openlawsvpn/internal/crypto"
+	"github.com/buengese/go-openvpn/diag"
+	"github.com/buengese/go-openvpn/dns"
+	"github.com/buengese/go-openvpn/internal/compress"
+	"github.com/buengese/go-openvpn/internal/crypto"
 )
 
 // defaultPort is the port a profile dials when no directive names one.
@@ -375,7 +375,10 @@ func (a *assembler) directive(d Directive) error {
 		// federated (SAML) authentication. Treat it as the standard spelling
 		// of the existing explicit SAML-flow override.
 		p.Federated = true
-	case "x-openlawsvpn-flow":
+	// x-openlawsvpn-flow is the directive's former spelling, from before the
+	// project was renamed. Profiles in the wild carry it, so it stays
+	// recognised; x-go-openvpn-flow is what new profiles should say.
+	case "x-go-openvpn-flow", "x-openlawsvpn-flow":
 		if len(fields) >= 2 && strings.ToLower(fields[1]) == "saml" {
 			p.Federated = true
 		}

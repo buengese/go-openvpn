@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/openlawsvpn/go-openlawsvpn/internal/crypto"
+	"github.com/buengese/go-openvpn/internal/crypto"
 )
 
 // Unit tests for the parts of tls-auth no captured vector reaches: the absent

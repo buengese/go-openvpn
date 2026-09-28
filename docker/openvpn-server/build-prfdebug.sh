@@ -13,7 +13,7 @@
 #
 # Both matter. The instrumented build prints the data-channel key block into its
 # log on every handshake, so it must never answer to the plain
-# `openlawsvpn-test/openvpn-server:2.4.12` tag that `testenv.StartMatrix` and
+# `go-openvpn-test/openvpn-server:2.4.12` tag that `testenv.StartMatrix` and
 # every other test resolve. Overwriting that tag would quietly turn the whole
 # matrix into a key-material leak.
 #

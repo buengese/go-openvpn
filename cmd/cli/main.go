@@ -1,4 +1,4 @@
-// Command openlawsvpn-cli is a minimal CLI for the go-openlawsvpn VPN client.
+// Command go-openvpn-cli is a minimal CLI for the go-openvpn VPN client.
 //
 // It brings up a Linux TUN interface with the routes and DNS pushed by the
 // server. The authentication method follows the profile: a client certificate,
@@ -7,9 +7,9 @@
 //
 // Usage:
 //
-//	openlawsvpn-cli -config <path.ovpn> [-auth-user-pass <mode-0600-file>]
-//	openlawsvpn-cli -config <path.ovpn> [-saml-token-file <mode-0600-file>]
-//	openlawsvpn-cli -relay <token> [-relay-endpoint <wss://...>] [-agent-id <uuid>]
+//	go-openvpn-cli -config <path.ovpn> [-auth-user-pass <mode-0600-file>]
+//	go-openvpn-cli -config <path.ovpn> [-saml-token-file <mode-0600-file>]
+//	go-openvpn-cli -relay <token> [-relay-endpoint <wss://...>] [-agent-id <uuid>]
 //
 // Flags:
 //
@@ -48,14 +48,14 @@
 //
 // Example:
 //
-//	sudo openlawsvpn-cli -relay default -daemon \
-//	  -pidfile /tmp/openlawsvpn.pid \
-//	  -logfile /tmp/openlawsvpn.log
+//	sudo go-openvpn-cli -relay default -daemon \
+//	  -pidfile /tmp/go-openvpn.pid \
+//	  -logfile /tmp/go-openvpn.log
 //	# returns once the tunnel is up; VPN runs in background
 //
 // Build as a fully static binary:
 //
-//	CGO_ENABLED=0 go build -o openlawsvpn-cli ./cmd/cli
+//	CGO_ENABLED=0 go build -o go-openvpn-cli ./cmd/cli
 package main
 
 import (
@@ -75,10 +75,10 @@ import (
 	"sync/atomic"
 	"syscall"
 
-	vpn "github.com/openlawsvpn/go-openlawsvpn"
-	"github.com/openlawsvpn/go-openlawsvpn/auth/saml"
-	"github.com/openlawsvpn/go-openlawsvpn/profile"
-	"github.com/openlawsvpn/go-openlawsvpn/relay"
+	vpn "github.com/buengese/go-openvpn"
+	"github.com/buengese/go-openvpn/auth/saml"
+	"github.com/buengese/go-openvpn/profile"
+	"github.com/buengese/go-openvpn/relay"
 )
 
 func main() {
@@ -100,11 +100,11 @@ func main() {
 	showVersion := flag.Bool("version", false, "print the version this binary was built from and exit")
 
 	flag.Usage = func() {
-		fmt.Fprint(os.Stderr, `openlawsvpn-cli — AWS Client VPN with SAML/SSO authentication
+		fmt.Fprint(os.Stderr, `go-openvpn-cli — AWS Client VPN with SAML/SSO authentication
 
 USAGE
-  openlawsvpn-cli -config <path.ovpn> [OPTIONS]          # direct mode
-  openlawsvpn-cli -relay <token> [OPTIONS]               # relay/headless mode
+  go-openvpn-cli -config <path.ovpn> [OPTIONS]          # direct mode
+  go-openvpn-cli -relay <token> [OPTIONS]               # relay/headless mode
 
 MODES
 
@@ -155,11 +155,11 @@ OPTIONS
                           Use -pidfile to record the PID for later cleanup.
 
   -pidfile <path>         Write the daemon PID to this file. Only used with -daemon.
-                          Example: -pidfile /tmp/openlawsvpn.pid
+                          Example: -pidfile /tmp/go-openvpn.pid
 
   -logfile <path>         Redirect daemon stdout+stderr to this file.
                           Only used with -daemon. Default: /dev/null.
-                          Example: -logfile /tmp/openlawsvpn.log
+                          Example: -logfile /tmp/go-openvpn.log
 
   -auth-user-pass <path>  Read a username and password from a mode-0600 file:
                           the username on the first line, the password on the
@@ -182,29 +182,29 @@ OPTIONS
 EXAMPLES
 
   # Interactive SAML login (direct mode)
-  sudo openlawsvpn-cli -config ~/Downloads/client.ovpn
+  sudo go-openvpn-cli -config ~/Downloads/client.ovpn
 
   # Public relay demo
-  sudo openlawsvpn-cli -relay default -daemon \
-    -pidfile /tmp/openlawsvpn.pid \
-    -logfile /tmp/openlawsvpn.log
+  sudo go-openvpn-cli -relay default -daemon \
+    -pidfile /tmp/go-openvpn.pid \
+    -logfile /tmp/go-openvpn.log
 
   # Relay agent — block until app approves, then stay in foreground
-  sudo openlawsvpn-cli -relay-token-file /run/user/$UID/openlawsvpn-relay-token \
+  sudo go-openvpn-cli -relay-token-file /run/user/$UID/go-openvpn-relay-token \
     -config ~/Downloads/client.ovpn
 
   # Relay agent — daemon mode for CI/CD (exits once tunnel is up)
-  sudo openlawsvpn-cli \
-    -relay-token-file /run/user/$UID/openlawsvpn-relay-token \
+  sudo go-openvpn-cli \
+    -relay-token-file /run/user/$UID/go-openvpn-relay-token \
     -daemon \
-    -pidfile /tmp/openlawsvpn.pid \
-    -logfile /tmp/openlawsvpn.log
+    -pidfile /tmp/go-openvpn.pid \
+    -logfile /tmp/go-openvpn.log
 
   # Disconnect daemon
-  sudo kill $(cat /tmp/openlawsvpn.pid)
+  sudo kill $(cat /tmp/go-openvpn.pid)
 
   # Fixed agent identity across restarts
-  sudo openlawsvpn-cli -relay-token-file /run/user/$UID/openlawsvpn-relay-token \
+  sudo go-openvpn-cli -relay-token-file /run/user/$UID/go-openvpn-relay-token \
     -agent-id acf3b812-… -hostname build-runner-01
 
 RELAY ENDPOINTS
@@ -224,21 +224,21 @@ RELAY ENDPOINTS
 		return
 	}
 
-	// Daemon re-exec: when OPENLAWSVPN_READY_FD is set, we are the background
+	// Daemon re-exec: when GO_OPENVPN_READY_FD is set, we are the background
 	// child. All flags are inherited via os.Args. We notify the parent through
 	// the pipe FD once the tunnel is up, then continue running indefinitely.
 	readyFD := 0
-	if v := os.Getenv("OPENLAWSVPN_READY_FD"); v != "" {
+	if v := os.Getenv("GO_OPENVPN_READY_FD"); v != "" {
 		fd, err := strconv.Atoi(v)
 		if err != nil || fd <= 2 {
-			fmt.Fprintln(os.Stderr, "openlawsvpn-cli: invalid OPENLAWSVPN_READY_FD")
+			fmt.Fprintln(os.Stderr, "go-openvpn-cli: invalid GO_OPENVPN_READY_FD")
 			os.Exit(1)
 		}
 		readyFD = fd
 	}
 	if *daemonMode && readyFD == 0 {
 		if err := validateDaemonSecretSources(*samlToken, *relayToken, *samlTokenFD, *relayTokenFD); err != nil {
-			fmt.Fprintf(os.Stderr, "openlawsvpn-cli: %v\n", err)
+			fmt.Fprintf(os.Stderr, "go-openvpn-cli: %v\n", err)
 			os.Exit(1)
 		}
 	}
@@ -252,19 +252,19 @@ RELAY ENDPOINTS
 
 	creds, err := loadAuthUserPass(*authUserPass)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "openlawsvpn-cli: %v\n", err)
+		fmt.Fprintf(os.Stderr, "go-openvpn-cli: %v\n", err)
 		os.Exit(2)
 	}
 
 	resolvedSAMLToken, err := resolveToken("SAML token", *samlToken, *samlTokenFile, *samlTokenFD, saml.MaxSAMLResponseBytes, true)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "openlawsvpn-cli: %v\n", err)
+		fmt.Fprintf(os.Stderr, "go-openvpn-cli: %v\n", err)
 		os.Exit(1)
 	}
 	warnRelayLiteral := *relayToken != "" && *relayToken != "default"
 	resolvedRelayToken, err := resolveToken("relay token", *relayToken, *relayTokenFile, *relayTokenFD, 64*1024, warnRelayLiteral)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "openlawsvpn-cli: %v\n", err)
+		fmt.Fprintf(os.Stderr, "go-openvpn-cli: %v\n", err)
 		os.Exit(1)
 	}
 
@@ -287,7 +287,7 @@ RELAY ENDPOINTS
 		if *configPath != "" {
 			fp, err := profile.ParsePath(*configPath)
 			if err != nil {
-				fmt.Fprintf(os.Stderr, "openlawsvpn-cli: parse config: %v\n", err)
+				fmt.Fprintf(os.Stderr, "go-openvpn-cli: parse config: %v\n", err)
 				os.Exit(1)
 			}
 			fallbackProfile = fp
@@ -302,14 +302,14 @@ RELAY ENDPOINTS
 	}
 
 	if *configPath == "" {
-		fmt.Fprintln(os.Stderr, "openlawsvpn-cli: -config flag is required")
+		fmt.Fprintln(os.Stderr, "go-openvpn-cli: -config flag is required")
 		flag.Usage()
 		os.Exit(1)
 	}
 
 	p, err := profile.ParsePath(*configPath)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "openlawsvpn-cli: parse config: %v\n", err)
+		fmt.Fprintf(os.Stderr, "go-openvpn-cli: parse config: %v\n", err)
 		os.Exit(1)
 	}
 
@@ -319,7 +319,7 @@ RELAY ENDPOINTS
 	if p.RandomHostname {
 		remoteDesc = "<random>." + p.Remote
 	}
-	fmt.Fprintf(os.Stderr, "openlawsvpn-cli: connecting to %s:%d (%s)...\n",
+	fmt.Fprintf(os.Stderr, "go-openvpn-cli: connecting to %s:%d (%s)...\n",
 		remoteDesc, p.Port, p.Proto.String())
 
 	// A username/password profile authenticates through this callback. Without
@@ -336,32 +336,32 @@ RELAY ENDPOINTS
 		if preSuppliedToken != "" {
 			tok := preSuppliedToken
 			preSuppliedToken = "" // consume it — re-auth will go through the ACS flow
-			fmt.Fprintf(os.Stderr, "openlawsvpn-cli: SAML token received (%d chars)\n", len(tok))
+			fmt.Fprintf(os.Stderr, "go-openvpn-cli: SAML token received (%d chars)\n", len(tok))
 			return tok, nil
 		}
 
-		fmt.Printf("openlawsvpn-cli: SAML authentication required\n")
-		fmt.Printf("openlawsvpn-cli: Open this URL in your browser:\n\n  %s\n\n", challenge.URL)
+		fmt.Printf("go-openvpn-cli: SAML authentication required\n")
+		fmt.Printf("go-openvpn-cli: Open this URL in your browser:\n\n  %s\n\n", challenge.URL)
 		openBrowser(challenge.URL, *browserCmd)
 
 		tok, err := waitForSAMLToken(ctx, challenge, *browserCmd)
 		if err != nil {
 			return "", err
 		}
-		fmt.Fprintf(os.Stderr, "openlawsvpn-cli: SAML token received (%d chars)\n", len(tok))
+		fmt.Fprintf(os.Stderr, "go-openvpn-cli: SAML token received (%d chars)\n", len(tok))
 		return tok, nil
 	}
 
 	if err := client.Connect(ctx); err != nil {
-		fmt.Fprintf(os.Stderr, "openlawsvpn-cli: connect failed: %v\n", err)
+		fmt.Fprintf(os.Stderr, "go-openvpn-cli: connect failed: %v\n", err)
 		if isPermissionError(err) {
-			fmt.Fprintln(os.Stderr, "openlawsvpn-cli: hint: TUN device requires root — re-run with sudo")
+			fmt.Fprintln(os.Stderr, "go-openvpn-cli: hint: TUN device requires root — re-run with sudo")
 		}
 		os.Exit(1)
 	}
 
 	local := outboundIP()
-	fmt.Fprintf(os.Stderr, "openlawsvpn-cli: tunnel up — local=%s tun=%s\n",
+	fmt.Fprintf(os.Stderr, "go-openvpn-cli: tunnel up — local=%s tun=%s\n",
 		local, client.LocalIP())
 	notifyReady(readyFD, local)
 
@@ -371,43 +371,43 @@ RELAY ENDPOINTS
 		select {
 		case <-ctx.Done():
 			// User pressed Ctrl-C or sent SIGTERM — clean exit.
-			fmt.Fprintln(os.Stderr, "\nopenlawsvpn-cli: disconnecting...")
+			fmt.Fprintln(os.Stderr, "\ngo-openvpn-cli: disconnecting...")
 			stop()
 			if err := client.Disconnect(); err != nil {
-				fmt.Fprintf(os.Stderr, "openlawsvpn-cli: disconnect error: %v\n", err)
+				fmt.Fprintf(os.Stderr, "go-openvpn-cli: disconnect error: %v\n", err)
 			}
 			if err := client.WaitForDisconnect(); err != nil {
-				fmt.Fprintf(os.Stderr, "openlawsvpn-cli: wait error: %v\n", err)
+				fmt.Fprintf(os.Stderr, "go-openvpn-cli: wait error: %v\n", err)
 			}
-			fmt.Fprintln(os.Stderr, "openlawsvpn-cli: disconnected")
+			fmt.Fprintln(os.Stderr, "go-openvpn-cli: disconnected")
 			return
 		case <-client.Done():
 			reason := client.WaitForDisconnect()
 			if reason == nil || ctx.Err() != nil {
 				// Clean disconnect or signal — exit.
-				fmt.Fprintln(os.Stderr, "openlawsvpn-cli: disconnected")
+				fmt.Fprintln(os.Stderr, "go-openvpn-cli: disconnected")
 				return
 			}
 			// Unclean disconnect (dead link, keepalive timeout, etc.) — reconnect.
-			fmt.Fprintf(os.Stderr, "openlawsvpn-cli: tunnel down (%v), reconnecting...\n", reason)
+			fmt.Fprintf(os.Stderr, "go-openvpn-cli: tunnel down (%v), reconnecting...\n", reason)
 			if err := client.Reconnect(ctx); err != nil {
 				if ctx.Err() != nil {
-					fmt.Fprintln(os.Stderr, "openlawsvpn-cli: disconnected")
+					fmt.Fprintln(os.Stderr, "go-openvpn-cli: disconnected")
 					return
 				}
 				if errors.Is(err, vpn.ErrReauthRequired) {
 					// SAML session expired — run the full browser flow again.
-					fmt.Fprintln(os.Stderr, "openlawsvpn-cli: SAML session expired, re-authenticating...")
+					fmt.Fprintln(os.Stderr, "go-openvpn-cli: SAML session expired, re-authenticating...")
 					if err := client.Connect(ctx); err != nil {
-						fmt.Fprintf(os.Stderr, "openlawsvpn-cli: re-auth connect failed: %v\n", err)
+						fmt.Fprintf(os.Stderr, "go-openvpn-cli: re-auth connect failed: %v\n", err)
 						os.Exit(1)
 					}
 				} else {
-					fmt.Fprintf(os.Stderr, "openlawsvpn-cli: reconnect failed: %v\n", err)
+					fmt.Fprintf(os.Stderr, "go-openvpn-cli: reconnect failed: %v\n", err)
 					os.Exit(1)
 				}
 			}
-			fmt.Fprintf(os.Stderr, "openlawsvpn-cli: tunnel up — local=%s tun=%s\n",
+			fmt.Fprintf(os.Stderr, "go-openvpn-cli: tunnel up — local=%s tun=%s\n",
 				outboundIP(), client.LocalIP())
 		}
 	}
@@ -423,7 +423,7 @@ func waitForSAMLToken(ctx context.Context, challenge vpn.SAMLChallenge, browserC
 		return samlBindFallback(err, os.Stdin)
 	}
 
-	fmt.Fprintf(os.Stderr, "openlawsvpn-cli: waiting for SAML callback on 127.0.0.1:%d\n", saml.ACSPort)
+	fmt.Fprintf(os.Stderr, "go-openvpn-cli: waiting for SAML callback on 127.0.0.1:%d\n", saml.ACSPort)
 	fmt.Fprintln(os.Stderr, "       Press Enter to reopen the URL in your browser, or paste SAMLResponse to skip the browser")
 
 	// The ACS server's lifetime is this wait, not the process's. It releases
@@ -452,7 +452,7 @@ func waitForSAMLToken(ctx context.Context, challenge vpn.SAMLChallenge, browserC
 	// stopped once ACS or context completion wins the race so later terminal
 	// input cannot reopen an expired URL.
 	go watchSAMLTokenInput(os.Stdin, stdinDone, func() {
-		fmt.Fprintf(os.Stderr, "\nopenlawsvpn-cli: reopening URL...\n  %s\n\n", challenge.URL)
+		fmt.Fprintf(os.Stderr, "\ngo-openvpn-cli: reopening URL...\n  %s\n\n", challenge.URL)
 		openBrowser(challenge.URL, browserCmd)
 	}, tokenCh)
 
@@ -462,7 +462,7 @@ func waitForSAMLToken(ctx context.Context, challenge vpn.SAMLChallenge, browserC
 	case err := <-errCh:
 		return "", err
 	case <-ctx.Done():
-		return "", fmt.Errorf("openlawsvpn-cli: SAML wait cancelled: %w", ctx.Err())
+		return "", fmt.Errorf("go-openvpn-cli: SAML wait cancelled: %w", ctx.Err())
 	}
 }
 
@@ -514,13 +514,13 @@ func watchSAMLTokenInput(r io.Reader, done <-chan struct{}, onEmpty func(), toke
 // taking it intercepts nothing. The error is printed either way.
 func samlBindFallback(cause error, in io.Reader) (string, error) {
 	if errors.Is(cause, saml.ErrACSPortBusy) {
-		return "", fmt.Errorf("openlawsvpn-cli: another process holds 127.0.0.1:%d, "+
+		return "", fmt.Errorf("go-openvpn-cli: another process holds 127.0.0.1:%d, "+
 			"so it and not this client would receive the SAML assertion — find it with "+
 			"`ss -ltnp 'sport = :%d'` and stop it, then try again: %w",
 			saml.ACSPort, saml.ACSPort, cause)
 	}
-	fmt.Fprintf(os.Stderr, "openlawsvpn-cli: ACS server unavailable: %v\n", cause)
-	fmt.Fprintln(os.Stderr, "openlawsvpn-cli: paste SAMLResponse and press Enter:")
+	fmt.Fprintf(os.Stderr, "go-openvpn-cli: ACS server unavailable: %v\n", cause)
+	fmt.Fprintln(os.Stderr, "go-openvpn-cli: paste SAMLResponse and press Enter:")
 	return readPastedToken(in)
 }
 
@@ -532,14 +532,14 @@ func readPastedToken(r io.Reader) (string, error) {
 	if scanner.Scan() {
 		tok := scanner.Text()
 		if tok == "" {
-			return "", fmt.Errorf("openlawsvpn-cli: empty SAMLResponse from stdin")
+			return "", fmt.Errorf("go-openvpn-cli: empty SAMLResponse from stdin")
 		}
 		return tok, nil
 	}
 	if err := scanner.Err(); err != nil {
-		return "", fmt.Errorf("openlawsvpn-cli: read stdin: %w", err)
+		return "", fmt.Errorf("go-openvpn-cli: read stdin: %w", err)
 	}
-	return "", fmt.Errorf("openlawsvpn-cli: EOF on stdin before SAMLResponse")
+	return "", fmt.Errorf("go-openvpn-cli: EOF on stdin before SAMLResponse")
 }
 
 func validateDaemonSecretSources(samlLiteral, relayLiteral string, samlFD, relayFD int) error {
@@ -584,7 +584,7 @@ func resolveSecret(name, literal, path string, fd, maxBytes int, warnLiteral boo
 	}
 	if literal != "" {
 		if warnLiteral {
-			fmt.Fprintf(os.Stderr, "openlawsvpn-cli: warning: command-line %s is visible in process listings; use a token-file or file-descriptor option for private credentials\n", name)
+			fmt.Fprintf(os.Stderr, "go-openvpn-cli: warning: command-line %s is visible in process listings; use a token-file or file-descriptor option for private credentials\n", name)
 		}
 		return literal, nil
 	}
@@ -694,7 +694,7 @@ func runRelayMode(ctx context.Context, stop context.CancelFunc, fallback *profil
 		c := activeClient
 		activeClientMu.Unlock()
 		if c != nil {
-			fmt.Fprintln(os.Stderr, "openlawsvpn-cli: relay: server requested disconnect")
+			fmt.Fprintln(os.Stderr, "go-openvpn-cli: relay: server requested disconnect")
 			serverDisconnect.Store(true)
 			c.Disconnect() //nolint:errcheck
 		}
@@ -703,7 +703,7 @@ func runRelayMode(ctx context.Context, stop context.CancelFunc, fallback *profil
 	}
 
 	cfg.OnPhase2 = func(phaseCtx context.Context, payload relay.Phase2Payload) error {
-		fmt.Fprintf(os.Stderr, "openlawsvpn-cli: relay: received phase2 for session %s\n", payload.SessionID)
+		fmt.Fprintf(os.Stderr, "go-openvpn-cli: relay: received phase2 for session %s\n", payload.SessionID)
 
 		// Payload config takes precedence; fall back to local profile if absent.
 		var connProfile *profile.Profile
@@ -737,7 +737,7 @@ func runRelayMode(ctx context.Context, stop context.CancelFunc, fallback *profil
 			return fmt.Errorf("relay: phase2 connect: %w", err)
 		}
 		localIP := outboundIP()
-		fmt.Fprintf(os.Stderr, "openlawsvpn-cli: relay: tunnel up — local=%s tun=%s vpn-endpoint=%s\n",
+		fmt.Fprintf(os.Stderr, "go-openvpn-cli: relay: tunnel up — local=%s tun=%s vpn-endpoint=%s\n",
 			localIP, client.LocalIP(), payload.RemoteIP)
 
 		notifyReady(readyFD, localIP)
@@ -766,18 +766,18 @@ func runRelayMode(ctx context.Context, stop context.CancelFunc, fallback *profil
 
 	agent, err := relay.New(cfg)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "openlawsvpn-cli: relay: %v\n", err)
+		fmt.Fprintf(os.Stderr, "go-openvpn-cli: relay: %v\n", err)
 		os.Exit(1)
 	}
 	agentPtr = agent
 
-	fmt.Fprintf(os.Stderr, "openlawsvpn-cli: relay mode — agent_id=%s, waiting for app to connect...\n", agent.AgentID())
+	fmt.Fprintf(os.Stderr, "go-openvpn-cli: relay mode — agent_id=%s, waiting for app to connect...\n", agent.AgentID())
 
 	if err := agent.Run(ctx); err != nil && ctx.Err() == nil {
-		fmt.Fprintf(os.Stderr, "openlawsvpn-cli: relay: %v\n", err)
+		fmt.Fprintf(os.Stderr, "go-openvpn-cli: relay: %v\n", err)
 		os.Exit(1)
 	}
-	fmt.Fprintln(os.Stderr, "openlawsvpn-cli: relay: disconnected")
+	fmt.Fprintln(os.Stderr, "go-openvpn-cli: relay: disconnected")
 }
 
 // outboundIP returns the machine's preferred outbound IP by opening a UDP
@@ -798,12 +798,12 @@ func outboundIP() string {
 // Strategy: re-exec (not fork) so the Go runtime starts fresh in the child
 // without inheriting goroutines, mutexes, or half-open file descriptors.
 // The write-end of a pipe is passed to the child via an extra FD (> 2) and
-// the OPENLAWSVPN_READY_FD env var. Once the child calls notifyReady(), it
+// the GO_OPENVPN_READY_FD env var. Once the child calls notifyReady(), it
 // writes "ok\n" and closes the FD; the parent unblocks and exits 0.
 func spawnDaemon(pidFile, logFile string) {
 	r, w, err := os.Pipe()
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "openlawsvpn-cli: daemon pipe: %v\n", err)
+		fmt.Fprintf(os.Stderr, "go-openvpn-cli: daemon pipe: %v\n", err)
 		os.Exit(1)
 	}
 
@@ -812,20 +812,20 @@ func spawnDaemon(pidFile, logFile string) {
 	if logFile != "" {
 		childOut, err = os.OpenFile(logFile, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "openlawsvpn-cli: open logfile: %v\n", err)
+			fmt.Fprintf(os.Stderr, "go-openvpn-cli: open logfile: %v\n", err)
 			os.Exit(1)
 		}
 	} else {
 		childOut, err = os.OpenFile(os.DevNull, os.O_WRONLY, 0)
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "openlawsvpn-cli: open /dev/null: %v\n", err)
+			fmt.Fprintf(os.Stderr, "go-openvpn-cli: open /dev/null: %v\n", err)
 			os.Exit(1)
 		}
 	}
 
 	self, err := os.Executable()
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "openlawsvpn-cli: resolve executable: %v\n", err)
+		fmt.Fprintf(os.Stderr, "go-openvpn-cli: resolve executable: %v\n", err)
 		os.Exit(1)
 	}
 
@@ -835,11 +835,11 @@ func spawnDaemon(pidFile, logFile string) {
 	child.Stderr = childOut
 	child.Stdin = nil
 	child.ExtraFiles = []*os.File{w} // becomes FD 3 in child (ExtraFiles[0] → fd 3)
-	child.Env = append(os.Environ(), "OPENLAWSVPN_READY_FD=3")
+	child.Env = append(os.Environ(), "GO_OPENVPN_READY_FD=3")
 	child.SysProcAttr = &syscall.SysProcAttr{Setsid: true} // detach from terminal
 
 	if err := child.Start(); err != nil {
-		fmt.Fprintf(os.Stderr, "openlawsvpn-cli: spawn daemon: %v\n", err)
+		fmt.Fprintf(os.Stderr, "go-openvpn-cli: spawn daemon: %v\n", err)
 		os.Exit(1)
 	}
 	// Close write-end in parent so a child crash causes the pipe to close.
@@ -848,7 +848,7 @@ func spawnDaemon(pidFile, logFile string) {
 
 	if pidFile != "" {
 		if err := os.WriteFile(pidFile, []byte(strconv.Itoa(child.Process.Pid)+"\n"), 0o644); err != nil {
-			fmt.Fprintf(os.Stderr, "openlawsvpn-cli: write pidfile: %v\n", err)
+			fmt.Fprintf(os.Stderr, "go-openvpn-cli: write pidfile: %v\n", err)
 		}
 	}
 
@@ -858,12 +858,12 @@ func spawnDaemon(pidFile, logFile string) {
 	r.Close()
 
 	if n == 0 || !strings.HasPrefix(string(buf[:n]), "ok") {
-		fmt.Fprintln(os.Stderr, "openlawsvpn-cli: daemon failed to establish tunnel")
+		fmt.Fprintln(os.Stderr, "go-openvpn-cli: daemon failed to establish tunnel")
 		child.Process.Kill() //nolint:errcheck
 		os.Exit(1)
 	}
 
-	fmt.Fprintf(os.Stdout, "openlawsvpn-cli: daemon started (pid %d)\n", child.Process.Pid)
+	fmt.Fprintf(os.Stdout, "go-openvpn-cli: daemon started (pid %d)\n", child.Process.Pid)
 	// Detach — let the child continue.
 	os.Exit(0)
 }

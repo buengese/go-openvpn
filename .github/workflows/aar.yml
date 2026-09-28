@@ -55,37 +55,37 @@ jobs:
           ANDROID_NDK_HOME: ${{ env.ANDROID_SDK_ROOT }}/ndk/30.0.14904198
         run: |
           gomobile bind -v \
-            -o go-openlawsvpn.aar \
+            -o go-openvpn.aar \
             -target android \
             -androidapi 31 \
-            -ldflags "-X github.com/openlawsvpn/go-openlawsvpn.Version=${{ steps.version.outputs.tag }}" \
-            github.com/openlawsvpn/go-openlawsvpn
+            -ldflags "-X github.com/buengese/go-openvpn.Version=${{ steps.version.outputs.tag }}" \
+            github.com/buengese/go-openvpn
 
       - name: Compute SHA-256
-        run: sha256sum go-openlawsvpn.aar > go-openlawsvpn.aar.sha256
+        run: sha256sum go-openvpn.aar > go-openvpn.aar.sha256
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ steps.version.outputs.tag }}
-          name: "go-openlawsvpn ${{ steps.version.outputs.tag }}"
+          name: "go-openvpn ${{ steps.version.outputs.tag }}"
           body: |
             Pure-Go OpenVPN3 client library for Android.
 
             ## Consuming this release
 
-            In `app/libs/`, add `go-openlawsvpn.aar`, then in `build.gradle.kts`:
+            In `app/libs/`, add `go-openvpn.aar`, then in `build.gradle.kts`:
             ```kotlin
-            implementation(files("libs/go-openlawsvpn.aar"))
+            implementation(files("libs/go-openvpn.aar"))
             ```
 
             Verify the download:
             ```
-            sha256sum -c go-openlawsvpn.aar.sha256
+            sha256sum -c go-openvpn.aar.sha256
             ```
           files: |
-            go-openlawsvpn.aar
-            go-openlawsvpn.aar.sha256
+            go-openvpn.aar
+            go-openvpn.aar.sha256
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 

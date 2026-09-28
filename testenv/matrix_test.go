@@ -15,7 +15,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/openlawsvpn/go-openlawsvpn/testenv"
+	"github.com/buengese/go-openvpn/testenv"
 )
 
 // versionsEnvPath is the shell-sourceable pin file build.sh reads.

@@ -8,9 +8,9 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/openlawsvpn/go-openlawsvpn/device"
-	"github.com/openlawsvpn/go-openlawsvpn/routing"
-	"github.com/openlawsvpn/go-openlawsvpn/tun"
+	"github.com/buengese/go-openvpn/device"
+	"github.com/buengese/go-openvpn/routing"
+	"github.com/buengese/go-openvpn/tun"
 )
 
 // Open opens /dev/net/tun, configures the interface, applies routes and DNS.

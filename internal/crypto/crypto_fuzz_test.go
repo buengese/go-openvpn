@@ -4,7 +4,7 @@ import (
 	"bytes"
 	"testing"
 
-	"github.com/openlawsvpn/go-openlawsvpn/internal/crypto"
+	"github.com/buengese/go-openvpn/internal/crypto"
 )
 
 // FuzzCBCOpen feeds random byte slices to CBCCipher.Open to verify it never

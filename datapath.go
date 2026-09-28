@@ -13,14 +13,14 @@ import (
 	"strings"
 	"time"
 
-	"github.com/openlawsvpn/go-openlawsvpn/diag"
-	"github.com/openlawsvpn/go-openlawsvpn/internal/compress"
-	"github.com/openlawsvpn/go-openlawsvpn/internal/control"
-	"github.com/openlawsvpn/go-openlawsvpn/internal/crypto"
-	"github.com/openlawsvpn/go-openlawsvpn/internal/datachannel"
-	"github.com/openlawsvpn/go-openlawsvpn/internal/mssfix"
-	"github.com/openlawsvpn/go-openlawsvpn/internal/occ"
-	"github.com/openlawsvpn/go-openlawsvpn/profile"
+	"github.com/buengese/go-openvpn/diag"
+	"github.com/buengese/go-openvpn/internal/compress"
+	"github.com/buengese/go-openvpn/internal/control"
+	"github.com/buengese/go-openvpn/internal/crypto"
+	"github.com/buengese/go-openvpn/internal/datachannel"
+	"github.com/buengese/go-openvpn/internal/mssfix"
+	"github.com/buengese/go-openvpn/internal/occ"
+	"github.com/buengese/go-openvpn/profile"
 )
 
 // endSession records why an established session ended and starts the teardown

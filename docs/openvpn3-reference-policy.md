@@ -1,7 +1,7 @@
 # Using openvpn3 as a Reference
 
 Version: 1.0
-Applies to: all protocol work in `go-openlawsvpn`
+Applies to: all protocol work in `go-openvpn`
 License: LGPL-2.1-or-later
 
 ---

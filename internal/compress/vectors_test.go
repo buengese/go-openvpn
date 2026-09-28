@@ -23,7 +23,7 @@ import (
 	"os"
 	"testing"
 
-	"github.com/openlawsvpn/go-openlawsvpn/internal/compress"
+	"github.com/buengese/go-openvpn/internal/compress"
 )
 
 // vectorsPath is the captured ground truth, relative to this package.

@@ -36,8 +36,8 @@ repo_root="$(cd "$here/../.." && pwd)"
 
 DOCKER="${DOCKER:-docker}"
 IMAGE="${MATRIX_IMAGE_REPO}:${OPENVPN_24_VERSION}-prfdebug"
-NET="openlawsvpn-prfcapture-$$"
-LABEL="com.openlawsvpn.testenv=prf-capture"
+NET="go-openvpn-prfcapture-$$"
+LABEL="net.bngs.goopenvpn.testenv=prf-capture"
 OUT="$repo_root/internal/prf/testdata/vectors.json"
 KEEP=0
 READY="Initialization Sequence Completed"
@@ -126,7 +126,7 @@ gen() {
         -days 1 -sha256 -extfile "$2" -out "$1.crt" 2>/dev/null
 }
 openssl req -x509 -nodes -newkey rsa:2048 -sha256 -days 1 \
-    -subj "/CN=openlawsvpn-prf-capture-ca" -keyout ca.key -out ca.crt 2>/dev/null
+    -subj "/CN=go-openvpn-prf-capture-ca" -keyout ca.key -out ca.crt 2>/dev/null
 gen server ext-server.cnf
 gen client ext.cnf
 echo "SERVERPKI $(tar -cf - ca.crt server.crt server.key | base64 -w0)"

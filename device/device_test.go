@@ -5,7 +5,7 @@ package device_test
 import (
 	"testing"
 
-	"github.com/openlawsvpn/go-openlawsvpn/device"
+	"github.com/buengese/go-openvpn/device"
 )
 
 // TestKindValues pins the strings that land in session reports. Renaming one

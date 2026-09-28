@@ -8,8 +8,8 @@ import (
 	"reflect"
 	"testing"
 
-	"github.com/openlawsvpn/go-openlawsvpn/dns"
-	"github.com/openlawsvpn/go-openlawsvpn/routing"
+	"github.com/buengese/go-openvpn/dns"
+	"github.com/buengese/go-openvpn/routing"
 )
 
 // TestIfconfigJSONIncludesDNSDomains pins that split-DNS carries all three of

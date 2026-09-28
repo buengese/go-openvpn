@@ -19,7 +19,7 @@ var inventoryDims = []string{"directive", "argument shape", "lexical shape"}
 
 // inventoryHeader opens the committed file, so a reader who finds it without
 // the test knows what it is for.
-const inventoryHeader = `# shapes the fixtures exercise — go-openlawsvpn
+const inventoryHeader = `# shapes the fixtures exercise — go-openvpn
 #
 # Written from caps/fixtures_test.go. It is the published claim about what the
 # fixtures cover: a consumer holding a corpus of real profiles checks its own

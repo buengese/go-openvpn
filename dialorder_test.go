@@ -5,7 +5,7 @@ package vpn
 import (
 	"testing"
 
-	"github.com/openlawsvpn/go-openlawsvpn/profile"
+	"github.com/buengese/go-openvpn/profile"
 )
 
 // remoteShapes are the ways a profile can name its endpoints. The dial order is

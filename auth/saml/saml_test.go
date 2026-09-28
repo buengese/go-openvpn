@@ -11,7 +11,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/openlawsvpn/go-openlawsvpn/auth/saml"
+	"github.com/buengese/go-openvpn/auth/saml"
 )
 
 // --- ParseCRV1 tests ---

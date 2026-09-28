@@ -7,7 +7,7 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/openlawsvpn/go-openlawsvpn/internal/crypto"
+	"github.com/buengese/go-openvpn/internal/crypto"
 )
 
 // TestFirstPacketIDIsNotZero pins the wire-format rule that OpenVPN reserves

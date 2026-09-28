@@ -12,7 +12,7 @@ import (
 	"fmt"
 	"io"
 
-	"github.com/openlawsvpn/go-openlawsvpn/internal/prf"
+	"github.com/buengese/go-openvpn/internal/prf"
 )
 
 // Framing selects the wire format of the key-method-2 auth packet. It is a

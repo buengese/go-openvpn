@@ -4,7 +4,7 @@ import (
 	"bytes"
 	"testing"
 
-	"github.com/openlawsvpn/go-openlawsvpn/internal/datachannel"
+	"github.com/buengese/go-openvpn/internal/datachannel"
 )
 
 // FuzzChannelDecrypt feeds random byte slices to Channel.Decrypt to verify it

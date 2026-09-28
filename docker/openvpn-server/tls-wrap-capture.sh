@@ -46,8 +46,8 @@ repo_root="$(cd "$here/../.." && pwd)"
 
 DOCKER="${DOCKER:-docker}"
 IMAGE="${MATRIX_IMAGE_REPO}:${OPENVPN_24_VERSION}-tlswrapdebug"
-NET="openlawsvpn-tlswrapcapture-$$"
-LABEL="com.openlawsvpn.testenv=tls-wrap-capture"
+NET="go-openvpn-tlswrapcapture-$$"
+LABEL="net.bngs.goopenvpn.testenv=tls-wrap-capture"
 OUT="$repo_root/internal/wrap/testdata/vectors.json"
 PATCH="docker/openvpn-server/patches-tlswrapdebug/001-tlswrapdebug-control-channel.patch"
 KEEP=0
@@ -172,7 +172,7 @@ gen() {
         -days 1 -sha256 -extfile "$2" -out "$1.crt" 2>/dev/null
 }
 openssl req -x509 -nodes -newkey rsa:2048 -sha256 -days 1 \
-    -subj "/CN=openlawsvpn-tls-wrap-capture-ca" -keyout ca.key -out ca.crt 2>/dev/null
+    -subj "/CN=go-openvpn-tls-wrap-capture-ca" -keyout ca.key -out ca.crt 2>/dev/null
 gen server ext-server.cnf
 gen client ext.cnf
 echo "SERVERPKI $(tar -cf - ca.crt server.crt server.key | base64 -w0)"

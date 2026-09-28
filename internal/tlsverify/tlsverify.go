@@ -19,7 +19,7 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/openlawsvpn/go-openlawsvpn/profile"
+	"github.com/buengese/go-openvpn/profile"
 )
 
 // ErrNoUsableCA is returned for a profile that carries no certificate

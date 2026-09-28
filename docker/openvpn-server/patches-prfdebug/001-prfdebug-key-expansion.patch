@@ -4,7 +4,7 @@
  }
  
  /*
-+ * go-openlawsvpn key-derivation instrumentation.
++ * go-openvpn key-derivation instrumentation.
 + *
 + * Dumps, in hex, every input to and the output of the classic OpenVPN
 + * key-method-2 key expansion, so that known-answer vectors can be captured

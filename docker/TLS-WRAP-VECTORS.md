@@ -192,7 +192,7 @@ That is the whole procedure. It runs the two steps below in order.
 bash docker/openvpn-server/build-tlswrapdebug.sh
 ```
 
-Produces `openlawsvpn-test/openvpn-server:2.4.12-tlswrapdebug` from the same
+Produces `go-openvpn-test/openvpn-server:2.4.12-tlswrapdebug` from the same
 Dockerfile, the same pinned tarball (SHA-256 verified) and the same pinned base
 image as the stock matrix build, with two differences:
 
@@ -204,7 +204,7 @@ image as the stock matrix build, with two differences:
 **Both matter.** The instrumented build prints the control-channel key material
 and every control packet, plaintext and wrapped, into its log — and, because
 `init_key_ctx()` is shared with the data channel, the data-channel keys as well.
-It must never answer to the plain `openlawsvpn-test/openvpn-server:2.4.12` tag
+It must never answer to the plain `go-openvpn-test/openvpn-server:2.4.12` tag
 that `testenv.StartMatrix` and every other test resolve. `build-tlswrapdebug.sh`
 refuses to run if the suffix ever computes to the stock tag, refuses if the
 patch directory is empty, and — after the build — greps the resulting binary for
@@ -523,5 +523,5 @@ has one in `internal/wrap/replay_test.go`.
 `make matrix-clean` removes matrix containers, networks and images, including
 the `-tlswrapdebug` tag. The capture script removes its own containers and
 network on the way out, and on failure too unless `-k` is given. Its label is
-`com.openlawsvpn.testenv=tls-wrap-capture`, distinct from the matrix's, so
+`net.bngs.goopenvpn.testenv=tls-wrap-capture`, distinct from the matrix's, so
 `TestMatrixLeavesNoStrays` neither sees it nor is confused by it.

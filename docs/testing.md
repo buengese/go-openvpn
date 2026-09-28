@@ -77,7 +77,7 @@ did before.
 did not write. Fails with an actionable message if the images are absent.
 
 **privileged** — creates real TUN devices and edits the host route table. Needs
-root and `OPENLAWSVPN_PRIVILEGED_TESTS=1`; skips otherwise.
+root and `GO_OPENVPN_PRIVILEGED_TESTS=1`; skips otherwise.
 
 `tun` has no untagged tests at all, and `go test ./tun` reporting *no test
 files* is the intended answer rather than a gap: every test in the package
@@ -86,7 +86,7 @@ untagged and skip themselves one by one, which in the single line `go test`
 prints is indistinguishable from three tests that ran.
 
 **soak** — one tunnel held open for hours while renegotiating, and twenty
-concurrent ones. Gated behind `OPENLAWSVPN_SOAK` so it can never run by
+concurrent ones. Gated behind `GO_OPENVPN_SOAK` so it can never run by
 accident. It is the only pass that asks whether anything is still working
 later, which is where a key rotation, a keepalive and a leak live.
 

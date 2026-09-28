@@ -8,8 +8,8 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/openlawsvpn/go-openlawsvpn/device"
-	"github.com/openlawsvpn/go-openlawsvpn/tun"
+	"github.com/buengese/go-openvpn/device"
+	"github.com/buengese/go-openvpn/tun"
 )
 
 // Open allocates a native utun interface via SYSPROTO_CONTROL, configures it,

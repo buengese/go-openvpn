@@ -2,7 +2,7 @@
 
 Selected with `--build-arg PATCH_DIR=patches-tlswrapdebug`, which only
 `../build-tlswrapdebug.sh` passes. It tags the result
-`openlawsvpn-test/openvpn-server:2.4.12-tlswrapdebug`.
+`go-openvpn-test/openvpn-server:2.4.12-tlswrapdebug`.
 
 `001-tlswrapdebug-control-channel.patch` instruments two places in OpenVPN
 2.4.12:

@@ -9,12 +9,12 @@ mkdir -p "$OUT"
 # 1. CA key + self-signed cert (10-year)
 openssl genrsa -out "$OUT/ca.key" 2048
 openssl req -new -x509 -days 3650 -key "$OUT/ca.key" -out "$OUT/ca.crt" \
-  -subj "/CN=mock-ca/O=openlawsvpn-test"
+  -subj "/CN=mock-ca/O=go-openvpn-test"
 
 # 2. Server key + CSR + cert signed by CA
 openssl genrsa -out "$OUT/server.key" 2048
 openssl req -new -key "$OUT/server.key" -out "$OUT/server.csr" \
-  -subj "/CN=mock-server/O=openlawsvpn-test"
+  -subj "/CN=mock-server/O=go-openvpn-test"
 openssl x509 -req -days 3650 -in "$OUT/server.csr" \
   -CA "$OUT/ca.crt" -CAkey "$OUT/ca.key" -CAcreateserial \
   -out "$OUT/server.crt"
@@ -22,7 +22,7 @@ openssl x509 -req -days 3650 -in "$OUT/server.csr" \
 # 3. Client key + cert (used by Go integration tests)
 openssl genrsa -out "$OUT/client.key" 2048
 openssl req -new -key "$OUT/client.key" -out "$OUT/client.csr" \
-  -subj "/CN=mock-client/O=openlawsvpn-test"
+  -subj "/CN=mock-client/O=go-openvpn-test"
 openssl x509 -req -days 3650 -in "$OUT/client.csr" \
   -CA "$OUT/ca.crt" -CAkey "$OUT/ca.key" -CAcreateserial \
   -out "$OUT/client.crt"

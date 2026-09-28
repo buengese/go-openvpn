@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/openlawsvpn/go-openlawsvpn/diag"
+	"github.com/buengese/go-openvpn/diag"
 )
 
 // TestErrorsAsThroughWrapping pins the contract that makes the taxonomy usable:

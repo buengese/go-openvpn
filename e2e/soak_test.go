@@ -15,9 +15,9 @@
 //   - RSS and goroutine count stay flat — twenty tunnels for an hour is where
 //     a per-tunnel leak becomes visible and a single handshake never would
 //
-// Gated behind OPENLAWSVPN_SOAK and skipped without it:
+// Gated behind GO_OPENVPN_SOAK and skipped without it:
 //
-//	OPENLAWSVPN_SOAK=1h go test -tags=soak -timeout 150m \
+//	GO_OPENVPN_SOAK=1h go test -tags=soak -timeout 150m \
 //	    -run 'TestSoak' ./e2e/
 //
 // A short duration exercises the harness itself, but only a run long enough to
@@ -35,9 +35,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/openlawsvpn/go-openlawsvpn/netstack"
-	"github.com/openlawsvpn/go-openlawsvpn/profile"
-	"github.com/openlawsvpn/go-openlawsvpn/testenv"
+	"github.com/buengese/go-openvpn/netstack"
+	"github.com/buengese/go-openvpn/profile"
+	"github.com/buengese/go-openvpn/testenv"
 )
 
 // soakEntry carries reneg-sec 30 on both ends, so an hour holds roughly a
@@ -46,7 +46,7 @@ import (
 const soakEntry = "v24-gcm256-sha256-plain-udp-reneg30"
 
 // soakDurationEnv gates the whole file. Unset means skip.
-const soakDurationEnv = "OPENLAWSVPN_SOAK"
+const soakDurationEnv = "GO_OPENVPN_SOAK"
 
 // soakTunnels is the concurrent count for the fleet run. The measurement
 // system's shape is many simultaneous sessions, and a leak that matters is a

@@ -13,9 +13,9 @@ import (
 	"sync"
 	"time"
 
-	vpn "github.com/openlawsvpn/go-openlawsvpn"
-	"github.com/openlawsvpn/go-openlawsvpn/diag"
-	"github.com/openlawsvpn/go-openlawsvpn/profile"
+	vpn "github.com/buengese/go-openvpn"
+	"github.com/buengese/go-openvpn/diag"
+	"github.com/buengese/go-openvpn/profile"
 )
 
 // Options configures a Connect. The zero value is valid and is what a

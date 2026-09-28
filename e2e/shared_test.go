@@ -20,9 +20,9 @@ import (
 	"testing"
 	"time"
 
-	vpn "github.com/openlawsvpn/go-openlawsvpn"
-	"github.com/openlawsvpn/go-openlawsvpn/netstack"
-	"github.com/openlawsvpn/go-openlawsvpn/testenv"
+	vpn "github.com/buengese/go-openvpn"
+	"github.com/buengese/go-openvpn/netstack"
+	"github.com/buengese/go-openvpn/testenv"
 )
 
 // requireUnprivileged fails the run if it is not proving what it claims to.

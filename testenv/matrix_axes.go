@@ -49,7 +49,7 @@ func PinnedVersion(v ServerVersion) (string, bool) {
 }
 
 // ImageFor returns the local image tag for a server series, for example
-// "openlawsvpn-test/openvpn-server:2.4.12". The tag always carries the exact
+// "go-openvpn-test/openvpn-server:2.4.12". The tag always carries the exact
 // upstream version; there is deliberately no "latest" tag. The boolean is false
 // for a series the matrix does not cover.
 func ImageFor(v ServerVersion) (string, bool) {

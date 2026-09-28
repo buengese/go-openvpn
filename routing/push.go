@@ -46,7 +46,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/openlawsvpn/go-openlawsvpn/internal/compress"
+	"github.com/buengese/go-openvpn/internal/compress"
 )
 
 // Topology is the OpenVPN P2P topology mode pushed by the server.

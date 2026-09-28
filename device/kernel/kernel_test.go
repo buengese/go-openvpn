@@ -7,7 +7,7 @@ import (
 	"fmt"
 	"testing"
 
-	"github.com/openlawsvpn/go-openlawsvpn/device"
+	"github.com/buengese/go-openvpn/device"
 )
 
 // TestLogfDiscardsWhenNil checks the documented default: a Backend with no
@@ -62,7 +62,7 @@ func TestOpenWithoutPushedOptionsFails(t *testing.T) {
 // device that installed nothing: Close must be safe to call more than once,
 // which is what lets the core call it from cleanup and from a failure path.
 func TestCloseIsIdempotent(t *testing.T) {
-	d := &kernelDevice{name: "openlawsvpn-absent", mtu: 1400}
+	d := &kernelDevice{name: "go-openvpn-absent", mtu: 1400}
 	for i := range 3 {
 		if err := d.Close(); err != nil {
 			t.Fatalf("Close #%d: %v", i+1, err)

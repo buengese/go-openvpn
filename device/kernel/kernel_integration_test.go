@@ -9,7 +9,7 @@
 //
 // Run with:
 //
-//	sudo OPENLAWSVPN_PRIVILEGED_TESTS=1 \
+//	sudo GO_OPENVPN_PRIVILEGED_TESTS=1 \
 //	  go test -v -tags=privileged -timeout=60s ./device/kernel/
 //
 // What they prove: Open either returns a usable Device or returns an error
@@ -28,14 +28,14 @@ import (
 	"testing"
 	"time"
 
-	"github.com/openlawsvpn/go-openlawsvpn/device"
-	"github.com/openlawsvpn/go-openlawsvpn/routing"
+	"github.com/buengese/go-openvpn/device"
+	"github.com/buengese/go-openvpn/routing"
 )
 
 // privilegedEnv is the opt-in switch for every test in this file. Root alone
 // is not enough: a root test run in a container should not silently start
 // rewriting that container's route table.
-const privilegedEnv = "OPENLAWSVPN_PRIVILEGED_TESTS"
+const privilegedEnv = "GO_OPENVPN_PRIVILEGED_TESTS"
 
 // requirePrivileged skips unless the test may create a TUN interface and write
 // host routes.

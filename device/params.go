@@ -5,8 +5,8 @@ package device
 import (
 	"net"
 
-	"github.com/openlawsvpn/go-openlawsvpn/dns"
-	"github.com/openlawsvpn/go-openlawsvpn/routing"
+	"github.com/buengese/go-openvpn/dns"
+	"github.com/buengese/go-openvpn/routing"
 )
 
 // Params is everything a backend needs to bring the tunnel up: the parsed

@@ -9,8 +9,8 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/openlawsvpn/go-openlawsvpn/internal/crypto"
-	"github.com/openlawsvpn/go-openlawsvpn/internal/wrap"
+	"github.com/buengese/go-openvpn/internal/crypto"
+	"github.com/buengese/go-openvpn/internal/wrap"
 )
 
 // tlsAuthVectors returns the 24 tls-auth vectors. The tls-crypt ones belong to

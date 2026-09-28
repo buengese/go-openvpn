@@ -20,8 +20,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/openlawsvpn/go-openlawsvpn/internal/compress"
-	"github.com/openlawsvpn/go-openlawsvpn/profile"
+	"github.com/buengese/go-openvpn/internal/compress"
+	"github.com/buengese/go-openvpn/profile"
 )
 
 // fixtures writes the profile fixtures and returns them.

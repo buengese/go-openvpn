@@ -24,10 +24,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/openlawsvpn/go-openlawsvpn/diag"
-	"github.com/openlawsvpn/go-openlawsvpn/internal/reliable"
-	"github.com/openlawsvpn/go-openlawsvpn/internal/tlsverify"
-	"github.com/openlawsvpn/go-openlawsvpn/profile"
+	"github.com/buengese/go-openvpn/diag"
+	"github.com/buengese/go-openvpn/internal/reliable"
+	"github.com/buengese/go-openvpn/internal/tlsverify"
+	"github.com/buengese/go-openvpn/profile"
 )
 
 // ---- the client's own half of certificate verification ---------------------

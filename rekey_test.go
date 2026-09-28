@@ -14,9 +14,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/openlawsvpn/go-openlawsvpn/internal/ctls"
-	"github.com/openlawsvpn/go-openlawsvpn/internal/reliable"
-	"github.com/openlawsvpn/go-openlawsvpn/profile"
+	"github.com/buengese/go-openvpn/internal/ctls"
+	"github.com/buengese/go-openvpn/internal/reliable"
+	"github.com/buengese/go-openvpn/profile"
 )
 
 func TestWaitForRekeyResetRequiresPeerResetAndAck(t *testing.T) {

@@ -9,7 +9,7 @@ import (
 	"bytes"
 	"testing"
 
-	"github.com/openlawsvpn/go-openlawsvpn/internal/prf"
+	"github.com/buengese/go-openvpn/internal/prf"
 )
 
 // -------------------------------------------------------------------------
