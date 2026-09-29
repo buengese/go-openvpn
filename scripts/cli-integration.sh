@@ -28,6 +28,7 @@ MOCK_CA=$(mktemp "$REPO_ROOT/tmp/mock-server-ca.XXXXXX.pem")
 CLI_LOG=$(mktemp "$REPO_ROOT/tmp/go-openvpn-cli.XXXXXX.log")
 CLI_PID_FILE=$(mktemp "$REPO_ROOT/tmp/go-openvpn-cli.XXXXXX.pid")
 TEST_OVPN=$(mktemp "$REPO_ROOT/tmp/test.XXXXXX.ovpn")
+TEST_CREDS=$(mktemp "$REPO_ROOT/tmp/test-creds.XXXXXX")
 MOCK_PID=
 
 cleanup() {
@@ -42,7 +43,7 @@ cleanup() {
     cat "$MOCK_LOG" || true
     echo "--- cli log ---"
     cat "$CLI_LOG" || true
-    rm -f "$MOCK_LOG" "$MOCK_CA" "$CLI_LOG" "$CLI_PID_FILE" "$TEST_OVPN"
+    rm -f "$MOCK_LOG" "$MOCK_CA" "$CLI_LOG" "$CLI_PID_FILE" "$TEST_OVPN" "$TEST_CREDS"
 }
 trap cleanup EXIT
 
@@ -107,6 +108,7 @@ proto tcp-client
 remote 127.0.0.1 $PORT
 nobind
 tls-client
+auth-user-pass
 verb 3
 <ca>
 $(cat "$MOCK_CA")
@@ -115,6 +117,14 @@ OVPN
 
 echo "Test profile written to $TEST_OVPN"
 
+# The profile carries no client certificate, so it authenticates with a username
+# and a password and the client refuses to dial without something to answer
+# with. The mock server does not check the pair in its default mode — it parses
+# the auth packet and replies — so any non-empty pair exercises the same path.
+# Two lines, mode 0600, as OpenVPN's own --auth-user-pass file form.
+printf 'testuser\ntestpass\n' > "$TEST_CREDS"
+chmod 600 "$TEST_CREDS"
+
 # ── Connect CLI in daemon mode ─────────────────────────────────────────────────
 # The foreground process blocks until the tunnel is up, then exits 0.
 # Exit code 1 means the tunnel failed to come up → the test fails.
@@ -122,6 +132,7 @@ echo "Test profile written to $TEST_OVPN"
 echo "Starting CLI in daemon mode (requires sudo for TUN)..."
 $SUDO "$CLI_BIN" \
     -config "$TEST_OVPN" \
+    -auth-user-pass "$TEST_CREDS" \
     -daemon \
     -pidfile "$CLI_PID_FILE" \
     -logfile "$CLI_LOG"
