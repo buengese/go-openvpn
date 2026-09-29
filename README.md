@@ -1,26 +1,28 @@
 # go-openvpn
 
-Pure-Go implementation of the OpenVPN client protocol — certificate,
-username/password, and AWS Client VPN's federated SAML/CRV1 authentication.
+Pure-Go library implementing the OpenVPN client protocol — certificate,
+username/password, and federated SAML authentication over AWS Client VPN's
+CRV1 exchange.
 
 Zero C dependencies. `CGO_ENABLED=0` builds a fully static binary.
 `gomobile bind` produces an `.aar` for Android without NDK or CMake.
-See [CHANGELOG.md](CHANGELOG.md) for project-wide release notes.
+Based on [go-openlawsvpn](https://github.com/openlawsvpn/go-openlawsvpn).
+See [CHANGELOG.md](CHANGELOG.md) for release notes.
 
 ## Status
 
-Working end-to-end on Linux and macOS (CLI), on Android and iOS (via the
-gomobile bindings), and on the Linux desktop through
-[go-openvpn-linux](https://github.com/buengese/go-openvpn-linux), which
-consumes this module. Find the current release with
-`git tag --list 'v*' --sort=-v:refname | head -1`. The `.aar` build pipeline is in
-`.github/workflows/aar.yml`. The desktop packages (RPM via COPR, Arch via
-the AUR) are released from go-openvpn-linux.
+Working end-to-end on Linux and macOS through `cmd/cli`, and on Android and iOS
+through the gomobile bindings; `make check-platforms` builds every supported
+target. Find the current release with
+`git tag --list 'v*' --sort=-v:refname | head -1`.
 
-> **AWS support boundary:** AWS documents SAML-based Client VPN connections as
-> supported only with the AWS-provided client. This repository implements the
-> compatible CRV1 wire flow as an unsupported third-party client. Use the
-> AWS-provided client when AWS-supported operation is required.
+> **AWS support boundary:** AWS documents SAML-based Client VPN as supported
+> only with the AWS-provided client. The CRV1 flow here is a third-party
+> implementation of the same wire protocol.
+
+## AI Disclosure
+
+Very significant parts of this libraries code where produced by generative AI with openvpn3 as a direct reference (See [reference policy](docs/openvpn3-reference-policy.md)). All code was reviewed by human and extensively tested however the goal of this project was producing an openvpn client good enough for a measurement tool. As such it's not nearly as battle tested or as thoroughly reviewed for security issues as openvpn3 or openvpn.
 
 ### Components
 
@@ -81,6 +83,10 @@ if err := c.Connect(ctx); err != nil {
 defer c.Disconnect()
 ```
 
+Before dialling, `caps.Inspect` grades a parsed profile against what the client
+implements, so a directive nobody has considered fails during preflight rather
+than mid-handshake.
+
 However a connection ends, `c.Report()` describes the attempt: the stages it
 reached, the class of the failure that stopped it, and what the peer
 negotiated. `Redacted()` is the only marshallable form — credentials,
@@ -89,30 +95,23 @@ certificates and pushed options are scrubbed before serialisation.
 ## Build
 
 ```bash
-# Linux CLI (direct, no daemon)
+# Static CLI
 CGO_ENABLED=0 go build -o go-openvpn-cli ./cmd/cli
 sudo ./go-openvpn-cli -config your.ovpn
 
-# Add "verb 4" to the profile to log the verified server certificate.
-
-# Public relay demo.
-sudo ./go-openvpn-cli -relay default -daemon \
-  -logfile /tmp/vpn.log -pidfile /tmp/vpn.pid
-
-# Private relay token (CI/CD headless auth); token file must be mode 0600.
-sudo ./go-openvpn-cli -relay-token-file /run/user/$UID/go-openvpn-relay-token \
-  -daemon -logfile /tmp/vpn.log -pidfile /tmp/vpn.pid
+# Relay agent mode. A private token file must be mode 0600.
+sudo ./go-openvpn-cli -relay default -daemon -logfile /tmp/vpn.log
+sudo ./go-openvpn-cli -relay-token-file /run/user/$UID/go-openvpn-relay-token -daemon
 
 # Android .aar (requires gomobile + Android NDK)
 gomobile bind -o go-openvpn.aar -target android -androidapi 31 \
     github.com/buengese/go-openvpn
 ```
 
-With `verb 4`, the client logs the verified server certificate during every
-TLS handshake in an OpenSSL-like format: subject, issuer, serial number,
-validity period, DNS names, and SHA-256 fingerprint. This is the certificate
-used to authenticate the VPN server; it is not the user's SAML or client
-certificate.
+With `verb 4` in the profile, every TLS handshake logs the verified server
+certificate OpenSSL-style: subject, issuer, serial, validity, DNS names and
+SHA-256 fingerprint. That is the certificate the server is authenticated by,
+not the user's own.
 
 ## Test
 
@@ -133,43 +132,25 @@ lists every pass, the one command that runs it, and what it costs.
 
 | Workflow | Trigger | What it does |
 |---|---|---|
-| **CI** (`ci.yml`) | push / PR to `main` or `dev` | Go builds, race tests, and vet; also drives the CLI against the mock server on ubuntu and macOS, with and without `redirect-gateway` |
-| **Build AAR** (`aar.yml`) | push tag `v*` or manual | builds `go-openvpn.aar` via `gomobile bind`, publishes GitHub Release, opens a version-bump PR on `openlawsvpn-android-go` |
-| **Build xcframework** (`xcframework.yml`) | push tag `v*` or manual | builds `go-openvpn.xcframework` for ios / iossimulator / macos, attaches the zip and its SHA-256 to the GitHub Release, dispatches a `bump-xcframework` event to `openlawsvpn-ios` |
-| **Release** (`release.yml`) | push tag `v*` or manual | builds the static `cli` binary for linux amd64 / arm64 / ppc64le and darwin arm64 / amd64, GPG-signs and attests each, attaches them to the GitHub Release |
+| **CI** (`ci.yml`) | push / PR to `main`, `dev` | builds, race tests, vet, and the CLI against the mock server on ubuntu and macOS, with and without `redirect-gateway` |
+| **Build AAR** (`aar.yml`) | tag `v*` or manual | `gomobile bind` to `go-openvpn.aar`, attaches it and its SHA-256 to the Release, opens a version-bump PR on `openlawsvpn-android-go` |
+| **Build xcframework** (`xcframework.yml`) | tag `v*` or manual | `go-openvpn.xcframework` for ios / iossimulator / macos, zip and SHA-256 on the Release, dispatches `bump-xcframework` to `openlawsvpn-ios` |
+| **Release** (`release.yml`) | tag `v*` or manual | static `cli` binaries for linux amd64 / arm64 / ppc64le and darwin arm64 / amd64, each GPG-signed and attested |
 | **VPN Integration** (`vpn-integration.yml`) | manual | integration run against a live endpoint |
 
-### Publishing a new release
-
-The library's version is its tag; no file in the tree carries it. Move the
-`Unreleased` entries in `CHANGELOG.md` to the new version and date, add a
-fresh empty `Unreleased` section, commit, then tag:
-
-```bash
-git tag vX.Y.Z
-git push origin vX.Y.Z
-```
-
-The `aar.yml` workflow builds the AAR, attaches it (with SHA-256) to the GitHub
-Release, then triggers `bump-aar.yml` on `openlawsvpn-android-go` — which opens a
-PR bumping the pinned AAR version automatically.
-
-**Cross-repo auth:** writes use the `go-openvpn-ci` GitHub App via
+The library's version is its tag; no file in the tree carries it. To release,
+move the `Unreleased` entries in `CHANGELOG.md` under the new version and date,
+add a fresh empty `Unreleased`, commit, then `git tag vX.Y.Z && git push origin
+vX.Y.Z`. Cross-repo writes use the `go-openvpn-ci` GitHub App via
 `actions/create-github-app-token` — secrets `CI_APP_ID` / `CI_APP_PRIVATE_KEY`.
-There is no `ANDROID_GO_PAT` PAT.
 
 ## Known limitations
 
-### SAML assertion is single-use
-
-AWS Client VPN SAML assertions are cryptographically bound to the original
-`AuthnRequest` ID. The server marks the assertion consumed on first use.
-Retrying Phase 2 with the same token returns `AUTH_FAILED,Invalid username
-or password` even within the token's TTL.
-
-For reconnects: if the server's CRV1 session is still alive the client can
-reconnect with the cached token. If the session has expired (`AUTH_FAILED`),
-the user must complete the browser SAML flow again.
+**A SAML assertion is single-use.** AWS binds the assertion to the original
+`AuthnRequest` ID and marks it consumed on first use, so retrying with the same
+token returns `AUTH_FAILED,Invalid username or password` even inside the token's
+TTL. A reconnect succeeds while the server's CRV1 session is still alive; once
+that has expired, the browser flow has to run again.
 
 ## License
 
