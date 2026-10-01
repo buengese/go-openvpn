@@ -2,6 +2,7 @@ package caps
 
 import (
 	"sort"
+	"strconv"
 	"strings"
 
 	"github.com/buengese/go-openvpn/diag"
@@ -489,6 +490,23 @@ func classifyAuth(p *profile.Profile, d profile.Directive) (Support, string) {
 	}
 	return Support{fatal,
 		"not implemented: CBC packet authentication has SHA1, SHA256 and SHA512"}, v
+}
+
+// classifyFragment passes "fragment 0", which asks for no fragmentation. Any
+// other argument is fatal: the peer would frame every data packet with a
+// 4-byte header this client neither writes nor strips.
+//
+// Reference: openvpn-2.5.11 src/openvpn/options.c:6156 (positive_atoi, no
+// lower bound); openvpn-2.6.22 src/openvpn/options.c:6630 adds "< 68"; a zero
+// gates off the fragment frame (openvpn-2.5.11 options.c:2898).
+func classifyFragment(_ *profile.Profile, d profile.Directive) (Support, string) {
+	v := arg(d, 0)
+	if n, err := strconv.Atoi(v); err == nil && n == 0 {
+		return Support{ignored,
+			"not read; no datagram fragmentation is performed, which is what this asks for"}, v
+	}
+	return Support{fatal,
+		"not implemented; a peer using it frames every data packet with 4 bytes this client cannot strip"}, v
 }
 
 // classifyDHCPOption keeps the sub-option keyword, which decides the verdict,

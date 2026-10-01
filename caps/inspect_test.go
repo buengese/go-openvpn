@@ -804,3 +804,41 @@ func TestInspectCompression(t *testing.T) {
 		}
 	}
 }
+
+// TestInspectFragment pins that "fragment 0" is ignored and any other
+// argument, malformed ones included, is fatal.
+func TestInspectFragment(t *testing.T) {
+	cases := []struct {
+		src   string
+		value string
+		want  diag.Severity
+		why   string
+	}{
+		{"fragment 0\n", "0", diag.SeverityIgnored,
+			"ce->fragment of 0 allocates no fragment frame; this client fragments nothing either"},
+		{"fragment 1300\n", "1300", diag.SeverityFatal,
+			"a peer with it enabled frames every data packet with 4 bytes this client cannot strip"},
+		{"fragment 68\n", "68", diag.SeverityFatal,
+			"the reference's lower bound is still a real fragment size"},
+		{"fragment 1\n", "1", diag.SeverityFatal,
+			"below the reference's bound, but non-zero is non-zero here"},
+		{"fragment\n", "", diag.SeverityFatal,
+			"no argument at all is malformed, not a request for zero"},
+		{"fragment mtu\n", "mtu", diag.SeverityFatal,
+			"positive_atoi would read this as zero; a malformed argument must not buy a pass"},
+	}
+	for _, tc := range cases {
+		p := parse(t, "client\ndev tun\nremote host.example.test 1194\n"+tc.src)
+		g, ok := gapFor(caps.Inspect(p), "fragment")
+		if !ok {
+			t.Errorf("%q produced no fragment gap", tc.src)
+			continue
+		}
+		if g.Severity != tc.want {
+			t.Errorf("%q = %v, want %v — %s (%s)", tc.src, g.Severity, tc.want, tc.why, g.Detail)
+		}
+		if g.Value != tc.value {
+			t.Errorf("%q recorded value %q, want %q", tc.src, g.Value, tc.value)
+		}
+	}
+}

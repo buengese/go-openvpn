@@ -12,25 +12,25 @@
 
 fixtures
   groups                                8
-  configs                              45
+  configs                              46
   refused                               1
-  directive lines                     287
-  inline blocks                        54
-  gaps                                342
+  directive lines                     294
+  inline blocks                        55
+  gaps                                350
   implied gaps                          1
   configs with implied gaps             1
   unrecognised directives               0
   unrecognised blocks                   0
 
 severity totals
-  supported                           287
-  ignored                              33
+  supported                           293
+  ignored                              35
   degraded                             19
   fatal                                 3
 
 configs by worst severity
-  supported                            26
-  ignored                               4
+  supported                            25
+  ignored                               6
   degraded                             12
   fatal                                 3
 
@@ -39,15 +39,15 @@ per group
   compression                           8         50         45          1          4          0
   crypto                                6         43         37          1          5          0
   lexical                               3         24         23          0          1          0
-  misc                                  4         60         26         26          7          1
-  session                               5         44         40          3          1          0
+  misc                                  5         67         32         27          7          1
+  session                               5         45         40          4          1          0
   transport                             7         47         46          0          1          0
   trust                                 5         30         29          1          0          0
   wrap                                  7         44         41          1          0          2
 
 per directive
   directive                       configs       gaps  supported    ignored   degraded      fatal
-  <ca>                                 43         43         43          0          0          0
+  <ca>                                 44         44         44          0          0          0
   <cert>                                2          2          2          0          0          0
   <key>                                 2          2          2          0          0          0
   <tls-auth>                            5          5          5          0          0          0
@@ -58,13 +58,13 @@ per directive
   auth-federate                         1          1          1          0          0          0
   auth-nocache                          1          1          0          1          0          0
   auth-retry                            1          1          0          1          0          0
-  auth-user-pass                       43         43         43          0          0          0
+  auth-user-pass                       44         44         44          0          0          0
   become-primary                        1          1          1          0          0          0
   block-outside-dns                     1          1          0          1          0          0
   ca                                    3          3          2          1          0          0
   cert                                  1          1          1          0          0          0
   cipher                                6          6          6          0          0          0
-  client                               45         45         45          0          0          0
+  client                               46         46         46          0          0          0
   comp-lzo                              5          5          1          0          4          0
   comp-noadapt                          1          1          0          1          0          0
   compress                              3          3          2          0          1          0
@@ -72,13 +72,13 @@ per directive
   connect-timeout                       1          1          0          0          1          0
   data-ciphers                          1          1          0          0          1          0
   data-ciphers-fallback                 1          1          0          0          1          0
-  dev                                  45         45         45          0          0          0
+  dev                                  46         46         46          0          0          0
   dhcp-option                           1          1          1          0          0          0
   down                                  1          1          0          0          1          0
   explicit-exit-notify                  2          2          2          0          0          0
   fast-io                               1          1          0          1          0          0
   float                                 1          1          0          0          1          0
-  fragment                              1          1          0          0          0          1
+  fragment                              2          2          0          1          0          1
   group                                 1          1          0          1          0          0
   hand-window                           1          1          1          0          0          0
   keepalive                             1          1          1          0          0          0
@@ -87,7 +87,7 @@ per directive
   keysize                               1          1          0          0          1          0
   link-mtu                              1          1          0          0          1          0
   max-routes                            1          1          0          1          0          0
-  mssfix                                1          1          1          0          0          0
+  mssfix                                2          2          2          0          0          0
   mute                                  1          1          0          1          0          0
   mute-replay-warnings                  1          1          0          1          0          0
   ncp-disable                           1          1          0          0          1          0
@@ -99,6 +99,7 @@ per directive
   ping                                  2          2          2          0          0          0
   ping-exit                             1          1          0          0          1          0
   ping-restart                          1          1          1          0          0          0
+  ping-timer-rem                        1          1          0          1          0          0
   port                                  1          1          1          0          0          0
   proto                                 2          2          2          0          0          0
   pull                                  1          1          1          0          0          0
@@ -106,7 +107,7 @@ per directive
   rcvbuf                                1          1          0          1          0          0
   redirect-gateway                      1          1          0          0          1          0
   remap-usr1                            1          1          0          1          0          0
-  remote                               45         49         49          0          0          0
+  remote                               46         50         50          0          0          0
   remote-cert-tls                       1          1          1          0          0          0
   remote-random                         2          2          2          0          0          0
   remote-random-hostname                1          1          1          0          0          0

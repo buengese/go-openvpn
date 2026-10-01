@@ -223,6 +223,12 @@ and releases follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- Two capability-registry verdicts no longer refuse a profile before
+  dialling. `ping-timer-rem` is `ignored`: a client that dials already has
+  what it asks for. `fragment 0` is `ignored`: it asks for no fragmentation.
+  A non-zero `fragment` stays `fatal`, since the peer would frame every data
+  packet with a 4-byte header this client cannot strip.
+
 - The `go` directive is `1.25.5` rather than `1.25.9`: `1.25.5` is the real
   floor, declared by `gvisor.dev/gvisor`, and a dependency's directive raises
   every consumer's.

@@ -61,6 +61,7 @@ directive
   ping
   ping-exit
   ping-restart
+  ping-timer-rem
   port
   proto
   pull
@@ -153,6 +154,7 @@ argument shape
   persist-tun: none
   ping-exit: number
   ping-restart: number
+  ping-timer-rem: none
   ping: number
   port: number
   proto: carries upper case

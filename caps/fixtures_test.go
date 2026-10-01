@@ -239,7 +239,7 @@ var fixtureShapes = []fixtureShape{
 		inline: []string{"ca"}},
 
 	{Group: "session", Name: "keepalive",
-		directives: "keepalive 10 60\nping 10\nping-restart 60\nauth-user-pass\n",
+		directives: "keepalive 10 60\nping 10\nping-restart 60\nping-timer-rem\nauth-user-pass\n",
 		inline:     []string{"ca"}},
 
 	{Group: "session", Name: "ping-exit",
@@ -268,6 +268,11 @@ var fixtureShapes = []fixtureShape{
 		directives: "tun-mtu 1500\ntun-mtu-extra 32\ntun-mtu-max 1600\nlink-mtu 1500\nmssfix 1400\n" +
 			"fragment 1300\ntun-ipv6\nauth-user-pass\n",
 		inline: []string{"ca"}},
+
+	// "fragment 0", as published provider archives ship it.
+	{Group: "misc", Name: "fragment-disabled",
+		directives: "fragment 0\nmssfix 1400\nauth-user-pass\n",
+		inline:     []string{"ca"}},
 
 	{Group: "misc", Name: "hooks",
 		directives: "up /etc/openvpn/up.sh\ndown /etc/openvpn/down.sh\nup-restart\n" +

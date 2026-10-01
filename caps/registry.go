@@ -228,8 +228,9 @@ var registry = map[string]entry{
 		"not read; the advertised link MTU is derived from tun-mtu (+21 UDP, +43 TCP)"),
 	"mssfix": sup(supported,
 		"clamps TCP SYN segments on the tun-to-wire path; honours the mtu and fixed words; a pushed value wins"),
-	"fragment": sup(fatal,
-		"datagram fragmentation is not implemented; oversized packets are sent whole"),
+	"fragment": ref(fatal,
+		"not implemented; a peer using it frames every data packet with 4 bytes this client cannot strip",
+		classifyFragment),
 
 	// ---- Renegotiation and liveness ----------------------------------
 
@@ -249,6 +250,12 @@ var registry = map[string]entry{
 		"sets the probe interval, below a pushed one and above the 8 s default"),
 	"ping-restart": sup(supported,
 		"sets the dead-link timeout, below a pushed one and above the 40 s default"),
+	// "rem" is remote: don't start the timers until a peer is known, which a
+	// client that dials already satisfies.
+	// Reference: openvpn3-core client/cliopt.hpp ~773 refuses it as a
+	// listen-mode feature; the divergence is deliberate.
+	"ping-timer-rem": sup(ignored,
+		"the dead-link timer starts only once a dialled peer is up, which is what this asks for"),
 	"ping-exit": sup(degraded,
 		"read as the dead-link timeout; this client ends the session where the reference exits the process"),
 	"explicit-exit-notify": sup(supported,
