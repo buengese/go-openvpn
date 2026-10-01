@@ -14,6 +14,7 @@
 //	    return err
 //	}
 //	c := vpn.New(p)
+//	c.EventFn = vpn.StderrEvents // or your own sink; nil is silent
 //	c.CredentialsFn = func(ctx context.Context) (vpn.Credentials, error) {
 //	    return vpn.Credentials{Username: user, Password: pass}, nil
 //	}
@@ -314,6 +315,9 @@ type Client struct {
 	// EventFn, if set, is called for every notable lifecycle event: state
 	// transitions, log lines and periodic stats. It is called concurrently
 	// from several goroutines, must not block, and is set before Connect.
+	//
+	// Nil is silent. The one exception is the SSLKEYLOGFILE notice, which the
+	// TLS layer writes to stderr as the caller's own opt-in.
 	EventFn EventFn
 
 	// PreflightMode selects what the StageParse capability preflight does with
@@ -437,20 +441,34 @@ type Credentials struct {
 	Password string
 }
 
-// emit delivers an event to EventFn when set, and mirrors it to stderr otherwise.
+// emit delivers an event to EventFn; a nil EventFn is silent.
+//
 // Safe to call from any goroutine.
 func (c *Client) emit(e Event) {
-	e.At = time.Now()
-	if c.EventFn != nil {
-		c.EventFn(e)
+	if c.EventFn == nil {
 		return
 	}
-	// Fallback: keep existing stderr behaviour so the CLI still works.
+	e.At = time.Now()
+	c.EventFn(e)
+}
+
+// StderrEvents is an EventFn that writes log lines and state changes to
+// standard error.
+func StderrEvents(e Event) {
+	writeEvent(os.Stderr, e)
+}
+
+// writeEvent renders one event to w.
+func writeEvent(w io.Writer, e Event) {
 	switch e.Type {
 	case EventLog:
-		fmt.Fprintf(os.Stderr, "%s\n", e.Message)
+		fmt.Fprintf(w, "%s\n", e.Message)
 	case EventStateChanged:
-		fmt.Fprintf(os.Stderr, "vpn: state → %s\n", e.State)
+		if e.Message != "" {
+			fmt.Fprintf(w, "vpn: state → %s: %s\n", e.State, e.Message)
+		} else {
+			fmt.Fprintf(w, "vpn: state → %s\n", e.State)
+		}
 	}
 }
 
@@ -908,8 +926,9 @@ type Event struct {
 	// State is set when Type == EventStateChanged.
 	State ClientState
 
-	// Message carries a log line (EventLog), SAML URL (StateWaitingSAML),
-	// error description (StateError), or assigned tunnel IP (StateConnected).
+	// Message carries a log line (EventLog), an error description
+	// (StateError), or the assigned tunnel IP (StateConnected). It never
+	// carries the SAML URL, which consumers would log.
 	Message string
 
 	// ServerIP is the VPN server IP (set when State == StateConnected).

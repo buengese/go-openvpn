@@ -34,6 +34,9 @@ and releases follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `Connect` carries the attempt's report, recoverable through `diag.AsError`
   after any `%w` wrapping. It is always the `Redacted()` form.
 
+- `vpn.StderrEvents`, an `EventFn` that writes log lines and state changes,
+  including a state change's `Message`, to standard error.
+
 - `profile.Spec` carries json tags, and `KeyDirection`, `X509NameMatch` and
   `MSSFixMode` serialise as their names through `MarshalText` and
   `UnmarshalText`; an unknown name is refused. `ParseMSSFixMode` is added. A
@@ -262,6 +265,16 @@ and releases follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   what it asks for. `fragment 0` is `ignored`: it asks for no fragmentation.
   A non-zero `fragment` stays `fatal`, since the peer would frame every data
   packet with a 4-byte header this client cannot strip.
+
+- **Breaking:** a nil `Client.EventFn`, and a nil `netstack.Options.EventFn`,
+  is now silent instead of writing to `os.Stderr`. Set
+  `EventFn: vpn.StderrEvents` for the old output. `AWSSAMLUnsupportedNotice`
+  and the EMS/RFC 5705 fallback notice now reach only `EventFn`; the latter is
+  also in the session report.
+
+- **Breaking:** `dns.Apply` takes a `logf func(string, ...any)` for the notice
+  that it fell back to overwriting `/etc/resolv.conf`, which it used to write
+  to `os.Stderr`. The kernel backend routes it to `EventFn`; nil drops it.
 
 - `MSSFixMode.String()` returns `mssfix-mode(N)` for an out-of-range value
   instead of `"link"`.

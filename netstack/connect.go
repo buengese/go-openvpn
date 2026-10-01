@@ -29,7 +29,7 @@ type Options struct {
 
 	// EventFn, when set, receives every lifecycle event: state changes, log
 	// lines and periodic stats. It is called from internal goroutines and
-	// must not block.
+	// must not block. Nil is silent; vpn.StderrEvents writes to stderr.
 	EventFn vpn.EventFn
 
 	// DeviceName, when non-empty, names the tunnel device in logs and in the
@@ -92,9 +92,7 @@ func ConnectWithReport(ctx context.Context, prof *profile.Profile, opts Options)
 	c.Device = &Backend{Name: opts.DeviceName}
 	c.PreflightMode = opts.PreflightMode
 	c.MaxReconnects = opts.MaxReconnects
-	if opts.EventFn != nil {
-		c.EventFn = opts.EventFn
-	}
+	c.EventFn = opts.EventFn
 	if opts.CredentialsFn != nil {
 		c.CredentialsFn = opts.CredentialsFn
 	}

@@ -295,7 +295,7 @@ func TestApplyLeavesNoBackupWhenItDoesNotUseOne(t *testing.T) {
 
 	// No servers is the cheapest way to reach the no-backup path without
 	// touching the host's real resolver configuration.
-	backend, backupPath, err := Apply(&Config{}, "tun-does-not-exist")
+	backend, backupPath, err := Apply(&Config{}, "tun-does-not-exist", nil)
 	if err != nil {
 		t.Fatalf("Apply: %v", err)
 	}

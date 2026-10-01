@@ -40,6 +40,11 @@ if err != nil {
 }
 c := vpn.New(p)
 
+// Every log line comes through EventFn, so nothing reaches a destination you
+// did not choose. StderrEvents is the ready-made sink; a consumer with
+// structured logging writes its own instead.
+c.EventFn = vpn.StderrEvents
+
 // Whatever the profile authenticates with, supply that and nothing else:
 // a cert-only profile needs no callback at all.
 c.CredentialsFn = func(ctx context.Context) (vpn.Credentials, error) {
@@ -110,8 +115,9 @@ gomobile bind -o go-openvpn.aar -target android -androidapi 31 \
 
 With `verb 4` in the profile, every TLS handshake logs the verified server
 certificate OpenSSL-style: subject, issuer, serial, validity, DNS names and
-SHA-256 fingerprint. That is the certificate the server is authenticated by,
-not the user's own.
+SHA-256 fingerprint. It goes through `EventFn` like every other log line, so it
+lands wherever the consumer sends it. That is the certificate the server is
+authenticated by, not the user's own.
 
 ## Test
 

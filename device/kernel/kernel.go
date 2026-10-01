@@ -102,7 +102,7 @@ func (b *Backend) finishOpen(dev *tun.Device, p device.Params) (*kernelDevice, e
 		b.logf("vpn: routes applied via %s", dev.Name())
 	}
 
-	dnsBackend, dnsBackup, dnsErr := dns.Apply(p.DNS, dev.Name())
+	dnsBackend, dnsBackup, dnsErr := dns.Apply(p.DNS, dev.Name(), b.logf)
 	d.dnsBackend = dnsBackend
 	d.dnsBackup = dnsBackup
 	if dnsErr != nil {

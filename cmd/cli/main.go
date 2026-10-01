@@ -314,6 +314,7 @@ RELAY ENDPOINTS
 	}
 
 	client := vpn.New(p)
+	client.EventFn = vpn.StderrEvents
 
 	remoteDesc := p.Remote
 	if p.RandomHostname {
@@ -720,6 +721,7 @@ func runRelayMode(ctx context.Context, stop context.CancelFunc, fallback *profil
 		}
 
 		client := vpn.New(connProfile)
+		client.EventFn = vpn.StderrEvents
 		activeClientMu.Lock()
 		activeClient = client
 		activeClientMu.Unlock()

@@ -134,7 +134,5 @@ func stageNames(r *diag.SessionReport) []string {
 	return out
 }
 
-// quietClient is a Client that can be driven by a test without a connection:
-// emit falls back to os.Stderr when EventFn is nil, and nothing here needs a
-// recorder it does not create for itself.
+// quietClient is a Client a test can drive without a connection.
 func quietClient() *Client { return &Client{EventFn: func(Event) {}} }

@@ -6,7 +6,6 @@ package dns
 import (
 	"fmt"
 	"net"
-	"os"
 
 	"github.com/godbus/dbus/v5"
 )
@@ -129,14 +128,16 @@ func RevertResolved(ifName string) error {
 //
 // It returns the backup path to hand to Revert, which is empty unless the
 // resolv.conf fallback was actually taken.
-func Apply(cfg *Config, ifName string) (Backend, string, error) {
+//
+// logf, if non-nil, is told when the resolv.conf fallback is taken.
+func Apply(cfg *Config, ifName string, logf func(string, ...any)) (Backend, string, error) {
 	if cfg == nil || len(cfg.Servers) == 0 {
 		return BackendNone, "", nil
 	}
 	if err := ApplyResolved(cfg, ifName); err == nil {
 		return BackendResolved, "", nil
-	} else {
-		fmt.Fprintf(os.Stderr, "dns: resolved D-Bus failed (%v), falling back to /etc/resolv.conf\n", err)
+	} else if logf != nil {
+		logf("dns: resolved D-Bus failed (%v), falling back to /etc/resolv.conf", err)
 	}
 	backupPath, err := newResolvConfBackup()
 	if err != nil {

@@ -10,6 +10,7 @@
 package vpn
 
 import (
+	"bytes"
 	"context"
 	"crypto/tls"
 	"errors"
@@ -20,6 +21,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/buengese/go-openvpn/diag"
 	"github.com/buengese/go-openvpn/internal/framing"
 
 	"github.com/buengese/go-openvpn/internal/prf"
@@ -603,4 +605,50 @@ func TestRelaySessionIDsSurviveTheNextAttempt(t *testing.T) {
 		}
 	}()
 	wg.Wait()
+}
+
+// TestNilEventFnIsSilent pins that a nil EventFn neither panics nor writes.
+func TestNilEventFnIsSilent(t *testing.T) {
+	c := &Client{}
+	if c.EventFn != nil {
+		t.Fatal("a fresh Client has an EventFn")
+	}
+	c.emit(Event{Type: EventLog, Message: "a log line"})
+	c.emit(Event{Type: EventStateChanged, State: StateConnected, Message: "10.8.0.2"})
+	c.emit(Event{Type: EventStatsUpdate, Stats: Stats{BytesSent: 1}})
+	c.emit(Event{Type: EventStage, Stage: diag.StageAuth})
+}
+
+// TestStderrEventsFormat pins StderrEvents' output, including a state
+// change's Message, and that stats and stage events write nothing.
+func TestStderrEventsFormat(t *testing.T) {
+	cases := []struct {
+		name string
+		e    Event
+		want string
+	}{
+		{"log line", Event{Type: EventLog, Message: "vpn: dialling"}, "vpn: dialling\n"},
+		{"state alone", Event{Type: EventStateChanged, State: StateConnecting}, "vpn: state → connecting\n"},
+		{"state with a message", Event{Type: EventStateChanged, State: StateError, Message: "auth failed"},
+			"vpn: state → error: auth failed\n"},
+		{"stats write nothing", Event{Type: EventStatsUpdate, Stats: Stats{BytesSent: 42}}, ""},
+		{"stage writes nothing", Event{Type: EventStage, Stage: diag.StageAuth}, ""},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			var buf bytes.Buffer
+			writeEvent(&buf, tc.e)
+			if got := buf.String(); got != tc.want {
+				t.Errorf("writeEvent = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestStderrEventsIsAnEventFn(t *testing.T) {
+	c := &Client{}
+	c.EventFn = StderrEvents
+	if c.EventFn == nil {
+		t.Error("StderrEvents did not assign to EventFn")
+	}
 }
