@@ -26,129 +26,105 @@ import (
 // TCP, where OpenVPN's default is UDP — and absent has to differ from chosen.
 type Spec struct {
 	// Remotes is the --remote list, in dial order. At least one is required.
-	Remotes []Endpoint
-	// Port is --port: the default for any Endpoint that names none.
-	// Zero means the directive is absent, and the profile default of 1194
-	// applies.
-	Port int
-	// Proto is --proto in OpenVPN's spelling ("udp", "tcp", "tcp-client",
-	// "udp4", …), the default for any Endpoint that names none. Empty means
-	// the directive is absent, and UDP applies. Server spellings are refused,
-	// exactly as they are in a file.
-	Proto string
+	Remotes []Endpoint `json:"remotes,omitempty"`
 
 	// CA, Cert and Key are the PEM bodies of the <ca>, <cert> and <key>
-	// blocks. The client refuses to connect without a usable CA; Cert and Key
-	// go together.
-	CA, Cert, Key []byte
+	// blocks.
+	CA   []byte `json:"ca,omitempty"`
+	Cert []byte `json:"cert,omitempty"`
+	Key  []byte `json:"key,omitempty"`
 
 	// TLSAuth and TLSCrypt are the bodies of <tls-auth> and <tls-crypt>, as
-	// "openvpn --genkey" writes them. They are mutually exclusive.
-	TLSAuth, TLSCrypt []byte
-	// KeyDirection is --key-direction. KeyDirectionAbsent emits no directive,
-	// which is its own behaviour: the whole key is used in both directions.
-	KeyDirection KeyDirection
+	// "openvpn --genkey" writes them.
+	TLSAuth  []byte `json:"tls_auth,omitempty"`
+	TLSCrypt []byte `json:"tls_crypt,omitempty"`
+	// KeyDirection is --key-direction. KeyDirectionAbsent uses the whole key
+	// in both directions.
+	KeyDirection KeyDirection `json:"key_direction,omitempty"`
 
-	// AuthUserPass is the bare auth-user-pass directive: authenticate with the
-	// username and password the client's CredentialsFn supplies. The
-	// file-argument form is deliberately not offered — a built profile has no
-	// directory to resolve it against.
-	AuthUserPass bool
+	// AuthUserPass asks for a username and password, which the client's
+	// CredentialsFn supplies.
+	AuthUserPass bool `json:"auth_user_pass,omitempty"`
 	// AuthFederate is auth-federate: use the SAML/CRV1 flow.
-	AuthFederate bool
+	AuthFederate bool `json:"auth_federate,omitempty"`
 
-	// Cipher is --cipher; empty means absent, and AES-256-GCM applies.
-	Cipher string
-	// Auth is --auth; empty means absent, and SHA1 applies. The distinction
-	// matters: an explicit "auth SHA1" and no directive at all are told apart
-	// by the profile and reported differently.
-	Auth string
+	// Cipher is --cipher; empty means AES-256-GCM.
+	Cipher string `json:"cipher,omitempty"`
+	// Auth is --auth; empty means absent, and SHA1 applies.
+	Auth string `json:"auth,omitempty"`
 
-	// RemoteCertTLSServer emits "remote-cert-tls server".
-	RemoteCertTLSServer bool
-	// NSCertTypeServer emits "ns-cert-type server".
-	NSCertTypeServer bool
-	// VerifyX509Name and VerifyX509NameMatch are --verify-x509-name. The match
-	// type is only emitted when a name is set.
-	VerifyX509Name      string
-	VerifyX509NameMatch X509NameMatch
+	// RemoteCertTLSServer is "remote-cert-tls server"; NSCertTypeServer is
+	// "ns-cert-type server".
+	RemoteCertTLSServer bool `json:"remote_cert_tls_server,omitempty"`
+	NSCertTypeServer    bool `json:"ns_cert_type_server,omitempty"`
+	// VerifyX509Name and VerifyX509NameMatch are --verify-x509-name.
+	VerifyX509Name      string        `json:"verify_x509_name,omitempty"`
+	VerifyX509NameMatch X509NameMatch `json:"verify_x509_name_match,omitempty"`
 
-	// Compression is the whole compression directive, as a file spells it:
-	// "comp-lzo", "comp-lzo no", "compress", "compress lz4-v2",
-	// "compress stub-v2", and so on. Empty means none. The spelling matters —
-	// a bare "compress" and "comp-lzo no" put different bytes on the wire.
-	Compression string
+	// Compression is the compression directive: "comp-lzo", "comp-lzo no",
+	// "compress", "compress lz4", "compress lz4-v2" or "compress stub-v2".
+	// Empty means none.
+	Compression string `json:"compression,omitempty"`
 	// AllowCompression is --allow-compression: "no", "asym" or "yes".
-	AllowCompression string
+	AllowCompression string `json:"allow_compression,omitempty"`
 
 	// TunMTU is --tun-mtu.
-	TunMTU int
+	TunMTU int `json:"tun_mtu,omitempty"`
 	// MSSFix is --mssfix N, with MSSFixMode its optional second word.
-	MSSFix     int
-	MSSFixMode MSSFixMode
-	// MSSFixOff is an explicit "mssfix 0", the opt-out. It is refused
-	// alongside a non-zero MSSFix, because a file cannot say both.
-	MSSFixOff bool
+	// MSSFixOff is an explicit "mssfix 0".
+	MSSFix     int        `json:"mssfix,omitempty"`
+	MSSFixMode MSSFixMode `json:"mssfix_mode,omitempty"`
+	MSSFixOff  bool       `json:"mssfix_off,omitempty"`
 
-	// RenegSec is --reneg-sec. Zero means absent, and 3600 applies.
-	RenegSec int
-	// NoReneg is an explicit "reneg-sec 0", which disables client-initiated
-	// renegotiation and is what AWS-issued profiles carry. Refused alongside a
-	// non-zero RenegSec.
-	NoReneg bool
-	// RenegBytes is --reneg-bytes.
-	RenegBytes int64
+	// RenegSec is --reneg-sec; zero means 3600. NoReneg is an explicit
+	// "reneg-sec 0", which disables client-initiated renegotiation.
+	RenegSec   int   `json:"reneg_sec,omitempty"`
+	NoReneg    bool  `json:"no_reneg,omitempty"`
+	RenegBytes int64 `json:"reneg_bytes,omitempty"`
 	// HandWindow is --hand-window; BecomePrimary is --become-primary.
-	HandWindow    int
-	BecomePrimary int
+	HandWindow    int `json:"hand_window,omitempty"`
+	BecomePrimary int `json:"become_primary,omitempty"`
 
-	// Ping, PingRestart and PingExit are the individual timer directives.
-	// PingExit and PingRestart share a slot in the profile, as they do in a
-	// file, and are refused together.
-	Ping, PingRestart, PingExit int
-	// Keepalive is "keepalive N M". It outranks Ping and PingRestart wherever
-	// they appear, exactly as in a file.
-	Keepalive Keepalive
-	// ExplicitExitNotify is --explicit-exit-notify. Use ExplicitExitNotifyBare
-	// for the argument-less form, which means one.
-	ExplicitExitNotify     int
-	ExplicitExitNotifyBare bool
+	// Ping is the keepalive send interval and PingTimeout the dead-link
+	// timeout, in seconds. PingExit ends the session on timeout instead of
+	// restarting it.
+	Ping        int  `json:"ping,omitempty"`
+	PingTimeout int  `json:"ping_timeout,omitempty"`
+	PingExit    bool `json:"ping_exit,omitempty"`
+	// ExplicitExitNotify is how many exit notifications a disconnect sends.
+	ExplicitExitNotify int `json:"explicit_exit_notify,omitempty"`
 
 	// RemoteRandom is --remote-random; RemoteRandomHostname is
 	// --remote-random-hostname.
-	RemoteRandom         bool
-	RemoteRandomHostname bool
+	RemoteRandom         bool `json:"remote_random,omitempty"`
+	RemoteRandomHostname bool `json:"remote_random_hostname,omitempty"`
 
-	// DNS is rendered as dhcp-option DNS / DOMAIN / DOMAIN-ROUTE directives.
-	DNS DNSOptions
+	// DNS is the resolver configuration, as dhcp-option DNS, DOMAIN and
+	// DOMAIN-ROUTE.
+	DNS DNSOptions `json:"dns,omitzero"`
 
-	// Extra carries any directive without a field above, applied after them
-	// and classified by the capability preflight like a line of a file. A name
-	// a field above already emits is refused, so the two cannot disagree.
-	Extra []Directive
+	// Extra carries directives no field above covers, applied after them. A
+	// directive a field covers is refused.
+	Extra []Directive `json:"extra,omitempty"`
 }
 
 // Endpoint is one --remote line.
 type Endpoint struct {
 	// Host is the hostname or address. Required.
-	Host string
-	// Port is this remote's own port. Zero inherits Spec.Port, then 1194.
-	Port int
-	// Proto is this remote's own transport, in OpenVPN's spelling. Empty
-	// inherits Spec.Proto, then UDP.
-	Proto string
+	Host string `json:"host"`
+	// Port is zero for 1194.
+	Port int `json:"port,omitempty"`
+	// Proto is the transport in OpenVPN's spelling; empty means UDP.
+	Proto string `json:"proto,omitempty"`
 }
-
-// Keepalive is the two arguments of the keepalive directive.
-type Keepalive struct{ Interval, Timeout int }
 
 // DNSOptions is the resolver configuration to push through dhcp-option.
 type DNSOptions struct {
 	// Servers are dhcp-option DNS addresses, in preference order.
-	Servers []string
+	Servers []string `json:"servers,omitempty"`
 	// SearchDomains are dhcp-option DOMAIN; RouteDomains are DOMAIN-ROUTE.
-	SearchDomains []string
-	RouteDomains  []string
+	SearchDomains []string `json:"search_domains,omitempty"`
+	RouteDomains  []string `json:"route_domains,omitempty"`
 }
 
 // Build assembles the profile. Every check the parser makes, Build makes,
@@ -183,11 +159,19 @@ func (s Spec) Build() (*Profile, error) {
 	return a.finish("")
 }
 
-// specBlockTags are the inline blocks a Spec renders from its own fields. A
-// caller reaching for one of these through Extra has mistaken a block for a
-// directive, and a directive is not where its body can go.
-var specBlockTags = map[string]struct{}{
-	"ca": {}, "cert": {}, "key": {}, "tls-auth": {}, "tls-crypt": {},
+// specOwned is every directive name a Spec field covers. Extra may not carry
+// one, and Profile.Spec leaves them out of Extra.
+var specOwned = map[string]struct{}{
+	"remote": {}, "port": {}, "proto": {},
+	"ca": {}, "cert": {}, "key": {}, "tls-auth": {}, "tls-crypt": {}, "key-direction": {},
+	"auth-user-pass": {}, "auth-federate": {}, "x-go-openvpn-flow": {}, "x-openlawsvpn-flow": {},
+	"cipher": {}, "auth": {},
+	"remote-cert-tls": {}, "ns-cert-type": {}, "verify-x509-name": {},
+	"comp-lzo": {}, "compress": {}, "allow-compression": {},
+	"tun-mtu": {}, "mssfix": {},
+	"reneg-sec": {}, "reneg-bytes": {}, "hand-window": {}, "become-primary": {},
+	"ping": {}, "ping-restart": {}, "ping-exit": {}, "keepalive": {},
+	"explicit-exit-notify": {}, "remote-random": {}, "remote-random-hostname": {}, "dhcp-option": {},
 }
 
 // specBlock is one inline block a Spec renders.
@@ -208,20 +192,18 @@ func (s Spec) directives() ([]specBlock, []Directive, error) {
 			blocks = append(blocks, b)
 		}
 	}
-	if len(s.TLSAuth) > 0 && len(s.TLSCrypt) > 0 {
-		return nil, nil, fmt.Errorf("profile: spec: tls-auth and tls-crypt are mutually exclusive")
-	}
 	if s.MSSFix > 0 && s.MSSFixOff {
-		return nil, nil, fmt.Errorf("profile: spec: MSSFix and MSSFixOff both set; a profile cannot say both")
+		return nil, nil, fmt.Errorf("profile: spec: MSSFix and MSSFixOff both set")
 	}
 	if s.RenegSec > 0 && s.NoReneg {
-		return nil, nil, fmt.Errorf("profile: spec: RenegSec and NoReneg both set; a profile cannot say both")
+		return nil, nil, fmt.Errorf("profile: spec: RenegSec and NoReneg both set")
 	}
-	if s.PingRestart > 0 && s.PingExit > 0 {
-		return nil, nil, fmt.Errorf("profile: spec: PingRestart and PingExit share a slot; set one")
+	if s.MSSFixMode < MSSFixLink || int(s.MSSFixMode) >= len(mssFixModeNames) {
+		return nil, nil, fmt.Errorf("profile: spec: MSSFixMode %d is not a mode", int(s.MSSFixMode))
 	}
-	if s.ExplicitExitNotify > 0 && s.ExplicitExitNotifyBare {
-		return nil, nil, fmt.Errorf("profile: spec: ExplicitExitNotify and ExplicitExitNotifyBare both set; set one")
+	if s.VerifyX509NameMatch < X509NameSubject || s.VerifyX509NameMatch > X509NameCNPrefix {
+		return nil, nil, fmt.Errorf("profile: spec: VerifyX509NameMatch %d is not a match type",
+			int(s.VerifyX509NameMatch))
 	}
 
 	var ds []Directive
@@ -234,32 +216,21 @@ func (s Spec) directives() ([]specBlock, []Directive, error) {
 		}
 		ds = append(ds, Directive{Name: name, Args: args})
 	}
+	itoa := strconv.Itoa
 
 	for _, r := range s.Remotes {
 		args := []string{r.Host}
-		switch {
-		case r.Proto != "":
-			// The grammar cannot say "inherit the port but pin the proto", so
-			// a remote naming its own transport must name a port too. Resolve
-			// it the way the assembler would.
+		if r.Port != 0 || r.Proto != "" {
 			port := r.Port
-			if port == 0 {
-				port = s.Port
-			}
 			if port == 0 {
 				port = defaultPort
 			}
-			args = append(args, strconv.Itoa(port), r.Proto)
-		case r.Port != 0:
-			args = append(args, strconv.Itoa(r.Port))
+			args = append(args, itoa(port))
+		}
+		if r.Proto != "" {
+			args = append(args, r.Proto)
 		}
 		add("remote", args...)
-	}
-	if s.Port != 0 {
-		add("port", strconv.Itoa(s.Port))
-	}
-	if s.Proto != "" {
-		add("proto", s.Proto)
 	}
 	if s.KeyDirection != KeyDirectionAbsent {
 		add("key-direction", s.KeyDirection.String())
@@ -294,14 +265,12 @@ func (s Spec) directives() ([]specBlock, []Directive, error) {
 		// directives and not this one. strings.Fields does not care and
 		// would weld them into one.
 		if strings.ContainsRune(s.Compression, '\n') {
-			return nil, nil, fmt.Errorf(
-				"profile: spec: Compression %q is more than one line, and a directive is one", s.Compression)
+			return nil, nil, fmt.Errorf("profile: spec: Compression %q is more than one line", s.Compression)
 		}
 		f := strings.Fields(s.Compression)
 		// Whitespace and nothing else names no directive.
 		if len(f) == 0 {
-			return nil, nil, fmt.Errorf(
-				"profile: spec: Compression %q names no directive", s.Compression)
+			return nil, nil, fmt.Errorf("profile: spec: Compression %q names no directive", s.Compression)
 		}
 		// The only field that supplies a directive name as well as its
 		// arguments, so the only one that folds the name the way the line
@@ -312,13 +281,10 @@ func (s Spec) directives() ([]specBlock, []Directive, error) {
 		add("allow-compression", s.AllowCompression)
 	}
 	if s.TunMTU != 0 {
-		add("tun-mtu", strconv.Itoa(s.TunMTU))
+		add("tun-mtu", itoa(s.TunMTU))
 	}
-	switch {
-	case s.MSSFixOff:
-		add("mssfix", "0")
-	case s.MSSFix > 0:
-		args := []string{strconv.Itoa(s.MSSFix)}
+	if s.MSSFixOff || s.MSSFix > 0 {
+		args := []string{itoa(s.MSSFix)}
 		if w := mssFixModeWord(s.MSSFixMode); w != "" {
 			args = append(args, w)
 		}
@@ -328,34 +294,35 @@ func (s Spec) directives() ([]specBlock, []Directive, error) {
 	case s.NoReneg:
 		add("reneg-sec", "0")
 	case s.RenegSec != 0:
-		add("reneg-sec", strconv.Itoa(s.RenegSec))
+		add("reneg-sec", itoa(s.RenegSec))
 	}
 	if s.RenegBytes != 0 {
 		add("reneg-bytes", strconv.FormatInt(s.RenegBytes, 10))
 	}
 	if s.HandWindow != 0 {
-		add("hand-window", strconv.Itoa(s.HandWindow))
+		add("hand-window", itoa(s.HandWindow))
 	}
 	if s.BecomePrimary != 0 {
-		add("become-primary", strconv.Itoa(s.BecomePrimary))
-	}
-	if s.Ping != 0 {
-		add("ping", strconv.Itoa(s.Ping))
-	}
-	if s.PingRestart != 0 {
-		add("ping-restart", strconv.Itoa(s.PingRestart))
-	}
-	if s.PingExit != 0 {
-		add("ping-exit", strconv.Itoa(s.PingExit))
-	}
-	if s.Keepalive.Interval != 0 || s.Keepalive.Timeout != 0 {
-		add("keepalive", strconv.Itoa(s.Keepalive.Interval), strconv.Itoa(s.Keepalive.Timeout))
+		add("become-primary", itoa(s.BecomePrimary))
 	}
 	switch {
-	case s.ExplicitExitNotifyBare:
-		add("explicit-exit-notify")
-	case s.ExplicitExitNotify != 0:
-		add("explicit-exit-notify", strconv.Itoa(s.ExplicitExitNotify))
+	case s.PingExit:
+		if s.Ping != 0 {
+			add("ping", itoa(s.Ping))
+		}
+		add("ping-exit", itoa(s.PingTimeout))
+	case s.Ping > 0 && s.PingTimeout > 0:
+		add("keepalive", itoa(s.Ping), itoa(s.PingTimeout))
+	default:
+		if s.Ping != 0 {
+			add("ping", itoa(s.Ping))
+		}
+		if s.PingTimeout != 0 {
+			add("ping-restart", itoa(s.PingTimeout))
+		}
+	}
+	if s.ExplicitExitNotify != 0 {
+		add("explicit-exit-notify", itoa(s.ExplicitExitNotify))
 	}
 	if s.RemoteRandom {
 		add("remote-random")
@@ -373,21 +340,13 @@ func (s Spec) directives() ([]specBlock, []Directive, error) {
 		add("dhcp-option", "DOMAIN-ROUTE", v)
 	}
 
-	// Extra last, and refused where it would restate a field above.
-	owned := make(map[string]struct{}, len(ds))
-	for _, d := range ds {
-		owned[d.Name] = struct{}{}
-	}
 	for _, d := range s.Extra {
 		name := strings.ToLower(d.Name)
 		if name == "" {
 			return nil, nil, fmt.Errorf("profile: spec: Extra carries a directive with no name")
 		}
-		if _, clash := owned[name]; clash {
-			return nil, nil, fmt.Errorf("profile: spec: Extra restates %q, which a field already sets", name)
-		}
-		if _, block := specBlockTags[name]; block {
-			return nil, nil, fmt.Errorf("profile: spec: %q is an inline block, not a directive", name)
+		if _, owned := specOwned[name]; owned {
+			return nil, nil, fmt.Errorf("profile: spec: Extra carries %q, which a field covers", name)
 		}
 		ds = append(ds, Directive{Name: name, Args: append([]string(nil), d.Args...)})
 	}
@@ -416,18 +375,15 @@ func (s Spec) directives() ([]specBlock, []Directive, error) {
 // that swallows the rest of the file.
 func roundTrips(d Directive) error {
 	if f := strings.Fields(d.Name); len(f) != 1 || f[0] != d.Name {
-		return fmt.Errorf(
-			"profile: spec: directive name %q is not a single whitespace-free word", d.Name)
+		return fmt.Errorf("profile: spec: directive name %q is not a single word", d.Name)
 	}
 	switch d.Name[0] {
 	case '#', ';', '<':
-		return fmt.Errorf(
-			"profile: spec: directive name %q begins a comment or a block in a file, not a directive", d.Name)
+		return fmt.Errorf("profile: spec: directive name %q begins a comment or a block", d.Name)
 	}
 	for _, a := range d.Args {
 		if f := strings.Fields(a); len(f) != 1 || f[0] != a {
-			return fmt.Errorf(
-				"profile: spec: %s: argument %q is not a single whitespace-free word", d.Name, a)
+			return fmt.Errorf("profile: spec: %s: argument %q is not a single word", d.Name, a)
 		}
 	}
 	return nil

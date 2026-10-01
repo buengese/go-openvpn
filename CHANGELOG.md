@@ -8,6 +8,28 @@ and releases follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- `profile.Profile.Spec()`, the inverse of `Spec.Build`: a parsed profile
+  yields a Spec that builds an equivalent profile, so a caller can store one as
+  structured data and connect from it later. It is a field copy; settings at
+  their default stay zero, and directives no field covers travel on
+  `Spec.Extra`. It fails only for a wrap key named in a file, which the parser
+  never reads.
+
+- `profile.Spec.Render()` writes a Spec as .ovpn text that parses to the
+  profile `Build` returns; `p.Spec()` then `Render()` writes out a parsed
+  profile, with file-referenced material inlined. `profile.StaticKey.Encode()`
+  renders a static key as the block `openvpn --genkey` writes. The output is
+  key material.
+
+- `Profile.AuthUserPass`, `Profile.RemoteCertTLSServer` and
+  `Profile.NSCertTypeServer`, set by the parser. `RequiresCredentials` and the
+  certificate verifier read them instead of scanning `Profile.Directives`.
+
+- `profile.Spec` carries json tags, and `KeyDirection`, `X509NameMatch` and
+  `MSSFixMode` serialise as their names through `MarshalText` and
+  `UnmarshalText`; an unknown name is refused. `ParseMSSFixMode` is added. A
+  stored Spec holds the client private key and both wrap keys verbatim.
+
 - A username and password can now be supplied through a front door that could
   not take one. The library has driven `auth-user-pass` profiles since
   `CredentialsFn` was added, and the CLI since `-auth-user-pass`, but the
@@ -70,6 +92,9 @@ and releases follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   assembler, so there is no value it can produce that `ParseString` could not,
   and no second set of rules to keep in step. It refuses what a file could not
   have said, such as an argument with a space in it.
+  A Spec has one field per setting: port and transport live on each
+  `Endpoint`, and the liveness timers are `Ping`, `PingTimeout` and `PingExit`
+  whichever directives a file would use for them.
 - `Profile.TLSAuth`, `Profile.TLSCrypt` and `Profile.KeyDirection`: the inline
   `<tls-auth>` and `<tls-crypt>` bodies are now parsed as 2048-bit static keys.
   An absent `key-direction` is a distinct value from 0, because OpenVPN treats
@@ -228,6 +253,12 @@ and releases follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   what it asks for. `fragment 0` is `ignored`: it asks for no fragmentation.
   A non-zero `fragment` stays `fatal`, since the peer would frame every data
   packet with a 4-byte header this client cannot strip.
+
+- `MSSFixMode.String()` returns `mssfix-mode(N)` for an out-of-range value
+  instead of `"link"`.
+
+- `json.Marshal` of a `profile.Profile` writes `KeyDirection`, `MSSFixMode`
+  and `VerifyX509NameMatch` as names rather than integers.
 
 - The `go` directive is `1.25.5` rather than `1.25.9`: `1.25.5` is the real
   floor, declared by `gvisor.dev/gvisor`, and a dependency's directive raises

@@ -48,48 +48,6 @@ func RootCAs(p *profile.Profile) (*x509.CertPool, error) {
 	return pool, nil
 }
 
-// requiresRemoteCertTLSServer reports whether the profile carries
-// "remote-cert-tls server".
-//
-// The directive is shorthand for two checks, not one: options.c:9159-9170 sets
-// remote_cert_eku to "TLS Web Server Authentication" *and* remote_cert_ku[0]
-// to OPENVPN_KU_REQUIRED (openvpn-2.6.22 src/openvpn/options.c:9159-9170;
-// 2.4.12 options.c:7999-8005 is identical). Both are enforced in Verify.
-//
-// The directive has no typed field on Profile, so it is read from the record
-// the parser keeps of every line it saw.
-func requiresRemoteCertTLSServer(p *profile.Profile) bool {
-	return hasDirectiveArg(p, "remote-cert-tls", "server")
-}
-
-// requiresNSCertTypeServer reports whether the profile asks for the server
-// certificate to be usable as an SSL server. The legacy "ns-cert-type server"
-// directive is named for the Netscape extension rather than for the check the
-// reference now performs; see usableAsTLSServer.
-//
-// Only the "server" form is honoured. OpenVPN also accepts "ns-cert-type
-// client", which in a client profile would demand the SSL-client bit of the
-// *server's* certificate — a check no server deployment sets out to satisfy.
-//
-// Like remote-cert-tls, the directive has no typed field on Profile and is
-// read from the record the parser keeps of every line it saw.
-func requiresNSCertTypeServer(p *profile.Profile) bool {
-	return hasDirectiveArg(p, "ns-cert-type", "server")
-}
-
-// hasDirectiveArg reports whether the profile carries the named directive with
-// the given first argument, compared case-insensitively.
-//
-// Both callers ask the same question of Profile.Directives.
-func hasDirectiveArg(p *profile.Profile, name, arg string) bool {
-	for _, d := range p.Directives {
-		if d.Name == name && len(d.Args) > 0 && strings.EqualFold(d.Args[0], arg) {
-			return true
-		}
-	}
-	return false
-}
-
 // Verifier performs the verification OpenVPN performs, in place of
 // the verification crypto/tls performs.
 //
@@ -553,10 +511,10 @@ func BuildConfig(p *profile.Profile) (*tls.Config, *Verifier, error) {
 	}
 	verifier := &Verifier{
 		roots:                roots,
-		requireRemoteCertTLS: requiresRemoteCertTLSServer(p),
+		requireRemoteCertTLS: p.RemoteCertTLSServer,
 		verifyName:           p.VerifyX509Name,
 		verifyNameMatch:      p.VerifyX509NameMatch,
-		requireNSCertType:    requiresNSCertTypeServer(p),
+		requireNSCertType:    p.NSCertTypeServer,
 	}
 
 	cfg := &tls.Config{

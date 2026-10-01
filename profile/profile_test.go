@@ -605,16 +605,6 @@ func TestAuthFlowPrefersCredentialsOverACertificate(t *testing.T) {
 	}
 }
 
-// TestRequiresCredentialsIgnoresAnAssembledProfile records that the question
-// is answered from the recorded directives. A profile built field by field
-// rather than parsed has none, so nothing in it has asked for credentials.
-func TestRequiresCredentialsIgnoresAnAssembledProfile(t *testing.T) {
-	p := &profile.Profile{Remote: "vpn.example.test", Port: 443}
-	if p.RequiresCredentials() {
-		t.Error("an assembled profile claims to require credentials")
-	}
-}
-
 // tlsAuthProfile exercises the generic inline-block path. The body is a full
 // 256-byte key, which the parser loads; a shorter one is a diag.ClassConfig
 // parse failure rather than something silently ignored. The block opens on

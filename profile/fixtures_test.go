@@ -14,6 +14,7 @@ import (
 	"bytes"
 	"crypto/x509"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -441,4 +442,60 @@ func requireSome(t *testing.T, counts map[string]int) {
 			t.Errorf("no fixture produced any %s; this test asserts nothing", what)
 		}
 	}
+}
+
+// profileDiff reports the fields two profiles disagree on, or "" if none.
+// Directives, InlineBlocks and FileRefs record source text and are skipped.
+func profileDiff(a, b *profile.Profile) string {
+	excluded := map[string]bool{"Directives": true, "InlineBlocks": true, "FileRefs": true}
+
+	va, vb := reflect.ValueOf(*a), reflect.ValueOf(*b)
+	var d []string
+	for i := range va.NumField() {
+		f := va.Type().Field(i)
+		if !f.IsExported() || excluded[f.Name] {
+			continue
+		}
+		x, y := va.Field(i).Interface(), vb.Field(i).Interface()
+
+		// Spec does not keep ProtoSet.
+		if ra, ok := x.([]profile.Remote); ok {
+			x, y = clearProtoSet(ra), clearProtoSet(y.([]profile.Remote))
+		}
+
+		// Spec cannot tell a nil byte slice from an empty one.
+		if ba, ok := x.([]byte); ok {
+			bb, _ := y.([]byte)
+			if len(ba) == 0 && len(bb) == 0 {
+				continue
+			}
+		}
+
+		// Compare *StaticKey by value.
+		if ka, ok := x.(*profile.StaticKey); ok {
+			kb, _ := y.(*profile.StaticKey)
+			switch {
+			case ka == nil && kb == nil:
+			case ka == nil || kb == nil:
+				d = append(d, "  "+f.Name+": presence differs")
+			case *ka != *kb:
+				d = append(d, "  "+f.Name+": key bytes differ")
+			}
+			continue
+		}
+
+		if !reflect.DeepEqual(x, y) {
+			d = append(d, fmt.Sprintf("  %s: %v -> %v", f.Name, x, y))
+		}
+	}
+	return strings.Join(d, "\n")
+}
+
+func clearProtoSet(rs []profile.Remote) []profile.Remote {
+	out := make([]profile.Remote, len(rs))
+	for i, r := range rs {
+		r.ProtoSet = false
+		out[i] = r
+	}
+	return out
 }

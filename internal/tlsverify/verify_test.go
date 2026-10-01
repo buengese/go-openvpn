@@ -23,10 +23,8 @@ import (
 // verifierFor builds the verifier a profile would install.
 func verifierFor(t *testing.T, p *testCA, remoteCertTLS bool) *Verifier {
 	t.Helper()
-	prof := &profile.Profile{Remote: "vpn.example.com", Port: 1194, CA: p.caPEM}
-	if remoteCertTLS {
-		prof.Directives = []profile.Directive{{Name: "remote-cert-tls", Args: []string{"server"}, Line: 1}}
-	}
+	prof := &profile.Profile{Remote: "vpn.example.com", Port: 1194, CA: p.caPEM,
+		RemoteCertTLSServer: remoteCertTLS}
 	return verifierForProfile(t, prof)
 }
 
@@ -414,12 +412,8 @@ func TestNSCertTypeServer(t *testing.T) {
 				KeyUsage:        tc.ku,
 				ExtraExtensions: tc.ext,
 			})
-			prof := &profile.Profile{Remote: "vpn.example.com", Port: 1194, CA: pki.caPEM}
-			if tc.nsCertType {
-				prof.Directives = []profile.Directive{
-					{Name: "ns-cert-type", Args: []string{"server"}, Line: 1},
-				}
-			}
+			prof := &profile.Profile{Remote: "vpn.example.com", Port: 1194, CA: pki.caPEM,
+				NSCertTypeServer: tc.nsCertType}
 			v := verifierForProfile(t, prof)
 			err := v.Verify(chain, nil)
 			if tc.wantOK && err != nil {
@@ -500,12 +494,12 @@ func TestNSCertTypeOnlyHonoursTheServerForm(t *testing.T) {
 		Subject:     pkix.Name{CommonName: "matrix-server"},
 		ExtKeyUsage: []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
 	})
-	v := verifierForProfile(t, &profile.Profile{
-		Remote: "vpn.example.com", Port: 1194, CA: pki.caPEM,
-		Directives: []profile.Directive{
-			{Name: "ns-cert-type", Args: []string{"client"}, Line: 1},
-		},
-	})
+	prof, err := profile.ParseString("remote vpn.example.com 1194\nns-cert-type client\n<ca>\n" +
+		string(pki.caPEM) + "</ca>\n")
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	v := verifierForProfile(t, prof)
 	if err := v.Verify(chain, nil); err != nil {
 		t.Errorf("the client form is not checked, so it must not refuse: %v", err)
 	}

@@ -29,6 +29,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 
 	"github.com/buengese/go-openvpn/internal/compress"
@@ -42,12 +43,13 @@ import (
 // connection path reads it.
 type Directive struct {
 	// Name is the directive keyword, lowercased.
-	Name string
-	// Args are the whitespace-separated arguments after the keyword.
-	// It is nil for a bare directive such as "nobind".
-	Args []string
-	// Line is the 1-based line number the directive appeared on.
-	Line int
+	Name string `json:"name"`
+	// Args are the whitespace-separated arguments after the keyword, nil for
+	// a bare directive.
+	Args []string `json:"args,omitempty"`
+	// Line is the 1-based line number, zero when the directive has no source
+	// line.
+	Line int `json:"line,omitempty"`
 }
 
 // String renders the directive back into its source form, keyword first.
@@ -170,6 +172,28 @@ func (m X509NameMatch) String() string {
 	}
 }
 
+// MarshalText implements encoding.TextMarshaler. An out-of-range value
+// marshals as "unknown", which UnmarshalText refuses.
+func (m X509NameMatch) MarshalText() ([]byte, error) {
+	return []byte(m.String()), nil
+}
+
+// UnmarshalText implements encoding.TextUnmarshaler. An unrecognised name is
+// an error.
+func (m *X509NameMatch) UnmarshalText(text []byte) error {
+	switch name := string(text); name {
+	case "subject":
+		*m = X509NameSubject
+	case "name":
+		*m = X509NameCN
+	case "name-prefix":
+		*m = X509NameCNPrefix
+	default:
+		return fmt.Errorf("profile: unknown verify-x509-name match type %q", name)
+	}
+	return nil
+}
+
 // ParseX509NameMatch normalises the optional second argument of
 // --verify-x509-name. The empty string is the default, which is "subject".
 //
@@ -215,6 +239,9 @@ type Remote struct {
 }
 
 // Profile holds the parsed contents of an .ovpn file.
+//
+// It holds key material. TLSAuth and TLSCrypt redact under %v and
+// json.Marshal; CA, Cert and Key do not.
 type Profile struct {
 	// Remote is the VPN server hostname or IP.
 	Remote string
@@ -397,6 +424,13 @@ type Profile struct {
 	// line that omits it.
 	VerifyX509NameMatch X509NameMatch
 
+	// AuthUserPass reports that the profile carried auth-user-pass.
+	AuthUserPass bool
+	// RemoteCertTLSServer and NSCertTypeServer report "remote-cert-tls server"
+	// and "ns-cert-type server".
+	RemoteCertTLSServer bool
+	NSCertTypeServer    bool
+
 	// Federated is set when the profile contains 'auth-federate' or
 	// 'x-go-openvpn-flow saml' (or its former spelling
 	// 'x-openlawsvpn-flow saml'): the profile authenticates against an identity
@@ -473,12 +507,7 @@ func (f AuthFlow) String() string {
 // than parsed reports false — it carries no directives, and so nothing in it
 // has asked for credentials.
 func (p *Profile) RequiresCredentials() bool {
-	for _, d := range p.Directives {
-		if d.Name == "auth-user-pass" {
-			return true
-		}
-	}
-	return false
+	return p.AuthUserPass
 }
 
 // AuthFlow reports which authentication mechanism the profile asks for. It
@@ -659,14 +688,51 @@ const (
 	MSSFixFixed
 )
 
-// String names the mode as the directive spells it.
+// mssFixModeNames maps each MSSFixMode to its name.
+var mssFixModeNames = [...]string{
+	MSSFixLink:  "link",
+	MSSFixEncap: "mtu",
+	MSSFixFixed: "fixed",
+}
+
+// String names the mode, or returns "mssfix-mode(N)" out of range.
 func (m MSSFixMode) String() string {
-	switch m {
-	case MSSFixEncap:
-		return "mtu"
-	case MSSFixFixed:
-		return "fixed"
-	default:
-		return "link"
+	if m < 0 || int(m) >= len(mssFixModeNames) {
+		return "mssfix-mode(" + strconv.Itoa(int(m)) + ")"
 	}
+	return mssFixModeNames[m]
+}
+
+// ParseMSSFixMode parses a mode name; the empty string is MSSFixLink. An
+// unrecognised word is refused.
+func ParseMSSFixMode(s string) (MSSFixMode, bool) {
+	switch strings.ToLower(strings.TrimSpace(s)) {
+	case "", "link":
+		return MSSFixLink, true
+	case "mtu":
+		return MSSFixEncap, true
+	case "fixed":
+		return MSSFixFixed, true
+	default:
+		return 0, false
+	}
+}
+
+// MarshalText implements encoding.TextMarshaler. An out-of-range value
+// marshals as its String placeholder, which UnmarshalText refuses.
+func (m MSSFixMode) MarshalText() ([]byte, error) {
+	return []byte(m.String()), nil
+}
+
+// UnmarshalText implements encoding.TextUnmarshaler. An unrecognised name is
+// an error.
+func (m *MSSFixMode) UnmarshalText(text []byte) error {
+	name := string(text)
+	for i, n := range mssFixModeNames {
+		if n == name {
+			*m = MSSFixMode(i)
+			return nil
+		}
+	}
+	return fmt.Errorf("profile: unknown mssfix mode %q", name)
 }

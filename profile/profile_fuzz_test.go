@@ -40,9 +40,46 @@ func FuzzParseString(f *testing.F) {
 	// dropping the block, so the failure path needs seeding too.
 	f.Add("remote vpn.example.com 1194\n<tls-crypt>\n" +
 		staticKeyHex(testKeyFill)[:511] + "\n</tls-crypt>\n")
+	// Two directives writing one slot.
+	f.Add("remote vpn.example.com 1194\nping-restart 30\nping-exit 60\n")
+	f.Add("remote vpn.example.com 1194\nping-exit 0\nping-restart 30\n")
+	f.Add("remote vpn.example.com 1194\nkeepalive 10 60\nping-exit 30\n")
+	f.Add("remote vpn.example.com 1194\ncomp-lzo\ncompress lz4\n")
+	f.Add("remote vpn.example.com 1194\ncompress stub-v2\ncomp-lzo no\n")
+	f.Add("remote vpn.example.com 1194\nmssfix 0 mtu\nmssfix 1400\n")
+	f.Add("remote vpn.example.com 1194\ndhcp-option DNS\ndhcp-option DNS 10.0.0.1\n")
 
 	f.Fuzz(func(t *testing.T, s string) {
-		_, _ = profile.ParseString(s)
+		p, err := profile.ParseString(s)
+		if err != nil {
+			return
+		}
+
+		spec, err := p.Spec()
+		if err != nil {
+			if strings.Contains(err.Error(), "names a key file") {
+				return
+			}
+			t.Fatalf("Spec() refused a parsed profile: %v", err)
+		}
+		rebuilt, err := spec.Build()
+		if err != nil {
+			t.Fatalf("a Spec taken from a parsed profile did not build: %v\nspec: %+v", err, spec)
+		}
+		if diff := profileDiff(p, rebuilt); diff != "" {
+			t.Fatalf("Spec round-trip changed the profile:\n%s\nspec: %+v", diff, spec)
+		}
+		out, err := spec.Render()
+		if err != nil {
+			t.Fatalf("Render refused a Spec that builds: %v", err)
+		}
+		again, err := profile.ParseString(out)
+		if err != nil {
+			t.Fatalf("a rendered profile did not parse: %v\nrendered:\n%s", err, out)
+		}
+		if diff := profileDiff(p, again); diff != "" {
+			t.Fatalf("render round-trip changed the profile:\n%s\nrendered:\n%s", diff, out)
+		}
 	})
 }
 

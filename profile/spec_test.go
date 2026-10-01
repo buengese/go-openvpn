@@ -1,6 +1,8 @@
 package profile_test
 
 import (
+	"encoding"
+	"encoding/json"
 	"fmt"
 	"reflect"
 	"strings"
@@ -14,154 +16,11 @@ import (
 // Build and the parser agree on this text, they agree on the rules.
 func render(t *testing.T, s profile.Spec) string {
 	t.Helper()
-	var b strings.Builder
-	block := func(tag string, body []byte) {
-		if len(body) > 0 {
-			fmt.Fprintf(&b, "<%s>\n%s</%s>\n", tag, ensureNL(string(body)), tag)
-		}
+	out, err := s.Render()
+	if err != nil {
+		t.Fatalf("Render: %v", err)
 	}
-	block("ca", s.CA)
-	block("cert", s.Cert)
-	block("key", s.Key)
-	block("tls-auth", s.TLSAuth)
-	block("tls-crypt", s.TLSCrypt)
-
-	for _, r := range s.Remotes {
-		switch {
-		case r.Proto != "":
-			port := r.Port
-			if port == 0 {
-				port = s.Port
-			}
-			if port == 0 {
-				port = 1194
-			}
-			fmt.Fprintf(&b, "remote %s %d %s\n", r.Host, port, r.Proto)
-		case r.Port != 0:
-			fmt.Fprintf(&b, "remote %s %d\n", r.Host, r.Port)
-		default:
-			fmt.Fprintf(&b, "remote %s\n", r.Host)
-		}
-	}
-	line := func(f string, a ...any) { fmt.Fprintf(&b, f+"\n", a...) }
-	if s.Port != 0 {
-		line("port %d", s.Port)
-	}
-	if s.Proto != "" {
-		line("proto %s", s.Proto)
-	}
-	if s.KeyDirection != profile.KeyDirectionAbsent {
-		line("key-direction %s", s.KeyDirection)
-	}
-	if s.AuthUserPass {
-		line("auth-user-pass")
-	}
-	if s.AuthFederate {
-		line("auth-federate")
-	}
-	if s.Cipher != "" {
-		line("cipher %s", s.Cipher)
-	}
-	if s.Auth != "" {
-		line("auth %s", s.Auth)
-	}
-	if s.RemoteCertTLSServer {
-		line("remote-cert-tls server")
-	}
-	if s.NSCertTypeServer {
-		line("ns-cert-type server")
-	}
-	if s.VerifyX509Name != "" {
-		switch s.VerifyX509NameMatch {
-		case profile.X509NameCN:
-			line("verify-x509-name %s name", s.VerifyX509Name)
-		case profile.X509NameCNPrefix:
-			line("verify-x509-name %s name-prefix", s.VerifyX509Name)
-		default:
-			line("verify-x509-name %s", s.VerifyX509Name)
-		}
-	}
-	if s.Compression != "" {
-		line("%s", s.Compression)
-	}
-	if s.AllowCompression != "" {
-		line("allow-compression %s", s.AllowCompression)
-	}
-	if s.TunMTU != 0 {
-		line("tun-mtu %d", s.TunMTU)
-	}
-	switch {
-	case s.MSSFixOff:
-		line("mssfix 0")
-	case s.MSSFix > 0:
-		switch s.MSSFixMode {
-		case profile.MSSFixEncap:
-			line("mssfix %d mtu", s.MSSFix)
-		case profile.MSSFixFixed:
-			line("mssfix %d fixed", s.MSSFix)
-		default:
-			line("mssfix %d", s.MSSFix)
-		}
-	}
-	switch {
-	case s.NoReneg:
-		line("reneg-sec 0")
-	case s.RenegSec != 0:
-		line("reneg-sec %d", s.RenegSec)
-	}
-	if s.RenegBytes != 0 {
-		line("reneg-bytes %d", s.RenegBytes)
-	}
-	if s.HandWindow != 0 {
-		line("hand-window %d", s.HandWindow)
-	}
-	if s.BecomePrimary != 0 {
-		line("become-primary %d", s.BecomePrimary)
-	}
-	if s.Ping != 0 {
-		line("ping %d", s.Ping)
-	}
-	if s.PingRestart != 0 {
-		line("ping-restart %d", s.PingRestart)
-	}
-	if s.PingExit != 0 {
-		line("ping-exit %d", s.PingExit)
-	}
-	if s.Keepalive.Interval != 0 || s.Keepalive.Timeout != 0 {
-		line("keepalive %d %d", s.Keepalive.Interval, s.Keepalive.Timeout)
-	}
-	switch {
-	case s.ExplicitExitNotifyBare:
-		line("explicit-exit-notify")
-	case s.ExplicitExitNotify != 0:
-		line("explicit-exit-notify %d", s.ExplicitExitNotify)
-	}
-	if s.RemoteRandom {
-		line("remote-random")
-	}
-	if s.RemoteRandomHostname {
-		line("remote-random-hostname")
-	}
-	for _, v := range s.DNS.Servers {
-		line("dhcp-option DNS %s", v)
-	}
-	for _, v := range s.DNS.SearchDomains {
-		line("dhcp-option DOMAIN %s", v)
-	}
-	for _, v := range s.DNS.RouteDomains {
-		line("dhcp-option DOMAIN-ROUTE %s", v)
-	}
-	for _, d := range s.Extra {
-		line("%s", strings.TrimSpace(d.Name+" "+strings.Join(d.Args, " ")))
-	}
-	return b.String()
-}
-
-func ensureNL(s string) string {
-	if strings.HasSuffix(s, "\n") {
-		return s
-	}
-	return s + "\n"
+	return out
 }
 
 // stripLines clears Line on every recorded directive and block. Build numbers
@@ -220,21 +79,28 @@ func TestBuildEqualsParse(t *testing.T) {
 			KeyDirection: profile.KeyDirection1,
 			Auth:         "SHA1",
 		},
-		"several remotes inheriting port and proto": {
+		"several remotes": {
 			Remotes: []profile.Endpoint{
 				{Host: "a.example.test"},
 				{Host: "b.example.test", Port: 8443},
-				{Host: "c.example.test", Port: 9443, Proto: "tcp"},
+				{Host: "c.example.test", Proto: "tcp"},
 			},
-			Port:         443,
-			Proto:        "udp",
 			RemoteRandom: true,
 		},
-		"timers, with keepalive outranking ping": {
+		"timers": {
 			Remotes:     []profile.Endpoint{{Host: "vpn.example.test"}},
-			Ping:        5,
-			PingRestart: 30,
-			Keepalive:   profile.Keepalive{Interval: 10, Timeout: 60},
+			Ping:        10,
+			PingTimeout: 60,
+		},
+		"timers ending the session": {
+			Remotes:     []profile.Endpoint{{Host: "vpn.example.test"}},
+			Ping:        10,
+			PingTimeout: 60,
+			PingExit:    true,
+		},
+		"a timeout alone": {
+			Remotes:     []profile.Endpoint{{Host: "vpn.example.test"}},
+			PingTimeout: 60,
 		},
 		"the tri-state opt-outs": {
 			Remotes:   []profile.Endpoint{{Host: "vpn.example.test"}},
@@ -257,6 +123,11 @@ func TestBuildEqualsParse(t *testing.T) {
 				RouteDomains:  []string{"internal.example.test"},
 			},
 		},
+		"x509 name prefix": {
+			Remotes:             []profile.Endpoint{{Host: "vpn.example.test"}},
+			VerifyX509Name:      "server-",
+			VerifyX509NameMatch: profile.X509NameCNPrefix,
+		},
 		// A file's directive names are case-folded by the parser, and
 		// Compression is the only Spec field that carries one: unfolded, this
 		// spec and the identical file put different bytes on the wire.
@@ -265,18 +136,17 @@ func TestBuildEqualsParse(t *testing.T) {
 			Compression: "COMP-LZO",
 		},
 		"everything else": {
-			Remotes:                []profile.Endpoint{{Host: "vpn.example.test"}},
-			AuthFederate:           true,
-			NSCertTypeServer:       true,
-			AllowCompression:       "no",
-			RenegSec:               1800,
-			RenegBytes:             1 << 20,
-			HandWindow:             90,
-			BecomePrimary:          45,
-			PingExit:               20,
-			ExplicitExitNotifyBare: true,
-			RemoteRandomHostname:   true,
-			Extra:                  []profile.Directive{{Name: "tls-version-min", Args: []string{"1.2"}}},
+			Remotes:              []profile.Endpoint{{Host: "vpn.example.test"}},
+			AuthFederate:         true,
+			NSCertTypeServer:     true,
+			AllowCompression:     "no",
+			RenegSec:             1800,
+			RenegBytes:           1 << 20,
+			HandWindow:           90,
+			BecomePrimary:        45,
+			ExplicitExitNotify:   1,
+			RemoteRandomHostname: true,
+			Extra:                []profile.Directive{{Name: "tls-version-min", Args: []string{"1.2"}}},
 		},
 	}
 
@@ -308,18 +178,15 @@ func TestBuildRefusesWhatAFileCouldNotSay(t *testing.T) {
 		return profile.Spec{Remotes: []profile.Endpoint{{Host: "vpn.example.test"}}}
 	}
 	for name, mutate := range map[string]func(*profile.Spec){
-		"no remote":                  func(s *profile.Spec) { s.Remotes = nil },
-		"both wrap keys":             func(s *profile.Spec) { s.TLSAuth, s.TLSCrypt = []byte(testStaticKey), []byte(testStaticKey) },
-		"mssfix set and off":         func(s *profile.Spec) { s.MSSFix, s.MSSFixOff = 1400, true },
-		"reneg set and disabled":     func(s *profile.Spec) { s.RenegSec, s.NoReneg = 1800, true },
-		"ping-restart and ping-exit": func(s *profile.Spec) { s.PingRestart, s.PingExit = 30, 30 },
-		"extra restates a field": func(s *profile.Spec) {
-			s.Cipher = "AES-256-GCM"
-			s.Extra = []profile.Directive{{Name: "cipher", Args: []string{"AES-128-GCM"}}}
+		"no remote":              func(s *profile.Spec) { s.Remotes = nil },
+		"mssfix set and off":     func(s *profile.Spec) { s.MSSFix, s.MSSFixOff = 1400, true },
+		"reneg set and disabled": func(s *profile.Spec) { s.RenegSec, s.NoReneg = 1800, true },
+		"extra carries a field's directive": func(s *profile.Spec) {
+			s.Extra = []profile.Directive{{Name: "ping-restart", Args: []string{"60"}}}
 		},
 		"extra names a block":      func(s *profile.Spec) { s.Extra = []profile.Directive{{Name: "ca", Args: []string{"x"}}} },
 		"argument with whitespace": func(s *profile.Spec) { s.Extra = []profile.Directive{{Name: "setenv", Args: []string{"a b"}}} },
-		"unparseable proto":        func(s *profile.Spec) { s.Proto = "tcp-server" },
+		"unparseable proto":        func(s *profile.Spec) { s.Remotes[0].Proto = "tcp-server" },
 		"unusable static key":      func(s *profile.Spec) { s.TLSAuth = []byte("not a key") },
 		// Compression is the one field that hands over a directive name, so
 		// it is the one that can be handed a string naming no directive at
@@ -397,9 +264,7 @@ func FuzzBuildEqualsParse(f *testing.F) {
 			RemoteCertTLSServer: certtls,
 			Compression:         compression,
 		}
-		if keepalive > 0 {
-			s.Keepalive = profile.Keepalive{Interval: keepalive, Timeout: keepalive * 6}
-		}
+		s.PingTimeout = keepalive
 		// An empty name with an argument is generated on purpose: it is the
 		// one Extra shape Build refuses outright, and refusing it is what
 		// keeps a nameless directive out of the rendered file.
@@ -414,7 +279,10 @@ func FuzzBuildEqualsParse(f *testing.F) {
 		if err != nil {
 			return // stricter than a file is allowed; wrong is not
 		}
-		text := render(t, s)
+		text, err := s.Render()
+		if err != nil {
+			t.Fatalf("Build accepted a spec Render refuses: %v", err)
+		}
 		parsed, perr := profile.ParseString(text)
 		if perr != nil {
 			t.Fatalf("Build accepted a spec the parser refuses: %v\n%s", perr, text)
@@ -450,4 +318,139 @@ func ExampleSpec_Build() {
 	// cipher    AES-256-GCM, auth SHA1 (explicit: false)
 	// reneg-sec 3600
 	// needs credentials: true
+}
+
+// TestSpecJSONRoundTrip pins that a Spec survives JSON, enums included.
+func TestSpecJSONRoundTrip(t *testing.T) {
+	want := profile.Spec{
+		Remotes:             []profile.Endpoint{{Host: "a.test", Port: 443, Proto: "tcp"}, {Host: "b.test"}},
+		CA:                  []byte(testCA),
+		Cert:                []byte(testCA),
+		Key:                 []byte("-----BEGIN PRIVATE KEY-----\nZmFrZQ==\n-----END PRIVATE KEY-----\n"),
+		KeyDirection:        profile.KeyDirection1,
+		Cipher:              "AES-128-CBC",
+		Auth:                "SHA256",
+		VerifyX509Name:      "vpn.example.test",
+		VerifyX509NameMatch: profile.X509NameCNPrefix,
+		Compression:         "comp-lzo no",
+		MSSFix:              1400,
+		MSSFixMode:          profile.MSSFixFixed,
+		Ping:                10,
+		PingTimeout:         60,
+		DNS:                 profile.DNSOptions{Servers: []string{"10.0.0.1"}, SearchDomains: []string{"corp.test"}},
+		Extra:               []profile.Directive{{Name: "verb", Args: []string{"4"}}},
+	}
+
+	doc, err := json.Marshal(want)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	var got profile.Spec
+	if err := json.Unmarshal(doc, &got); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("round-trip differs\n got %+v\nwant %+v", got, want)
+	}
+
+	// Keys are directive spellings; an absent directive is an absent key.
+	for _, key := range []string{
+		`"key_direction":"1"`, `"verify_x509_name_match":"name-prefix"`, `"mssfix_mode":"fixed"`,
+	} {
+		if !strings.Contains(string(doc), key) {
+			t.Errorf("document is missing %s:\n%s", key, doc)
+		}
+	}
+	for _, absent := range []string{"tun_mtu", "no_reneg", "auth_federate", "remote_random"} {
+		if strings.Contains(string(doc), `"`+absent+`"`) {
+			t.Errorf("document carries %q, which was never set:\n%s", absent, doc)
+		}
+	}
+}
+
+// TestSpecEnumTextForms pins the enums' serialised names; changing one is a
+// data migration.
+func TestSpecEnumTextForms(t *testing.T) {
+	cases := []struct {
+		v    encoding.TextMarshaler
+		want string
+	}{
+		{profile.KeyDirectionAbsent, "absent"},
+		{profile.KeyDirection0, "0"},
+		{profile.KeyDirection1, "1"},
+		{profile.X509NameSubject, "subject"},
+		{profile.X509NameCN, "name"},
+		{profile.X509NameCNPrefix, "name-prefix"},
+		{profile.MSSFixLink, "link"},
+		{profile.MSSFixEncap, "mtu"},
+		{profile.MSSFixFixed, "fixed"},
+	}
+	for _, tc := range cases {
+		b, err := tc.v.MarshalText()
+		if err != nil {
+			t.Errorf("%T(%v).MarshalText: %v", tc.v, tc.v, err)
+			continue
+		}
+		if string(b) != tc.want {
+			t.Errorf("%T(%v) marshals as %q, want %q", tc.v, tc.v, b, tc.want)
+		}
+	}
+}
+
+// TestSpecEnumsRefuseUnknownText pins that unknown names are refused and
+// out-of-range values marshal to a placeholder that is refused in turn.
+func TestSpecEnumsRefuseUnknownText(t *testing.T) {
+	var kd profile.KeyDirection
+	var x5 profile.X509NameMatch
+	var mf profile.MSSFixMode
+
+	for _, name := range []string{"nonesuch", "", "2", "LINK"} {
+		if err := kd.UnmarshalText([]byte(name)); err == nil {
+			t.Errorf("KeyDirection accepted %q", name)
+		}
+		if err := x5.UnmarshalText([]byte(name)); err == nil {
+			t.Errorf("X509NameMatch accepted %q", name)
+		}
+		if err := mf.UnmarshalText([]byte(name)); err == nil {
+			t.Errorf("MSSFixMode accepted %q", name)
+		}
+	}
+
+	outOfRange := []struct {
+		name string
+		text func() ([]byte, error)
+		back func([]byte) error
+	}{
+		{"KeyDirection", profile.KeyDirection(99).MarshalText, func(b []byte) error {
+			var v profile.KeyDirection
+			return v.UnmarshalText(b)
+		}},
+		{"X509NameMatch", profile.X509NameMatch(99).MarshalText, func(b []byte) error {
+			var v profile.X509NameMatch
+			return v.UnmarshalText(b)
+		}},
+		{"MSSFixMode", profile.MSSFixMode(99).MarshalText, func(b []byte) error {
+			var v profile.MSSFixMode
+			return v.UnmarshalText(b)
+		}},
+	}
+	for _, tc := range outOfRange {
+		b, err := tc.text()
+		if err != nil {
+			t.Errorf("%s(99).MarshalText returned an error: %v", tc.name, err)
+			continue
+		}
+		if err := tc.back(b); err == nil {
+			t.Errorf("%s(99) marshalled as %q and was accepted back; an out-of-range "+
+				"value must not become a valid one", tc.name, b)
+		}
+	}
+
+	// The real defaults must still be accepted, or the guard has gone too far.
+	if err := mf.UnmarshalText([]byte("link")); err != nil || mf != profile.MSSFixLink {
+		t.Errorf(`MSSFixMode "link" = %v, err %v; want MSSFixLink`, mf, err)
+	}
+	if err := kd.UnmarshalText([]byte("absent")); err != nil || kd != profile.KeyDirectionAbsent {
+		t.Errorf(`KeyDirection "absent" = %v, err %v; want KeyDirectionAbsent`, kd, err)
+	}
 }

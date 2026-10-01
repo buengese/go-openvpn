@@ -54,6 +54,23 @@ func (k StaticKey) MarshalJSON() ([]byte, error) {
 	return []byte(strconv.Quote(redactedStaticKey)), nil
 }
 
+// Encode renders the key as the block "openvpn --genkey" writes, which
+// ParseStaticKey reads back to the same bytes. The result is key material.
+func (k StaticKey) Encode() []byte {
+	const perLine = 16 // bytes per line: 32 hex digits
+	var b strings.Builder
+	b.Grow(len(staticKeyHeader) + len(staticKeyFooter) + 2 + 2*StaticKeySize + StaticKeySize/perLine)
+	b.WriteString(staticKeyHeader)
+	b.WriteByte('\n')
+	for i := 0; i < StaticKeySize; i += perLine {
+		b.WriteString(hex.EncodeToString(k[i : i+perLine]))
+		b.WriteByte('\n')
+	}
+	b.WriteString(staticKeyFooter)
+	b.WriteByte('\n')
+	return []byte(b.String())
+}
+
 // ParseStaticKey parses the body of an OpenVPN static key: the contents of a
 // <tls-auth> or <tls-crypt> block, or of the file such a block was inlined
 // from.
@@ -187,4 +204,23 @@ func ParseKeyDirection(s string) (KeyDirection, error) {
 	default:
 		return KeyDirectionAbsent, fmt.Errorf("profile: key-direction: must be 0 or 1")
 	}
+}
+
+// MarshalText implements encoding.TextMarshaler. An out-of-range value
+// marshals as its String placeholder, which UnmarshalText refuses.
+func (d KeyDirection) MarshalText() ([]byte, error) {
+	return []byte(d.String()), nil
+}
+
+// UnmarshalText implements encoding.TextUnmarshaler, accepting "absent", "0"
+// and "1". An unrecognised name is an error.
+func (d *KeyDirection) UnmarshalText(text []byte) error {
+	name := string(text)
+	for i, n := range keyDirectionNames {
+		if n == name {
+			*d = KeyDirection(i)
+			return nil
+		}
+	}
+	return fmt.Errorf("profile: unknown key direction %q", name)
 }

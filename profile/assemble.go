@@ -25,6 +25,13 @@ import (
 // OpenVPN's own default, and the one both front-ends start from.
 const defaultPort = 1194
 
+// defaultCipher and defaultRenegSec are the values a profile starts from when
+// no directive names them.
+const (
+	defaultCipher   = "AES-256-GCM"
+	defaultRenegSec = 3600
+)
+
 // assembler builds a Profile from directives and inline blocks. Its zero value
 // is not usable; start from newAssembler.
 type assembler struct {
@@ -44,7 +51,7 @@ func newAssembler() *assembler {
 	return &assembler{p: &Profile{
 		Port:   defaultPort,
 		Proto:  ProtoUDP,
-		Cipher: "AES-256-GCM",
+		Cipher: defaultCipher,
 		// OpenVPN's built-in digest default is SHA1, not SHA256: openvpn(8)
 		// documents "--auth alg ... The default is SHA1", and openvpn3-core
 		// inherits it. AuthSet stays false, so this default stays
@@ -53,7 +60,7 @@ func newAssembler() *assembler {
 		Verb: 3,
 		// openvpn3-core ssl/proto.hpp starts with this default, then lets an
 		// explicit reneg-sec directive (including zero) override it.
-		RenegSec: 3600,
+		RenegSec: defaultRenegSec,
 	}}
 }
 
@@ -364,6 +371,16 @@ func (a *assembler) directive(d Directive) error {
 			return fmt.Errorf("profile: key-direction: invalid %q", fields[1])
 		}
 		p.KeyDirection = dir
+	case "auth-user-pass":
+		p.AuthUserPass = true
+	case "remote-cert-tls":
+		if len(fields) > 1 && strings.EqualFold(fields[1], "server") {
+			p.RemoteCertTLSServer = true
+		}
+	case "ns-cert-type":
+		if len(fields) > 1 && strings.EqualFold(fields[1], "server") {
+			p.NSCertTypeServer = true
+		}
 	case "remote-random":
 		// The order of the remote list, not a property of any remote.
 		// The shuffle itself is the dialer's; see Profile.RemoteRandom.
