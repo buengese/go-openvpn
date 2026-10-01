@@ -93,10 +93,8 @@ func TestParseDefaults(t *testing.T) {
 	}
 }
 
-// TestParseAuthDigest pins the digest the parser reports for every shape of the
-// 'auth' directive, absent included. OpenVPN's built-in default is SHA1, and for
-// a profile carrying no 'auth' directive the default alone decides what it
-// advertises and therefore what its server agrees to.
+// TestParseAuthDigest pins the digest for every shape of 'auth', absent
+// included (SHA1).
 func TestParseAuthDigest(t *testing.T) {
 	tests := []struct {
 		name    string
@@ -161,10 +159,8 @@ func TestParseAuthDigest(t *testing.T) {
 	}
 }
 
-// TestParseAuthPrefixedDirectivesLeaveDigestAlone pins that in an .ovpn file
-// 'auth' is the packet HMAC digest and nothing else: the directives that merely
-// begin with "auth" are unrelated, and a prefix match would hand every
-// auth-user-pass profile a digest of "creds.txt".
+// TestParseAuthPrefixedDirectivesLeaveDigestAlone pins that directives merely
+// beginning with "auth" do not set the digest.
 func TestParseAuthPrefixedDirectivesLeaveDigestAlone(t *testing.T) {
 	tests := []struct {
 		name string
@@ -188,7 +184,6 @@ func TestParseAuthPrefixedDirectivesLeaveDigestAlone(t *testing.T) {
 			if p.Auth != "SHA1" {
 				t.Errorf("Auth = %q, want the SHA1 default: %q must not set the digest", p.Auth, tt.line)
 			}
-			// It is still recorded verbatim for the capability preflight.
 			keyword := strings.Fields(tt.line)[0]
 			var seen bool
 			for _, d := range p.Directives {
@@ -203,9 +198,7 @@ func TestParseAuthPrefixedDirectivesLeaveDigestAlone(t *testing.T) {
 	}
 }
 
-// TestParseNumericDirectives covers the directives whose whole argument is a
-// number, and the value the field takes when the directive is absent. Each case
-// is one line added to the same minimal profile.
+// TestParseNumericDirectives covers numeric directives and their absent value.
 func TestParseNumericDirectives(t *testing.T) {
 	for _, tc := range []struct {
 		name string
@@ -232,7 +225,7 @@ func TestParseNumericDirectives(t *testing.T) {
 		{"become-primary", "become-primary 5\n", func(p *profile.Profile) int64 { return int64(p.BecomePrimarySec) }, 5},
 		{"tun-mtu", "tun-mtu 1400\n", func(p *profile.Profile) int64 { return int64(p.TunMTU) }, 1400},
 		{
-			// Zero means "the profile said nothing", not an MTU of zero.
+			// Zero means unset.
 			name: "absent tun-mtu leaves the field unset",
 			src:  "",
 			get:  func(p *profile.Profile) int64 { return int64(p.TunMTU) },
@@ -243,9 +236,8 @@ func TestParseNumericDirectives(t *testing.T) {
 		{"ping-restart", "ping-restart 120\n", func(p *profile.Profile) int64 { return int64(p.PingTimeout) }, 120},
 		{"ping-exit", "ping-exit 90\n", func(p *profile.Profile) int64 { return int64(p.PingTimeout) }, 90},
 		{
-			// The helper expands to ping N plus ping-restart M, unchanged:
-			// the doubling in OpenVPN 2.6.22 src/openvpn/helper.c line 549 is
-			// the server expansion, and a client is point-to-point.
+			// Reference: OpenVPN 2.6.22 src/openvpn/helper.c line 549; the
+			// doubling there is server-only.
 			name: "keepalive expands to its interval",
 			src:  "keepalive 10 120\n",
 			get:  func(p *profile.Profile) int64 { return int64(p.PingInterval) },
@@ -258,8 +250,7 @@ func TestParseNumericDirectives(t *testing.T) {
 			want: 120,
 		},
 		{
-			// Zero means "the profile said nothing", which is what lets the
-			// keepalive engine tell a configured value from an absent one.
+			// Zero means unset.
 			name: "absent ping leaves the interval unset",
 			src:  "",
 			get:  func(p *profile.Profile) int64 { return int64(p.PingInterval) },
@@ -291,9 +282,8 @@ func TestParseNumericDirectives(t *testing.T) {
 	}
 }
 
-// TestParseRejectsOutOfRangeArguments is the refusal half of the numeric
-// directives: an argument outside the range, or not a number at all, is a
-// parse error rather than a silently clamped value.
+// TestParseRejectsOutOfRangeArguments pins that out-of-range or non-numeric
+// arguments are parse errors, not clamped.
 func TestParseRejectsOutOfRangeArguments(t *testing.T) {
 	for _, src := range []string{
 		"verb 12\n",
@@ -308,9 +298,8 @@ func TestParseRejectsOutOfRangeArguments(t *testing.T) {
 		"ping -1\n",
 		"ping-restart -1\n",
 		"ping-exit abc\n",
-		// OpenVPN 2.6.22 src/openvpn/options.c line 6952 accepts --keepalive
-		// only with exactly two arguments, and src/openvpn/helper.c lines
-		// 521-524 rejects a non-positive value in either of them.
+		// Reference: OpenVPN 2.6.22 src/openvpn/options.c line 6952 and
+		// src/openvpn/helper.c lines 521-524.
 		"keepalive\n",
 		"keepalive 10\n",
 		"keepalive 0 60\n",
@@ -325,9 +314,8 @@ func TestParseRejectsOutOfRangeArguments(t *testing.T) {
 	}
 }
 
-// TestParseMSSFixSetSeparatesZeroFromAbsent is why MSSFix has a companion
-// flag. "mssfix 0" disables the clamp and a bare "mssfix" asks for OpenVPN's
-// own default, so the number alone cannot say which the profile wrote.
+// TestParseMSSFixSetSeparatesZeroFromAbsent pins that "mssfix 0" and a bare
+// "mssfix" are distinguishable.
 func TestParseMSSFixSetSeparatesZeroFromAbsent(t *testing.T) {
 	explicit, err := profile.ParseString("remote vpn.example.test 443\nmssfix 0\n")
 	if err != nil {
@@ -345,12 +333,9 @@ func TestParseMSSFixSetSeparatesZeroFromAbsent(t *testing.T) {
 	}
 }
 
-// TestParseKeepaliveOutranksPingDirectives pins the precedence between the
-// helper and the two directives it expands to: openvpn3 ssl/proto.hpp lines
-// 1278-1294 reads ping and ping-restart only when no keepalive was given, so
-// the helper wins wherever the file puts it. OpenVPN 2.6.22 src/openvpn/helper.c
-// lines 531-534 refuses the combination instead; this parser takes the
-// precedence rather than the refusal.
+// TestParseKeepaliveOutranksPingDirectives pins that keepalive wins over ping
+// and ping-restart wherever it appears.
+// Reference: openvpn3-core ssl/proto.hpp lines 1278-1294.
 func TestParseKeepaliveOutranksPingDirectives(t *testing.T) {
 	for _, tc := range []struct {
 		name string
@@ -377,10 +362,9 @@ func TestParseKeepaliveOutranksPingDirectives(t *testing.T) {
 	}
 }
 
-// TestParsePingExitIsNotPingRestart covers the one bit that separates two
-// directives sharing a field: OpenVPN 2.6.22 src/openvpn/options.c lines
-// 6963-6975 writes both into options->ping_rec_timeout and distinguishes them
-// only by ping_rec_timeout_action.
+// TestParsePingExitIsNotPingRestart pins the action bit separating two
+// directives that share a timeout.
+// Reference: OpenVPN 2.6.22 src/openvpn/options.c lines 6963-6975.
 func TestParsePingExitIsNotPingRestart(t *testing.T) {
 	exit, err := profile.ParseString("remote vpn.example.test 443\nping-exit 60\n")
 	if err != nil {
@@ -435,11 +419,9 @@ remote vpn.example.com 1194
 	}
 }
 
-// TestParseExplicitExitNotify covers the directive's optional argument, bare
-// and with a count. The arithmetic is OpenVPN 2.4.12's, which reads the
-// argument through positive_atoi (options.c line 4210) — atoi clamped at zero —
-// so a negative or unparseable count disables the notification instead of
-// refusing the profile, as an explicit 0 does.
+// TestParseExplicitExitNotify covers the optional count; a negative or
+// unparseable one disables the notification.
+// Reference: OpenVPN 2.4.12 options.c line 4210, positive_atoi.
 func TestParseExplicitExitNotify(t *testing.T) {
 	for _, tc := range []struct {
 		directive string
@@ -464,9 +446,8 @@ func TestParseExplicitExitNotify(t *testing.T) {
 	}
 }
 
-// TestParseWithoutExplicitExitNotifySendsNone checks that the absent directive
-// and "explicit-exit-notify 0" reach the same value, which is what lets the
-// client treat one number as the whole decision.
+// TestParseWithoutExplicitExitNotifySendsNone pins that absent and
+// "explicit-exit-notify 0" parse alike.
 func TestParseWithoutExplicitExitNotifySendsNone(t *testing.T) {
 	p, err := profile.ParseString("remote h 1194\nproto udp\n")
 	if err != nil {
@@ -477,11 +458,9 @@ func TestParseWithoutExplicitExitNotifySendsNone(t *testing.T) {
 	}
 }
 
-// TestParseExplicitExitNotifyIsAcceptedOverTCP records a deliberate divergence
-// from stock openvpn, which refuses the combination at option-validation time
-// ("--explicit-exit-notify can only be used with --proto udp", 2.4.12
-// options.c line 2181). A profile is a thing this client measures rather than
-// rejects, so it parses and the send declines instead.
+// TestParseExplicitExitNotifyIsAcceptedOverTCP pins a deliberate divergence:
+// stock openvpn refuses this; we parse it.
+// Reference: OpenVPN 2.4.12 options.c line 2181.
 func TestParseExplicitExitNotifyIsAcceptedOverTCP(t *testing.T) {
 	p, err := profile.ParseString("remote h 443\nproto tcp-client\nexplicit-exit-notify 5\n")
 	if err != nil {
@@ -500,9 +479,8 @@ func TestParsePathMissing(t *testing.T) {
 	}
 }
 
-// TestZeroAuthFlowIsTheOrdinaryOne pins the constant order: the zero value is
-// what a flow variable holds before anything sets it, so forgetting to set one
-// has to mean a plain handshake rather than a browser flow.
+// TestZeroAuthFlowIsTheOrdinaryOne pins that the zero AuthFlow is a plain
+// handshake.
 func TestZeroAuthFlowIsTheOrdinaryOne(t *testing.T) {
 	var zero profile.AuthFlow
 	if zero != profile.FlowCertAuth {
@@ -522,9 +500,8 @@ func TestZeroAuthFlowIsTheOrdinaryOne(t *testing.T) {
 	}
 }
 
-// TestAuthFederateIsWhatSaysFederated pins the one directive that puts a
-// profile on the federated flow. Nothing else does: not the remote's hostname,
-// which is one vendor's rule and lives in that vendor's package.
+// TestAuthFederateIsWhatSaysFederated pins auth-federate as the directive that
+// selects the federated flow.
 func TestAuthFederateIsWhatSaysFederated(t *testing.T) {
 	p, err := profile.ParseString("remote vpn.example.test 443\nauth-federate\n")
 	if err != nil {
@@ -538,10 +515,8 @@ func TestAuthFederateIsWhatSaysFederated(t *testing.T) {
 	}
 }
 
-// TestAuthFlowPrefersCredentialsOverACertificate pins the precedence that lets
-// a profile present a username at all: many profiles carrying auth-user-pass
-// also embed a <cert> and a <key>, and testing the certificate first classifies
-// them as FlowCertAuth, which sends the credential fields empty.
+// TestAuthFlowPrefersCredentialsOverACertificate pins that auth-user-pass
+// beats an embedded <cert>/<key>.
 func TestAuthFlowPrefersCredentialsOverACertificate(t *testing.T) {
 	const cert = "-----BEGIN CERTIFICATE-----\nx\n-----END CERTIFICATE-----\n"
 	const key = "-----BEGIN PRIVATE KEY-----\nx\n-----END PRIVATE KEY-----\n"
@@ -605,10 +580,7 @@ func TestAuthFlowPrefersCredentialsOverACertificate(t *testing.T) {
 	}
 }
 
-// tlsAuthProfile exercises the generic inline-block path. The body is a full
-// 256-byte key, which the parser loads; a shorter one is a diag.ClassConfig
-// parse failure rather than something silently ignored. The block opens on
-// line 7, which TestParseRecordsInlineBlocksNotTheirBodies pins.
+// tlsAuthProfile carries a full 256-byte key whose block opens on line 7.
 var tlsAuthProfile = `client
 dev tun
 proto udp
@@ -666,9 +638,8 @@ func TestParseRecordsUnrecognisedDirectives(t *testing.T) {
 	}
 }
 
-// TestParseRecordsInlineBlocksNotTheirBodies is the whole of the inline-block
-// contract on one profile: each opening tag is recorded, in order and with its
-// line, and no body line reaches the directive list or the wrong field.
+// TestParseRecordsInlineBlocksNotTheirBodies pins that each opening tag is
+// recorded with its line, and no body line reaches the directive list.
 func TestParseRecordsInlineBlocksNotTheirBodies(t *testing.T) {
 	p, err := profile.ParseString(tlsAuthProfile)
 	if err != nil {
@@ -696,7 +667,6 @@ func TestParseRecordsInlineBlocksNotTheirBodies(t *testing.T) {
 	if p.InlineBlocks[0].Line != 7 {
 		t.Errorf("tls-auth block line = %d, want 7", p.InlineBlocks[0].Line)
 	}
-	// The key block's body must not be stored anywhere but the key field.
 	if len(p.CA) == 0 {
 		t.Error("CA not loaded")
 	}
@@ -722,15 +692,9 @@ func TestParseInlineBlocksStillLoadCertAndKey(t *testing.T) {
 	}
 }
 
-// TestParseInlineBlockTagsAreCaseInsensitive pins the tag spelling for the five
-// blocks whose bodies are loaded. openBlock records the tag whatever its case
-// and hasInlineBlock and caps both fold, so closeBlock has to fold too, or
-// <TLS-AUTH> is recorded as present with TLSAuth left nil.
-//
-// The tolerant reading is the one this package already takes for directive
-// names. It is more tolerant than the reference: openvpn3-core keys its option
-// map on the tag verbatim (common/options.hpp update_map), so <CA> reaches no
-// lookup for "ca" there and the block is silently unused.
+// TestParseInlineBlockTagsAreCaseInsensitive pins case-folded tags for the
+// loaded blocks; openvpn3-core matches verbatim.
+// Reference: openvpn3-core common/options.hpp update_map.
 func TestParseInlineBlockTagsAreCaseInsensitive(t *testing.T) {
 	const body = "-----BEGIN CERTIFICATE-----\nMIIB...\n-----END CERTIFICATE-----\n"
 	for _, tc := range []struct {
@@ -756,10 +720,7 @@ func TestParseInlineBlockTagsAreCaseInsensitive(t *testing.T) {
 		})
 	}
 
-	// The wrap keys take a separate path through ParseStaticKey. The test is
-	// against nil and not against a length: both fields are *StaticKey, a
-	// pointer to an array, so len() answers 256 without dereferencing and a
-	// length assertion would pass on a nil key.
+	// Check nil, not len: len of a nil *[256]byte is still 256.
 	for _, tc := range []struct {
 		tag  string
 		want func(*profile.Profile) *profile.StaticKey
@@ -780,10 +741,8 @@ func TestParseInlineBlockTagsAreCaseInsensitive(t *testing.T) {
 	}
 }
 
-// TestParseInlineBlockClosesOnlyOnItsOwnTag pins the closing tag, which is the
-// half that stays exact. openvpn3-core compares it to the opening one byte for
-// byte (common/options.hpp is_close_tag), and matching loosely here would let a
-// stray "</x>" in a certificate body end the block early.
+// TestParseInlineBlockClosesOnlyOnItsOwnTag pins exact closing-tag matching.
+// Reference: openvpn3-core common/options.hpp is_close_tag.
 func TestParseInlineBlockClosesOnlyOnItsOwnTag(t *testing.T) {
 	for _, closer := range []string{"</CA>", "</cert>", "</x>"} {
 		t.Run(closer, func(t *testing.T) {
@@ -792,9 +751,7 @@ func TestParseInlineBlockClosesOnlyOnItsOwnTag(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			// The block never closed, so it consumed "fast-io" too and
-			// the body was loaded nowhere — OpenVPN's behaviour for an
-			// unterminated block.
+			// Unterminated: the block consumed "fast-io" too.
 			if len(p.CA) != 0 {
 				t.Errorf("%s closed the <ca> block: CA = %q", closer, p.CA)
 			}
@@ -807,9 +764,6 @@ func TestParseInlineBlockClosesOnlyOnItsOwnTag(t *testing.T) {
 	}
 }
 
-// TestParseRemoteRandomHostname pins a directive the dialer reads on both
-// paths: connect.go hands Remote to randomSubdomain when this is set, and an
-// endpoint whose bare hostname has no DNS record is unreachable without it.
 func TestParseRemoteRandomHostname(t *testing.T) {
 	p, err := profile.ParseString("remote vpn.example.com 443\nremote-random-hostname\n")
 	if err != nil {
@@ -818,7 +772,6 @@ func TestParseRemoteRandomHostname(t *testing.T) {
 	if !p.RandomHostname {
 		t.Error("RandomHostname = false, want true")
 	}
-	// Distinct from remote-random, which shuffles the list instead.
 	if p.RemoteRandom {
 		t.Error("RemoteRandom = true: remote-random-hostname is not remote-random")
 	}
@@ -835,30 +788,20 @@ func TestParseRemoteRandomHostname(t *testing.T) {
 	}
 }
 
-// TestParseFlowDirectiveAsksForSAML covers x-go-openvpn-flow, this project's
-// own directive rather than OpenVPN's: it is how a server asks for the
-// federated flow, and "saml" is the only argument it answers to. A bare
-// directive, or one naming anything else, must not put the client on a browser
-// flow.
-//
-// x-openlawsvpn-flow is the same directive under the name it had before the
-// project was renamed, and every case is asserted for both spellings: a
-// profile written against the old name has to keep behaving exactly as it did,
-// including in the cases that must NOT select the federated flow.
+// TestParseFlowDirectiveAsksForSAML pins that only "x-go-openvpn-flow saml",
+// or its old x-openlawsvpn-flow spelling, selects the federated flow.
 func TestParseFlowDirectiveAsksForSAML(t *testing.T) {
 	for _, tc := range []struct {
 		line string
 		want bool
 	}{
 		{"x-go-openvpn-flow saml", true},
-		// The argument is folded, like the directive name above it.
 		{"x-go-openvpn-flow SAML", true},
 		{"x-go-openvpn-flow Saml", true},
 		{"x-go-openvpn-flow", false},
 		{"x-go-openvpn-flow cert", false},
 		{"x-go-openvpn-flow samlx", false},
 
-		// The deprecated spelling, still answering the same way.
 		{"x-openlawsvpn-flow saml", true},
 		{"x-openlawsvpn-flow SAML", true},
 		{"x-openlawsvpn-flow Saml", true},
@@ -886,9 +829,6 @@ func TestParseFlowDirectiveAsksForSAML(t *testing.T) {
 }
 
 func TestParseMalformedTagsAreNeitherBlocksNorDirectives(t *testing.T) {
-	// "<>", "< ca >" and a stray "</ca>" are not tags. They must not open a
-	// block and swallow the rest of the file, and they must not be recorded
-	// as directives under a name that collides with the block namespace.
 	p, err := profile.ParseString("remote vpn.example.com 443\n<>\n< ca >\n</ca>\nfast-io\n")
 	if err != nil {
 		t.Fatal(err)
@@ -908,10 +848,8 @@ func TestParseMalformedTagsAreNeitherBlocksNorDirectives(t *testing.T) {
 	}
 }
 
-// TestParseVerifyX509NameMatchType covers the directive's second field, which
-// decides which of three different checks the same value asks for. The omitted
-// case is the one to get right: OpenVPN's default is "subject", not "name", so
-// a line with no type asks for a whole-DN comparison.
+// TestParseVerifyX509NameMatchType covers the match type; omitted means
+// "subject".
 func TestParseVerifyX509NameMatchType(t *testing.T) {
 	for _, tc := range []struct {
 		line string
@@ -937,10 +875,6 @@ func TestParseVerifyX509NameMatchType(t *testing.T) {
 	}
 }
 
-// TestParseVerifyX509NameRejectsAnUnknownMatchType records the deliberate
-// choice not to guess: falling back to "subject" applies a check the profile
-// did not ask for, and falling back to no check at all drops a certificate
-// check silently. OpenVPN refuses the option outright.
 func TestParseVerifyX509NameRejectsAnUnknownMatchType(t *testing.T) {
 	_, err := profile.ParseString("remote h 443\nverify-x509-name Server-1 san\n")
 	if err == nil {
@@ -951,9 +885,6 @@ func TestParseVerifyX509NameRejectsAnUnknownMatchType(t *testing.T) {
 	}
 }
 
-// TestX509NameMatchRoundTrips keeps String and ParseX509NameMatch agreeing, so
-// that the value the capability registry records is the spelling a profile can
-// actually contain.
 func TestX509NameMatchRoundTrips(t *testing.T) {
 	for _, m := range []profile.X509NameMatch{
 		profile.X509NameSubject, profile.X509NameCN, profile.X509NameCNPrefix,
@@ -965,10 +896,6 @@ func TestX509NameMatchRoundTrips(t *testing.T) {
 	}
 }
 
-// hand-window sets the ceiling on how long a renegotiated key waits before it
-// carries traffic. Unparsed, a profile asking for a shorter one silently gets
-// the reference's 60 and, the capability registry being closed, is graded fatal
-// for asking.
 func TestParseHandWindow(t *testing.T) {
 	p, err := profile.ParseString("client\nremote vpn.example.com 1194 udp\nhand-window 25\n")
 	if err != nil {
@@ -985,10 +912,7 @@ func TestParseHandWindow(t *testing.T) {
 	}
 }
 
-// TestMSSFixModeParsesTheSecondWord covers the word that decides how the mssfix
-// number is measured. Discarding it makes every explicit "mssfix N" behave as
-// "mssfix N mtu", which subtracts an outer IP and UDP header the directive did
-// not ask about — 28 bytes of MSS on every clamped segment.
+// TestMSSFixModeParsesTheSecondWord pins the mssfix mode word.
 func TestMSSFixModeParsesTheSecondWord(t *testing.T) {
 	for _, tc := range []struct {
 		directive string
@@ -997,8 +921,8 @@ func TestMSSFixModeParsesTheSecondWord(t *testing.T) {
 		{"mssfix 1400", profile.MSSFixLink},
 		{"mssfix 1400 mtu", profile.MSSFixEncap},
 		{"mssfix 1400 fixed", profile.MSSFixFixed},
-		// The reference warns and carries on rather than refusing
-		// (options.c:7341-7343), so an unknown word keeps the default.
+		// Unknown word keeps the default.
+		// Reference: OpenVPN options.c:7341-7343.
 		{"mssfix 1400 nonsense", profile.MSSFixLink},
 	} {
 		t.Run(tc.directive, func(t *testing.T) {

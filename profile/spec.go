@@ -1,13 +1,5 @@
 // SPDX-License-Identifier: LGPL-2.1-or-later
 
-// Building a profile programmatically.
-//
-// Spec is the second front-end onto the assembler, for a caller holding a
-// host, a port and a CA rather than a file. It does not build a Profile: it
-// renders the directives a file would have carried and hands them to the same
-// assembler the text parser uses, so there is no value Build can produce that
-// ParseString could not, and no second set of rules to keep in step.
-
 package profile
 
 import (
@@ -16,14 +8,11 @@ import (
 	"strings"
 )
 
-// Spec describes a tunnel programmatically. Each field is one OpenVPN
-// directive or inline block, spelled the way a profile spells it; a zero field
-// is an absent directive, so a built profile takes the same defaults a parsed
-// one does, from the same code.
+// Spec describes a tunnel programmatically, one field per setting. A zero
+// field is an absent directive and takes the parser's default.
 //
-// Fields naming a transport or a compression algorithm are strings, not this
-// package's enums: the enums have zero values that mean something — Proto's is
-// TCP, where OpenVPN's default is UDP — and absent has to differ from chosen.
+// A Spec serialises to JSON with its enums as names. A stored Spec is key
+// material: CA, Cert, Key, TLSAuth and TLSCrypt round-trip verbatim.
 type Spec struct {
 	// Remotes is the --remote list, in dial order. At least one is required.
 	Remotes []Endpoint `json:"remotes,omitempty"`
@@ -127,18 +116,14 @@ type DNSOptions struct {
 	RouteDomains  []string `json:"route_domains,omitempty"`
 }
 
-// Build assembles the profile. Every check the parser makes, Build makes,
-// with the parser's own code. What it cannot check — that the CA parses, that
-// the control-channel wrap can be built, that credentials are on hand — is
-// what Client.Preflight checks, without opening a socket.
+// Build assembles the profile through the parser's own assembler, so it
+// makes every check the parser makes.
 func (s Spec) Build() (*Profile, error) {
 	blocks, ds, err := s.directives()
 	if err != nil {
 		return nil, err
 	}
 	a := newAssembler()
-	// Blocks first, so an inline body settles a reference before the
-	// directives are read — the order a file gives them.
 	line := 0
 	for _, b := range blocks {
 		line++
@@ -178,8 +163,8 @@ type specBlock struct {
 	body []byte
 }
 
-// directives renders the typed fields into the blocks and directives a file
-// would have carried.
+// directives renders the fields into the blocks and directives a file would
+// carry. It is the only place a setting is given a spelling.
 func (s Spec) directives() ([]specBlock, []Directive, error) {
 	var blocks []specBlock
 	for _, b := range []specBlock{
@@ -206,9 +191,7 @@ func (s Spec) directives() ([]specBlock, []Directive, error) {
 
 	var ds []Directive
 	add := func(name string, args ...string) {
-		// A bare directive carries a nil Args, not an empty one: that is what
-		// the line parser produces, and a caller comparing two profiles would
-		// otherwise see a difference that is not there.
+		// Bare directives carry nil Args, as the line parser produces them.
 		if len(args) == 0 {
 			args = nil
 		}
@@ -259,20 +242,15 @@ func (s Spec) directives() ([]specBlock, []Directive, error) {
 		add("verify-x509-name", args...)
 	}
 	if s.Compression != "" {
-		// A file spells a directive on one line, so two lines here are two
-		// directives and not this one. strings.Fields does not care and
-		// would weld them into one.
+		// strings.Fields would weld two lines into one directive.
 		if strings.ContainsRune(s.Compression, '\n') {
 			return nil, nil, fmt.Errorf("profile: spec: Compression %q is more than one line", s.Compression)
 		}
 		f := strings.Fields(s.Compression)
-		// Whitespace and nothing else names no directive.
 		if len(f) == 0 {
 			return nil, nil, fmt.Errorf("profile: spec: Compression %q names no directive", s.Compression)
 		}
-		// The only field that supplies a directive name as well as its
-		// arguments, so the only one that folds the name the way the line
-		// parser folds fields[0]: "COMP-LZO" has to reach comp-lzo.
+		// Folded the way the line parser folds a keyword.
 		add(strings.ToLower(f[0]), f[1:]...)
 	}
 	if s.AllowCompression != "" {
@@ -357,20 +335,9 @@ func (s Spec) directives() ([]specBlock, []Directive, error) {
 	return blocks, ds, nil
 }
 
-// roundTrips checks that a directive survives being written to a file and
-// read back, which is the whole of Build's contract: no value Build can
-// produce that ParseString could not.
-//
-// A file is whitespace-separated, so a word survives only if it is exactly one
-// field and already equal to it: an empty word disappears, one holding a space
-// becomes two, a leading space is trimmed. An empty or space-padded host is
-// the case that matters, since it promotes the port to the hostname without
-// saying so.
-//
-// The name is checked as well as the arguments, and for one thing more: it is
-// the first word of a line, where '#' and ';' make the line a comment the
-// parser drops and '<' makes it markup, with "<ca>" opening an inline block
-// that swallows the rest of the file.
+// roundTrips checks that a directive reads back as itself from a file: the
+// name and every argument must be one whitespace-free word, and the name must
+// not start a comment or a block.
 func roundTrips(d Directive) error {
 	if f := strings.Fields(d.Name); len(f) != 1 || f[0] != d.Name {
 		return fmt.Errorf("profile: spec: directive name %q is not a single word", d.Name)

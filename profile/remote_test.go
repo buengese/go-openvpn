@@ -1,9 +1,4 @@
 // Unit tests for the --remote triple.
-//
-// The third field of a remote line is OpenVPN's per-remote protocol. Dropping
-// it dials a "tcp-client" endpoint over UDP, which answers with an ICMP
-// port-unreachable and fails ClassNetwork at reset — indistinguishable from a
-// dead endpoint. These tests pin the field down.
 package profile_test
 
 import (
@@ -34,17 +29,14 @@ func TestParseProtoSpellings(t *testing.T) {
 		{"udp4", profile.ProtoUDP, true},
 		{"udp6", profile.ProtoUDP, true},
 		{"tcp", profile.ProtoTCP, true},
-		// Upper case appears in the wild and stock openvpn refuses the file
-		// for it; we accept.
+		// Stock openvpn refuses upper case; we accept.
 		{"TCP", profile.ProtoTCP, true},
 		{"tcp-client", profile.ProtoTCP, true},
 		{"tcp4-client", profile.ProtoTCP, true},
 		{"tcp6-client", profile.ProtoTCP, true},
 		{"tcp4", profile.ProtoTCP, true},
 		{"tcp6", profile.ProtoTCP, true},
-		// The -server spellings are valid OpenVPN and ask this process to
-		// listen. A client that quietly dialed instead would be doing
-		// something the config did not ask for.
+		// The -server spellings ask this process to listen.
 		{"tcp-server", 0, false},
 		{"tcp4-server", 0, false},
 		{"kcp", 0, false},
@@ -86,7 +78,6 @@ func TestRemoteTriple(t *testing.T) {
 			wantProto: profile.ProtoUDP,
 		},
 		{
-			// The shape described at the top of this file.
 			name:      "host, port and tcp-client",
 			src:       "remote vpn.example.test 443 tcp-client\n",
 			wantHost:  "vpn.example.test",
@@ -95,8 +86,6 @@ func TestRemoteTriple(t *testing.T) {
 			wantSet:   true,
 		},
 		{
-			// It says udp, which is also the default, and the two are still
-			// not the same statement.
 			name:      "an explicit udp is recorded as explicit",
 			src:       "remote vpn.example.test 1194 udp\n",
 			wantHost:  "vpn.example.test",
@@ -113,8 +102,6 @@ func TestRemoteTriple(t *testing.T) {
 			wantSet:   true,
 		},
 		{
-			// The directive may appear below the remote it applies to, so
-			// resolution cannot happen while the line is being read.
 			name:      "a proto directive below the remote still applies",
 			src:       "remote vpn.example.test 443\nproto tcp\n",
 			wantHost:  "vpn.example.test",
@@ -152,7 +139,6 @@ func TestRemoteTriple(t *testing.T) {
 			if r.ProtoSet != tt.wantSet {
 				t.Errorf("ProtoSet = %v, want %v", r.ProtoSet, tt.wantSet)
 			}
-			// The compatibility surface must agree with Remotes[0].
 			if p.Remote != r.Host || p.Port != r.Port || p.Proto != r.Proto {
 				t.Errorf("compat fields {%s %d %v} disagree with Remotes[0] %+v",
 					p.Remote, p.Port, p.Proto, r)
@@ -161,10 +147,8 @@ func TestRemoteTriple(t *testing.T) {
 	}
 }
 
-// TestRemoteFirstWins pins which endpoint is dialed: the first remote, not the
-// last. OpenVPN tries them in order.
+// TestRemoteFirstWins pins that the first remote is dialed.
 func TestRemoteFirstWins(t *testing.T) {
-	// A hostname and its address, four ports.
 	p := mustParse(t, strings.Join([]string{
 		"proto udp",
 		"remote a.example.test 443",
@@ -202,8 +186,6 @@ func TestRemoteFirstWins(t *testing.T) {
 	}
 }
 
-// TestRemotesMayDisagreeOnTransport is the case the compatibility surface
-// cannot express, and the reason Remote is a struct rather than three fields.
 func TestRemotesMayDisagreeOnTransport(t *testing.T) {
 	p := mustParse(t, "remote a.example.test 1194 udp\nremote b.example.test 443 tcp-client\n")
 	if len(p.Remotes) != 2 {
@@ -217,9 +199,6 @@ func TestRemotesMayDisagreeOnTransport(t *testing.T) {
 	}
 }
 
-// TestRemoteCRLF is not incidental: profiles ship with CRLF line endings, and
-// a carriage return reaching ParseProto turns every one of them into a parse
-// error.
 func TestRemoteCRLF(t *testing.T) {
 	p := mustParse(t, "remote hr-zag.example.test 443 tcp-client\r\ncomp-lzo\r\n")
 	if p.Proto != profile.ProtoTCP {
@@ -230,9 +209,6 @@ func TestRemoteCRLF(t *testing.T) {
 	}
 }
 
-// TestRemoteRejectsBadFields is the single refusal table for the endpoint
-// directives: every way of writing a remote, a port or a protocol that the
-// parser must not accept.
 func TestRemoteRejectsBadFields(t *testing.T) {
 	tests := []struct {
 		name string
@@ -257,10 +233,8 @@ func TestRemoteRejectsBadFields(t *testing.T) {
 	}
 }
 
-// TestProtoDirectiveAcceptsAddressFamilies pins that the address-family
-// spellings are accepted and reduced to their transport. The family
-// restriction itself is not applied, which is why caps reports them degraded
-// rather than supported.
+// TestProtoDirectiveAcceptsAddressFamilies pins that address-family spellings
+// reduce to their transport; the family itself is not applied.
 func TestProtoDirectiveAcceptsAddressFamilies(t *testing.T) {
 	for _, spelling := range []string{"udp4", "udp6", "tcp4-client", "tcp6"} {
 		p, err := profile.ParseString("remote host 443\nproto " + spelling + "\n")

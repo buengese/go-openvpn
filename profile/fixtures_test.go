@@ -1,13 +1,6 @@
 // SPDX-License-Identifier: LGPL-2.1-or-later
 
 // Acceptance for the parser, over the generated profile fixtures.
-//
-// Every statement here is quantified over configs rather than measured from a
-// set of them. That is what lets these run on fixtures at all: a claim that
-// needs one particular corpus to hold is a census, and a census of real
-// provider profiles is measured by a separate tool that holds one.
-//
-// No socket is opened, no credential is read and no key byte is printed.
 package profile_test
 
 import (
@@ -31,11 +24,8 @@ func fixtures(t *testing.T) []fixtureFile {
 	return writeFixtures(t, t.TempDir())
 }
 
-// parseFixture parses one fixture from its own bytes, with its directory.
-//
-// It opens the file rather than calling profile.ParsePath so that no error can
-// carry the path, and it hands over the directory because a config naming its
-// CA in a file beside it is refused when parsed from bytes alone.
+// parseFixture parses one fixture from its bytes and directory, so no error
+// can carry the path.
 func parseFixture(path string) (*profile.Profile, []byte, error) {
 	raw, err := os.ReadFile(filepath.Clean(path))
 	if err != nil {
@@ -45,9 +35,8 @@ func parseFixture(path string) (*profile.Profile, []byte, error) {
 	return p, raw, err
 }
 
-// countBlocks returns how many inline blocks with the given tag a profile
-// recorded. The parser lowercases nothing in InlineBlocks, so the comparison
-// does.
+// countBlocks returns how many inline blocks with the given tag, case-folded,
+// a profile recorded.
 func countBlocks(p *profile.Profile, tag string) int {
 	n := 0
 	for _, b := range p.InlineBlocks {
@@ -78,10 +67,8 @@ func firstArg(p *profile.Profile, name string) string {
 	return ""
 }
 
-// TestWrapKeysComeFromInlineBlocks states the wrap-key rule: a key is
-// loaded exactly when an inline block carries one, every block that reaches the
-// parser yields 256 bytes, and key-direction parses exactly when the directive
-// is there.
+// TestWrapKeysComeFromInlineBlocks pins that a wrap key is loaded exactly when
+// an inline block carries one, and key-direction parses exactly when present.
 func TestWrapKeysComeFromInlineBlocks(t *testing.T) {
 	fixtures := fixtures(t)
 	var parsed, refused, authKeys, cryptKeys, directions int
@@ -125,10 +112,6 @@ func TestWrapKeysComeFromInlineBlocks(t *testing.T) {
 			}
 		}
 	}
-	// Every count above is a property quantified over the fixtures, and a
-	// property over nothing holds. These say the fixtures still carry what
-	// this test is about, so pruning one of them fails here rather than
-	// quietly emptying the assertion.
 	requireSome(t, map[string]int{
 		"parsed": parsed, "refused": refused,
 		"tls-auth keys": authKeys, "tls-crypt keys": cryptKeys, "key-direction": directions,
@@ -137,10 +120,8 @@ func TestWrapKeysComeFromInlineBlocks(t *testing.T) {
 		"%d key-direction lines", len(fixtures), parsed, refused, authKeys, cryptKeys, directions)
 }
 
-// TestWrapKeyFileReferenceLoadsNoKey covers the other way a profile can
-// name a wrap key. The file-reference path carries ca, cert and key only, so a
-// "tls-auth ta.key" line loads nothing — which is a fatal capability gap and
-// not a silent plaintext control channel.
+// TestWrapKeyFileReferenceLoadsNoKey pins that "tls-auth ta.key" loads
+// nothing: file references resolve ca, cert and key only.
 func TestWrapKeyFileReferenceLoadsNoKey(t *testing.T) {
 	fixtures := fixtures(t)
 	seen := 0
@@ -172,10 +153,8 @@ func TestWrapKeyFileReferenceLoadsNoKey(t *testing.T) {
 	t.Logf("%d wrap directives naming a file", seen)
 }
 
-// TestRemotesSurviveParsing states what the dial loop is handed: every
-// config that parses names at least one endpoint, a third field on a remote
-// line is read as its transport, and the single-remote fields agree with the
-// list they are a view of.
+// TestRemotesSurviveParsing pins that every parsed config names an endpoint
+// and the single-remote fields agree with Remotes[0].
 func TestRemotesSurviveParsing(t *testing.T) {
 	fixtures := fixtures(t)
 	var lines, perRemoteProto, multi int
@@ -193,8 +172,6 @@ func TestRemotesSurviveParsing(t *testing.T) {
 			multi++
 		}
 
-		// Remote, Port and Proto are Remotes[0] under another name.
-		// A reader of either must get the same endpoint.
 		first := p.Remotes[0]
 		if p.Remote != first.Host || p.Port != first.Port || p.Proto != first.Proto {
 			t.Errorf("%s: the single-remote fields and Remotes[0] disagree", f.id())
@@ -223,14 +200,8 @@ func TestRemotesSurviveParsing(t *testing.T) {
 		lines, multi, perRemoteProto)
 }
 
-// TestFileReferencedCA is the acceptance for file references:
-//
-//   - every reference is a ca, cert or key one, and is read or superseded,
-//     never both and never neither;
-//   - a CA that was read builds a certificate pool, which is what makes the
-//     profile usable rather than merely parsed;
-//   - the same bytes with no directory are refused with ErrNoProfileDir, and
-//     only for the configs that had to read something.
+// TestFileReferencedCA pins that each file reference is read or superseded,
+// a read CA builds a pool, and only configs that read a file need a directory.
 func TestFileReferencedCA(t *testing.T) {
 	fixtures := fixtures(t)
 	var refs, loaded, superseded, pools, readers, noDir int
@@ -273,9 +244,6 @@ func TestFileReferencedCA(t *testing.T) {
 			}
 		}
 
-		// The same bytes with nowhere to resolve a name from. Only a
-		// config that had to read one may be refused, and only for
-		// that reason.
 		_, err = profile.ParseFile(bytes.NewReader(raw))
 		switch {
 		case err == nil && readsAFile:
@@ -298,14 +266,9 @@ func TestFileReferencedCA(t *testing.T) {
 		refs, loaded, superseded, pools)
 }
 
-// TestCompressionDirectives states that the parser reads a compression
-// directive as the framing it names, because the three are three wire formats
-// and not three spellings of one: comp-lzo prepends a byte, a bare compress
-// replaces the payload's first byte and moves it to the tail, and stub-v2
-// writes nothing at all.
+// TestCompressionDirectives pins that each compression spelling parses to the
+// framing it names.
 func TestCompressionDirectives(t *testing.T) {
-	// The spelling on the left decides the framing on the right. A directive
-	// not listed here is one whose argument the mapping does not pin.
 	want := map[string]compress.Mode{
 		"comp-lzo":          compress.ModeLZO,
 		"comp-lzo yes":      compress.ModeLZO,
@@ -342,10 +305,7 @@ func TestCompressionDirectives(t *testing.T) {
 			t.Errorf("%s: parsed as %v with no compression directive", f.id(), p.Compression)
 		}
 
-		// "allow-compression no" forbids a compressing algorithm from
-		// either source. The pair parses; the refusal is made where
-		// the framing is chosen, and a set in which the two never meet
-		// says nothing about it either way.
+		// The pair parses; EffectiveMode makes the refusal.
 		if p.AllowCompression != compress.AllowNo {
 			continue
 		}
@@ -370,10 +330,6 @@ func TestCompressionDirectives(t *testing.T) {
 		byMode[compress.ModeNone], refusals)
 }
 
-// TestLineEndingsDoNotChangeMeaning states that a profile means the same
-// thing whichever way its lines are terminated. Over half the profiles in a
-// real corpus are written with CRLF, and a carriage return that survives into
-// a directive's last argument is invisible in every printed form of it.
 func TestLineEndingsDoNotChangeMeaning(t *testing.T) {
 	fixtures := fixtures(t)
 	flipped := 0
@@ -406,9 +362,8 @@ func TestLineEndingsDoNotChangeMeaning(t *testing.T) {
 	t.Logf("%d configs compared in both line endings", flipped)
 }
 
-// TestParseErrorsNameNoPath is the standing guard on failure output: a
-// config's own name carries country, city and server labels, so a refusal must
-// not quote the path it was asked to read, whatever else it says.
+// TestParseErrorsNameNoPath pins that a parse error never quotes the path; a
+// config's name carries location labels.
 func TestParseErrorsNameNoPath(t *testing.T) {
 	fixtures := fixtures(t)
 	checked := 0
@@ -429,12 +384,8 @@ func TestParseErrorsNameNoPath(t *testing.T) {
 	t.Logf("%d refusals checked", checked)
 }
 
-// requireSome fails when a count this suite ranges over is zero.
-//
-// Every assertion here is universally quantified, and a property over an empty
-// set holds. Deleting the fixtures a test is about would otherwise leave it
-// green — which is how a suite stops covering the thing it names without
-// anyone noticing.
+// requireSome fails when a count this suite ranges over is zero, since a
+// property over an empty set holds vacuously.
 func requireSome(t *testing.T, counts map[string]int) {
 	t.Helper()
 	for what, n := range counts {

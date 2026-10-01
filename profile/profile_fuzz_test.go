@@ -8,36 +8,22 @@ import (
 	"github.com/buengese/go-openvpn/profile"
 )
 
-// FuzzParseString feeds random strings to ParseString to verify it never
-// panics. Profile files are read from disk but may also come from untrusted
-// sources (MDM push, CI pipelines, etc.).
+// FuzzParseString pins that ParseString never panics and that what it accepts
+// round-trips through Spec and Render.
 func FuzzParseString(f *testing.F) {
-	// Seed: minimal valid profile.
 	f.Add("remote vpn.example.com 443\nproto tcp-client\n")
-	// Seed: AWS Client VPN profile structure.
 	f.Add("remote cvpn-endpoint-abc123.amazonaws.com 443\nproto tcp-client\nremote-random-hostname\nverify-x509-name mtlab.ai\n")
-	// Seed: with inline CA block.
 	f.Add("remote vpn.example.com 1194\nproto udp\n<ca>\n-----BEGIN CERTIFICATE-----\nMIIB\n-----END CERTIFICATE-----\n</ca>\n")
-	// Seed: all directives.
 	f.Add("remote vpn.example.com 443\nproto tcp-client\ncipher AES-128-GCM\nauth SHA512\nreneg-sec 3600\nreneg-bytes 10000000\ntun-mtu 1400\nmssfix 1350\n")
-	// Seed: missing remote (should error, not panic).
 	f.Add("proto tcp-client\ncipher AES-256-GCM\n")
-	// Seed: empty.
 	f.Add("")
-	// Seed: only comments.
 	f.Add("# comment\n; another comment\n")
-	// Seed: invalid port.
 	f.Add("remote vpn.example.com 99999\n")
-	// Seed: long lines.
 	f.Add("remote " + strings.Repeat("a", 1000) + ".example.com 443\nproto tcp-client\n")
-	// Seed: unclosed inline block.
 	f.Add("remote vpn.example.com 443\nproto tcp-client\n<ca>\n-----BEGIN CERTIFICATE-----\nMIIB\n")
-	// Seed: nested-looking tags.
 	f.Add("remote vpn.example.com 443\nproto tcp-client\n<ca>\n<cert>\n-----END CERTIFICATE-----\n</ca>\n")
-	// Seed: a well-formed wrap key in the shape a real config ships.
 	f.Add(wrappedProfile("tls-auth", testKeyFill, "key-direction 1\n"))
-	// Seed: a wrap key one digit short — the parse now fails rather than
-	// dropping the block, so the failure path needs seeding too.
+	// One hex digit short.
 	f.Add("remote vpn.example.com 1194\n<tls-crypt>\n" +
 		staticKeyHex(testKeyFill)[:511] + "\n</tls-crypt>\n")
 	// Two directives writing one slot.
@@ -100,16 +86,11 @@ func hexRun(s string) int {
 	return longest
 }
 
-// maxErrorHexRun bounds how many consecutive hex digits a static-key error
-// message may contain. Sixteen is eight bytes of key: more than enough to make
-// a leak visible, far more than a line number or a count could reach.
+// maxErrorHexRun bounds the hex digits a static-key error may contain.
 const maxErrorHexRun = 16
 
-// FuzzParseStaticKey feeds random bytes to ParseStaticKey, whose input, unlike
-// the rest of the parser's, is key material. Two invariants: a success is
-// exactly 256 bytes and decodes back to the digits it was built from, and a
-// failure names what is wrong without echoing any of it — the leading half of a
-// truncated tls-auth key is the whole of the send HMAC key.
+// FuzzParseStaticKey pins that a success round-trips to its digits and a
+// failure echoes none of the input.
 func FuzzParseStaticKey(f *testing.F) {
 	f.Add([]byte(staticKeyBlock(testKeyFill)))
 	f.Add([]byte(staticKeyHex(testKeyFill)))
@@ -140,9 +121,7 @@ func FuzzParseStaticKey(f *testing.F) {
 		if len(key) != profile.StaticKeySize {
 			t.Fatalf("key is %d bytes, want %d", len(key), profile.StaticKeySize)
 		}
-		// Round-trip: the canonical rendering of what we parsed must parse
-		// back to the same bytes. A parser that dropped or duplicated digits
-		// would still return 256 bytes, and this is what notices.
+		// Round-trip: the canonical rendering must parse back to the same bytes.
 		again, err := profile.ParseStaticKey([]byte(hex.EncodeToString(key[:])))
 		if err != nil {
 			t.Fatalf("re-parsing a parsed key failed: %v", err)
@@ -153,9 +132,8 @@ func FuzzParseStaticKey(f *testing.F) {
 	})
 }
 
-// blockBodyLines is an independent, deliberately naive implementation of the
-// parser's inline-block rules. It is the oracle FuzzParseRecording checks the
-// parser against: no line it reports may ever surface as a directive.
+// blockBodyLines is a naive oracle for the inline-block rules: no line it
+// reports may surface as a directive.
 func blockBodyLines(s string) map[int]bool {
 	body := map[int]bool{}
 	inside := ""
@@ -183,25 +161,19 @@ func blockBodyLines(s string) map[int]bool {
 	return body
 }
 
-// FuzzParseRecording exercises the directive- and inline-block-recording path
-// the capability preflight reads: line numbers are real and ordered, directive
-// names are normalised, and — the one that matters — nothing inside an inline
-// block ever becomes a directive.
+// FuzzParseRecording pins that line numbers are real and ordered, names are
+// normalised, and nothing inside an inline block becomes a directive.
 func FuzzParseRecording(f *testing.F) {
 	f.Add("remote vpn.example.com 443\nproto tcp-client\nfast-io\nsndbuf 524288\n")
 	f.Add(wrappedProfile("tls-auth", testKeyFill, "key-direction 1\n"))
 	f.Add("remote vpn.example.com 1194\n<tls-crypt>\n" + staticKeyBlock(testKeyFill) +
 		"</tls-crypt>\n<ca>\nMIIB\n</ca>\n")
-	// A wrap block whose body is not a key: the parse fails, so this seed
-	// exercises the error path rather than the recording invariants.
+	// Not a key: exercises the error path.
 	f.Add("remote vpn.example.com 1194\nkey-direction 1\n<tls-auth>\ndeadbeef\n</tls-auth>\n")
 	// Unclosed non-standard block: must not resurface as directives.
 	f.Add("remote vpn.example.com 1194\n<tls-auth>\nAAAA\nBBBB\n")
-	// Stray and malformed tags.
 	f.Add("remote vpn.example.com 1194\n</ca>\n<>\n< ca >\n<a b>\nfast-io\n")
-	// A tag name that is also a directive keyword.
 	f.Add("remote vpn.example.com 1194\n<cipher>\nAES-256-CBC\n</cipher>\n")
-	// Two remotes, as a failover profile ships them.
 	f.Add("remote a.example.com 1195\nremote 203.0.113.9 1195\nproto tcp\n")
 
 	f.Fuzz(func(t *testing.T, s string) {
@@ -255,17 +227,13 @@ func FuzzParseRecording(f *testing.F) {
 			tags[strings.ToLower(b.Tag)] = true
 		}
 
-		// A loaded wrap key must have come from a recorded block. The two
-		// records are built in different places, and the capability preflight
-		// would understate a profile whose key arrived some other way.
+		// A loaded wrap key must have come from a recorded block.
 		if p.TLSAuth != nil && !tags["tls-auth"] {
 			t.Fatal("a tls-auth key was loaded with no <tls-auth> block recorded")
 		}
 		if p.TLSCrypt != nil && !tags["tls-crypt"] {
 			t.Fatal("a tls-crypt key was loaded with no <tls-crypt> block recorded")
 		}
-		// An absent key-direction is its own value, so a profile that
-		// recorded no key-direction directive must not report one.
 		if _, given := p.KeyDirection.Value(); given {
 			found := false
 			for _, d := range p.Directives {

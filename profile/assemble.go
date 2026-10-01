@@ -1,12 +1,8 @@
 // SPDX-License-Identifier: LGPL-2.1-or-later
 
-// Assembling a Profile from directives, whichever produced them.
-//
-// A profile is the struct plus everything the parser does to it: the defaults
-// it starts from, the normalisers each directive passes through, and the
-// resolution that runs once the last line is read. Filling the struct by hand
-// skips all three. Every front-end hands its directives to this one assembler,
-// so there is no second set of rules to keep in step.
+// Assembling a Profile from directives. The parser and Spec.Build both
+// feed this one assembler, which applies the defaults, normalisers and
+// end-of-file resolution.
 
 package profile
 
@@ -22,7 +18,6 @@ import (
 )
 
 // defaultPort is the port a profile dials when no directive names one.
-// OpenVPN's own default, and the one both front-ends start from.
 const defaultPort = 1194
 
 // defaultCipher and defaultRenegSec are the values a profile starts from when
@@ -32,58 +27,45 @@ const (
 	defaultRenegSec = 3600
 )
 
-// assembler builds a Profile from directives and inline blocks. Its zero value
-// is not usable; start from newAssembler.
+// assembler builds a Profile from directives and inline blocks. Start from
+// newAssembler.
 type assembler struct {
 	p    *Profile
 	refs []pendingFileRef
 
-	// "keepalive N M" is resolved in finish, not at the line it appears on,
-	// because it outranks ping/ping-restart wherever the file puts them.
+	// keepalive is resolved in finish because it outranks ping and
+	// ping-restart wherever they appear.
 	keepalivePing    int
 	keepaliveTimeout int
 	keepaliveSeen    bool
 }
 
-// newAssembler returns an assembler holding the defaults a profile starts
-// from, before a single directive is read.
+// newAssembler returns an assembler holding a profile's defaults.
 func newAssembler() *assembler {
 	return &assembler{p: &Profile{
 		Port:   defaultPort,
 		Proto:  ProtoUDP,
 		Cipher: defaultCipher,
-		// OpenVPN's built-in digest default is SHA1, not SHA256: openvpn(8)
-		// documents "--auth alg ... The default is SHA1", and openvpn3-core
-		// inherits it. AuthSet stays false, so this default stays
-		// distinguishable from an explicit "auth SHA1".
+		// OpenVPN's built-in digest default is SHA1 (openvpn(8) --auth).
 		Auth: crypto.DefaultAuthName,
 		Verb: 3,
-		// openvpn3-core ssl/proto.hpp starts with this default, then lets an
-		// explicit reneg-sec directive (including zero) override it.
+		// openvpn3-core ssl/proto.hpp's default; an explicit reneg-sec,
+		// including 0, overrides it.
 		RenegSec: defaultRenegSec,
 	}}
 }
 
-// openBlock records that an inline <tag> block began. It is separate from
-// closeBlock because an unterminated block still counts as present: OpenVPN
-// consumes the body to end of file and loads nothing from it, and the
-// capability registry still has a block to classify.
+// openBlock records that an inline <tag> block began. An unterminated block
+// still counts as present.
 func (a *assembler) openBlock(tag string, line int) {
 	a.p.InlineBlocks = append(a.p.InlineBlocks, InlineBlock{Tag: tag, Line: line})
 }
 
-// closeBlock takes the body of a completed inline block. The bodies of <ca>,
-// <cert>, <key>, <tls-auth> and <tls-crypt> are kept; every other tag is
-// dropped, so its contents are never read as directives.
-//
-// The tag is folded here, as it is by hasInlineBlock and by the capability
-// registry. Comparing it verbatim leaves <CA> marking a "ca ca.crt" reference
-// superseded and loading the body nowhere: a profile that parses cleanly and
-// cannot connect.
+// closeBlock takes the body of a completed inline block, keeping <ca>,
+// <cert>, <key>, <tls-auth> and <tls-crypt>. The tag is folded, so <CA>
+// loads as <ca>.
 func (a *assembler) closeBlock(tag string, body []byte) error {
 	p := a.p
-	// Not the tag recorded on InlineBlocks, which goes on saying what the
-	// file said.
 	tag = strings.ToLower(tag)
 	switch tag {
 	case "ca":
@@ -95,11 +77,7 @@ func (a *assembler) closeBlock(tag string, body []byte) error {
 	case "tls-auth", "tls-crypt":
 		key, err := ParseStaticKey(body)
 		if err != nil {
-			// A profile whose wrap key is unusable is unusable as
-			// written, which is what ClassConfig means, and the
-			// wrap is the first thing on the wire. The cause says
-			// what is wrong with the key without quoting any of
-			// it.
+			// The error never quotes the key.
 			return diag.Wrap(diag.ClassConfig, diag.StageParse, err,
 				"<"+tag+"> is not a usable OpenVPN static key")
 		}
@@ -112,28 +90,19 @@ func (a *assembler) closeBlock(tag string, body []byte) error {
 	return nil
 }
 
-// directive folds one directive into the profile. Every directive is
-// recorded, recognised or not, because the capability registry classifies
-// what this switch ignores.
+// directive folds one directive into the profile, recording it whether or
+// not the switch acts on it.
 func (a *assembler) directive(d Directive) error {
 	p := a.p
 	p.Directives = append(p.Directives, d)
 
-	// The switch reads the directive the way the line parser produced it:
-	// fields[0] is the keyword and the arguments start at fields[1].
 	fields := append([]string{d.Name}, d.Args...)
 	directive := d.Name
 	lineNo := d.Line
 	switch directive {
 	case "remote":
-		// remote <host> [port] [proto]. Every line is retained, in file
-		// order; the third field is that remote's own transport, and a
-		// remote that names one is dialed over it whatever --proto says.
-		//
-		// Port and Proto are left unset here and resolved against the
-		// profile's own --port and --proto after the file is read,
-		// because either directive may appear below the remote line it
-		// applies to.
+		// remote <host> [port] [proto]. Port and proto are resolved in
+		// finish, since --port and --proto may come later in the file.
 		if len(fields) < 2 {
 			return fmt.Errorf("profile: remote: missing hostname")
 		}
@@ -172,20 +141,12 @@ func (a *assembler) directive(d Directive) error {
 		}
 		p.Proto = proto
 	case "cipher":
-		// The upper-casing decides nothing on the wire: crypto.LookupCipher
-		// and caps.isCBC both fold again, so "aes-256-gcm" and "AES-256-GCM"
-		// already build the same tunnel. It settles the exported field a
-		// library caller reads, and the session report's profileFingerprint,
-		// which hashes Cipher and Auth as written and has to give one profile
-		// one identifier however it spelled them.
+		// Upper-cased so one profile has one spelling in reports.
 		if len(fields) < 2 {
 			return fmt.Errorf("profile: cipher: missing value")
 		}
 		p.Cipher = strings.ToUpper(fields[1])
 	case "auth":
-		// The packet HMAC digest and nothing else: the switch matches the
-		// whole keyword, so auth-user-pass, auth-nocache, auth-retry and
-		// auth-federate cannot reach it and must never set the digest.
 		if len(fields) < 2 {
 			return fmt.Errorf("profile: auth: missing value")
 		}
@@ -219,11 +180,7 @@ func (a *assembler) directive(d Directive) error {
 		}
 		p.RenegBytes = n
 	case "ping":
-		// The probe interval on its own. Strict, because a value that does
-		// not parse would silently change when the link is declared dead.
-		//
-		// Reference: OpenVPN 2.6.22 src/openvpn/options.c line 6958
-		// (--ping sets options->ping_send_timeout).
+		// Reference: openvpn-2.6.22 src/openvpn/options.c:6958.
 		if len(fields) < 2 {
 			return fmt.Errorf("profile: ping: missing value")
 		}
@@ -233,9 +190,7 @@ func (a *assembler) directive(d Directive) error {
 		}
 		p.PingInterval = n
 	case "ping-restart", "ping-exit":
-		// Both write the same timeout; only the action differs — see
-		// Profile.PingTimeout. Reference: OpenVPN 2.6.22
-		// src/openvpn/options.c lines 6963-6975.
+		// Both set the one timeout; see Profile.PingTimeout.
 		if len(fields) < 2 {
 			return fmt.Errorf("profile: %s: missing value", directive)
 		}
@@ -246,12 +201,9 @@ func (a *assembler) directive(d Directive) error {
 		p.PingTimeout = n
 		p.PingExit = directive == "ping-exit"
 	case "keepalive":
-		// A helper, not a setting of its own: it expands to "ping N" plus
-		// "ping-restart M", deferred to finish because keepalive outranks
-		// any ping/ping-restart wherever the file puts them. Both arguments
-		// are required and both must be positive: OpenVPN 2.6.22
-		// src/openvpn/options.c line 6952 takes exactly two, and
-		// src/openvpn/helper.c lines 521-524 rejects a non-positive one.
+		// Expands to ping N and ping-restart M in finish. Both arguments
+		// must be positive (openvpn-2.6.22 src/openvpn/options.c:6952,
+		// src/openvpn/helper.c:521-524).
 		if len(fields) < 3 {
 			return fmt.Errorf("profile: keepalive: want 'keepalive <interval> <timeout>'")
 		}
@@ -265,9 +217,6 @@ func (a *assembler) directive(d Directive) error {
 		}
 		a.keepalivePing, a.keepaliveTimeout, a.keepaliveSeen = ping, timeout, true
 	case "hand-window":
-		// Strict, like reneg-sec and become-primary: the value decides
-		// when a key that has been negotiated starts carrying traffic,
-		// and a silently wrong one is a timing bug found much later.
 		if len(fields) < 2 {
 			return fmt.Errorf("profile: hand-window: missing value")
 		}
@@ -286,12 +235,9 @@ func (a *assembler) directive(d Directive) error {
 		}
 		p.BecomePrimarySec = n
 	case "explicit-exit-notify":
-		// The argument is optional, and a malformed one is not an error.
-		// OpenVPN reads it through positive_atoi (2.4.12 options.c line
-		// 4210), atoi clamped at zero, so "explicit-exit-notify -3" and
-		// "explicit-exit-notify x" both disable the notification there
-		// rather than refusing the profile. A bad count costs only the
-		// notification, which is why this case is lax and the rest strict.
+		// A malformed count disables the notification rather than
+		// refusing the profile, as OpenVPN's positive_atoi does
+		// (openvpn-2.4.12 src/openvpn/options.c:4210).
 		n := 1
 		if len(fields) > 1 {
 			n = 0
@@ -301,12 +247,8 @@ func (a *assembler) directive(d Directive) error {
 		}
 		p.ExplicitExitNotify = n
 	case "comp-lzo", "compress":
-		// The framing is decided by the directive and the option flags it
-		// sets, not by the algorithm it names: bare 'compress' and
-		// 'comp-lzo no' both select COMP_ALG_STUB, yet only the first
-		// carries COMP_F_SWAP and they put different bytes on the wire.
-		// compress.ModeForDirective is the single place that table lives,
-		// so the profile and the PUSH_REPLY cannot disagree about it.
+		// compress.ModeForDirective maps the directive and argument to a
+		// framing, shared with the PUSH_REPLY parser.
 		arg := ""
 		if len(fields) > 1 {
 			arg = fields[1]
@@ -335,9 +277,8 @@ func (a *assembler) directive(d Directive) error {
 		}
 		p.TunMTU = n
 	case "mssfix":
-		// OpenVPN accepts a bare "mssfix" and applies its default. Keep
-		// MSSFixSet false in that case, exactly as when the directive is
-		// omitted. A numeric zero is an explicit opt-out.
+		// A bare mssfix is the default, as if absent; a numeric 0 is an
+		// explicit opt-out.
 		if len(fields) >= 2 {
 			n, err := strconv.Atoi(fields[1])
 			if err != nil || n < 0 {
@@ -345,11 +286,9 @@ func (a *assembler) directive(d Directive) error {
 			}
 			p.MSSFix = n
 			p.MSSFixSet = true
-			// A numeric mssfix measures the tunnel packet; "mtu" counts the
-			// outer IP and transport headers too, and "fixed" neither
-			// (openvpn-2.6.22 src/openvpn/options.c:7314-7344, openvpn3
-			// ssl/proto.hpp:2713). An unknown word is a warning there, so it
-			// is not fatal here either.
+			// An unknown mode word only warns in OpenVPN, so it is ignored
+			// here (openvpn-2.6.22 src/openvpn/options.c:7314-7344, openvpn3
+			// ssl/proto.hpp:2713).
 			if len(fields) >= 3 {
 				switch fields[2] {
 				case "mtu":
@@ -360,9 +299,6 @@ func (a *assembler) directive(d Directive) error {
 			}
 		}
 	case "key-direction":
-		// Not a default: an omitted key-direction leaves p.KeyDirection at
-		// KeyDirectionAbsent, which means "use the whole key in both
-		// directions" and is a third behaviour, not a synonym for 0.
 		if len(fields) < 2 {
 			return fmt.Errorf("profile: key-direction: missing value")
 		}
@@ -382,27 +318,17 @@ func (a *assembler) directive(d Directive) error {
 			p.NSCertTypeServer = true
 		}
 	case "remote-random":
-		// The order of the remote list, not a property of any remote.
-		// The shuffle itself is the dialer's; see Profile.RemoteRandom.
 		p.RemoteRandom = true
 	case "remote-random-hostname":
 		p.RandomHostname = true
 	case "auth-federate":
-		// AWS Client VPN profiles use this OpenVPN directive to request
-		// federated (SAML) authentication. Treat it as the standard spelling
-		// of the existing explicit SAML-flow override.
 		p.Federated = true
-	// x-openlawsvpn-flow is the directive's former spelling, from before the
-	// project was renamed. Profiles in the wild carry it, so it stays
-	// recognised; x-go-openvpn-flow is what new profiles should say.
+	// x-openlawsvpn-flow is the former spelling of x-go-openvpn-flow.
 	case "x-go-openvpn-flow", "x-openlawsvpn-flow":
 		if len(fields) >= 2 && strings.ToLower(fields[1]) == "saml" {
 			p.Federated = true
 		}
 	case "verify-x509-name":
-		// The match type is the whole point of the second field: the
-		// same value means three different checks depending on it, and
-		// reading only fields[1] silently picks one of them.
 		if len(fields) >= 2 {
 			var typeArg string
 			if len(fields) >= 3 {
@@ -416,14 +342,12 @@ func (a *assembler) directive(d Directive) error {
 			p.VerifyX509NameMatch = match
 		}
 	case "dhcp-option":
-		// The same syntax the server pushes, so the same parser reads it.
 		if err := dns.ParseDHCPOption(&p.DNS, fields); err != nil {
 			return fmt.Errorf("profile: %w", err)
 		}
 	case "ca", "cert", "key":
-		// A file reference: "ca ca.crt". Nothing is opened here. An
-		// inline <ca> block may still appear below this line and would
-		// win, so the decision waits for resolveFileRefs.
+		// A file reference; an inline block may still supersede it, so
+		// resolveFileRefs decides.
 		if len(fields) < 2 {
 			return fmt.Errorf("profile: %s: missing file name", directive)
 		}
@@ -436,16 +360,10 @@ func (a *assembler) directive(d Directive) error {
 func (a *assembler) finish(res fileResolver) (*Profile, error) {
 	p := a.p
 
-	// The keepalive helper expands here so that it wins over a ping or
-	// ping-restart on any line of the file, above it or below it: openvpn3
-	// ssl/proto.hpp lines 1278-1294 reads those two only when the option list
-	// carried no keepalive. 2.6 refuses the combination outright
-	// (src/openvpn/helper.c lines 531-534), which would reject a profile
-	// openvpn3 accepts.
-	//
-	// Both values pass through unchanged. The doubling at
-	// src/openvpn/helper.c line 549 is the server expansion; lines 540-543
-	// expand a point-to-point client to exactly ping N and ping-restart M.
+	// keepalive wins over ping and ping-restart anywhere in the file, as in
+	// openvpn3 ssl/proto.hpp:1278-1294 (openvpn-2.6.22 refuses the pair,
+	// src/openvpn/helper.c:531-534), and a client expands it to exactly
+	// ping N and ping-restart M (openvpn-2.6.22 src/openvpn/helper.c:540-543).
 	if a.keepaliveSeen {
 		p.PingInterval = a.keepalivePing
 		p.PingTimeout = a.keepaliveTimeout
@@ -456,9 +374,6 @@ func (a *assembler) finish(res fileResolver) (*Profile, error) {
 		return nil, fmt.Errorf("profile: missing 'remote' directive")
 	}
 
-	// Resolve each remote against the profile's own --port and --proto, which
-	// may have been set anywhere in the file, including below the remote they
-	// apply to. A remote that named its own keeps it.
 	for i := range p.Remotes {
 		if p.Remotes[i].Port == 0 {
 			p.Remotes[i].Port = p.Port
@@ -468,8 +383,6 @@ func (a *assembler) finish(res fileResolver) (*Profile, error) {
 		}
 	}
 
-	// Remote, Port and Proto are the first remote, not the last: OpenVPN
-	// dials the list in order and starts with the first.
 	p.Remote = p.Remotes[0].Host
 	p.Port = p.Remotes[0].Port
 	p.Proto = p.Remotes[0].Proto

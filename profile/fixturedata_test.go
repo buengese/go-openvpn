@@ -1,23 +1,5 @@
-// The profiles the parser properties range over.
-//
-// One fixture per shape the parser treats differently: each inline block and
-// the empty one it must refuse, a file reference read and one an inline block
-// supersedes, every spelling of a remote and of a compression directive, and
-// the ways a profile can be written — CRLF, comments, blank lines inside a
-// block.
-//
-// caps has a set of its own. The two overlap in content and are deliberately
-// separate: caps needs every registry row instantiated and grades directives
-// without reading key material; these need a certificate that builds a trust
-// store, and no coverage obligation at all. One table serving both was a
-// package imported from three places, and the shape of it outlived the corpus
-// it was named for.
-//
-// What is *not* here: caps' lexical shapes, the profiles written with CRLF or
-// with comments padding their inline blocks. They were tried here and caught
-// nothing — every fixture's static key already carries a comment banner, so
-// the block reader's comment skipping is exercised by all of them. They earn
-// their place in caps, where the published shape inventory has to claim them.
+// The profiles the parser properties range over: one fixture per shape the
+// parser treats differently.
 
 package profile_test
 
@@ -38,48 +20,31 @@ import (
 	"time"
 )
 
-// shape is one profile the fixtures carry, and what it is there to exercise.
+// fixtureShape is one profile the fixtures carry.
 type fixtureShape struct {
-	// Group is the subdirectory it is written to, and the dimension caps'
-	// matrix aggregates by.
+	// Group is the subdirectory it is written to.
 	Group string
-	// Name is the file's base name, without the extension.
-	Name string
+	Name  string
 	// Refused says the parser must decline this profile.
 	Refused bool
 
-	// directives is the body, after the prelude every profile shares. A shape
-	// naming no remote is given one.
+	// directives is the body after the prelude; a shape naming no remote is
+	// given one.
 	directives string
-	// inline names the blocks to embed, in order.
-	inline []string
-	// beside names the files to write next to the profile.
+	inline     []string
+	// beside names files to write next to the profile.
 	beside []string
-	// crlf writes the profile with CRLF line endings. Over half the profiles
-	// in a real corpus are written that way, and a tokenizer that keeps the
-	// carriage return puts it in an argument.
-	crlf bool
-	// padded pads the inline blocks with the blank and comment lines real
-	// generators leave in them, and the profile with comment lines of its own.
+	crlf   bool
+	// padded adds blank and comment lines to the profile and its blocks.
 	padded bool
 }
 
-// prelude opens every generated profile. Both lines are graded, so they are
-// part of what the fixtures cover rather than boilerplate around them.
+// prelude opens every generated profile.
 const prelude = "client\ndev tun\n"
 
-// defaultRemote is appended to a shape that names no endpoint of its own: a
-// profile with no remote line is refused, and only the shape that means to be
-// refused may be.
+// defaultRemote is appended to a shape that names no endpoint of its own.
 const defaultRemote = "remote vpn.example.test 1194\n"
 
-// fixtureShapes is the table. Each entry is one structural pattern a deployed profile
-// exhibits, or one group of directives that would otherwise be graded by
-// nothing.
-//
-// The groups after "misc" exist for coverage rather than realism: no deployed
-// profile carries every routing directive at once, but a registry row nothing
-// instantiates is a row whose grading can change without moving a number.
 var fixtureShapes = []fixtureShape{
 	// ---- Trust store -------------------------------------------------
 
@@ -95,9 +60,7 @@ var fixtureShapes = []fixtureShape{
 		directives: "ca ca.crt\nauth-user-pass\n",
 		beside:     []string{"ca.crt"}},
 
-	// The named file is deliberately not written. The inline block supersedes
-	// it, so a parser that opened it anyway would fail here rather than
-	// quietly load the wrong trust store.
+	// ca.crt is deliberately not written; the inline block supersedes it.
 	{Group: "trust", Name: "fileref-ca-superseded",
 		directives: "ca ca.crt\nauth-user-pass\n",
 		inline:     []string{"ca"}},
@@ -150,15 +113,11 @@ var fixtureShapes = []fixtureShape{
 			"remote vpn3.example.test 443\nauth-user-pass\n",
 		inline: []string{"ca"}},
 
-	// The third field is the only statement of transport these make.
 	{Group: "transport", Name: "per-remote-proto",
 		directives: "remote vpn1.example.test 1194 udp\nremote vpn2.example.test 443 tcp-client\n" +
 			"auth-user-pass\n",
 		inline: []string{"ca"}},
 
-	// remote-random with somewhere to shuffle to. Deployed profiles pair it
-	// with a single remote, where a shuffle is unobservable; without this one
-	// the shuffle is never actually exercised.
 	{Group: "transport", Name: "remote-random-several",
 		directives: "remote vpn1.example.test 1194\nremote vpn2.example.test 1194\n" +
 			"remote-random\nauth-user-pass\n",
@@ -172,15 +131,11 @@ var fixtureShapes = []fixtureShape{
 		directives: "remote vpn.example.test 443\nproto tcp-client\nport 443\nfloat\nauth-user-pass\n",
 		inline:     []string{"ca"}},
 
-	// An endpoint given as an address rather than a name, and a flag written
-	// bare where the same directive elsewhere carries a count.
 	{Group: "transport", Name: "address-literal-remote",
 		directives: "remote 203.0.113.9 1194\nexplicit-exit-notify\nauth-user-pass\n",
 		inline:     []string{"ca"}},
 
-	// proto spelled in upper case. OpenVPN matches the argument case-sensitively
-	// and refuses the file; this client lowercases it first, so the two
-	// disagree about a profile that is otherwise ordinary.
+	// Stock openvpn refuses upper-case proto; this client accepts it.
 	{Group: "transport", Name: "uppercase-proto",
 		directives: "remote vpn.example.test 1194 UDP\nproto UDP\nauth-user-pass\n",
 		inline:     []string{"ca"}},
@@ -202,10 +157,6 @@ var fixtureShapes = []fixtureShape{
 	{Group: "compression", Name: "allow-compression-no",
 		directives: "allow-compression no\nauth-user-pass\n", inline: []string{"ca"}},
 
-	// A compressing algorithm beside the directive that forbids one. The pair
-	// parses: the refusal belongs to compress.EffectiveMode, at the point the
-	// framing is chosen, and a set in which the two never meet states nothing
-	// about it.
 	{Group: "compression", Name: "allow-compression-no-with-lzo",
 		directives: "allow-compression no\ncomp-lzo\nauth-user-pass\n", inline: []string{"ca"}},
 
@@ -215,8 +166,7 @@ var fixtureShapes = []fixtureShape{
 		directives: "cipher AES-256-CBC\nauth SHA256\nauth-user-pass\n",
 		inline:     []string{"ca"}},
 
-	// No auth directive, so the digest is the SHA1 OpenVPN implies. That gap
-	// is reported for something the profile does not say.
+	// No auth directive: the digest is the implied SHA1.
 	{Group: "crypto", Name: "cbc-implied-digest",
 		directives: "cipher AES-256-CBC\nauth-user-pass\n",
 		inline:     []string{"ca"}},
@@ -225,8 +175,6 @@ var fixtureShapes = []fixtureShape{
 		directives: "cipher AES-256-GCM\nauth-user-pass\n",
 		inline:     []string{"ca"}},
 
-	// Cipher and digest in lower case. Both are looked up case-insensitively,
-	// and a profile that writes them this way is the only thing that says so.
 	{Group: "crypto", Name: "lowercase-cipher-and-digest",
 		directives: "cipher aes-256-cbc\nauth sha256\nauth-user-pass\n",
 		inline:     []string{"ca"}},
@@ -240,9 +188,6 @@ var fixtureShapes = []fixtureShape{
 		directives: "keysize 256\ntls-cipher TLS-DHE-RSA-WITH-AES-256-CBC-SHA\ntls-version-min 1.2\n" +
 			"auth-user-pass\n",
 		inline: []string{"ca"}},
-
-	// ---- Session ------------------------------------------------------
-
 }
 
 // writeFixtures writes every fixture into dir, one subdirectory per group,
@@ -274,7 +219,6 @@ func writeFixtures(t *testing.T, dir string) []fixtureFile {
 	return out
 }
 
-// render assembles one profile.
 func (s fixtureShape) render() (string, error) {
 	var b strings.Builder
 	if s.padded {
@@ -305,9 +249,7 @@ func (s fixtureShape) render() (string, error) {
 	return out, nil
 }
 
-// pad puts a comment and a blank line inside an inline block, where a real
-// generator's banner and its spacing end up. The body between the tags is the
-// part a parser has to skip over to find the material.
+// pad puts comment and blank lines inside an inline block.
 func pad(block string) string {
 	open, rest, ok := strings.Cut(block, "\n")
 	if !ok {
@@ -327,23 +269,17 @@ func wrapBlock(tag, body string) string {
 // fixtureFile is one written fixture.
 type fixtureFile struct {
 	group, name, path string
-	// refused says the parser must decline it.
-	refused bool
+	refused           bool
 }
 
 // id names the fixture in output — "wrap/tls-auth-empty".
 func (f fixtureFile) id() string { return f.group + "/" + f.name }
 
-// inertKey is a stand-in private key. Nothing parses it: the parser carries a
-// key body without reading it.
+// inertKey is a stand-in private key; the parser never reads it.
 const inertKey = "-----BEGIN PRIVATE KEY-----\nMIIBinertfixturebody\n-----END PRIVATE KEY-----\n"
 
-// inertCert is a real self-signed certificate, generated once per run.
-//
-// It has to be real, unlike caps', because one property here asks whether the
-// CA a profile names actually builds a trust store — which is what makes a
-// file-referenced CA usable rather than merely read. P-256 and a day's
-// validity: it is thrown away with the test.
+// inertCert is a real self-signed certificate, generated once per run, so a
+// CA can build a trust store.
 var inertCert = func() string {
 	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	if err != nil {
@@ -365,9 +301,7 @@ var inertCert = func() string {
 	return string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der}))
 }()
 
-// inertStaticKey is a well-formed OpenVPN static key: the parser *does* read
-// these, and refuses a body that is not 256 bytes, so this one has to be real
-// hex of the right length even though its value means nothing.
+// inertStaticKey is a well-formed 256-byte OpenVPN static key.
 var inertStaticKey = func() string {
 	var b strings.Builder
 	b.WriteString("#\n# 2048 bit OpenVPN static key\n#\n")
@@ -379,8 +313,8 @@ var inertStaticKey = func() string {
 	return b.String()
 }()
 
-// inlineBlock renders one inline block. The tag "tls-auth-empty" is the wrap
-// block with nothing between the tags, which is a shape and not an omission.
+// inlineBlock renders one inline block; "tls-auth-empty" is an empty
+// <tls-auth>.
 func inlineBlock(tag string) (string, error) {
 	switch tag {
 	case "ca", "cert":

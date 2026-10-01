@@ -13,16 +13,13 @@ import (
 	"github.com/buengese/go-openvpn/profile"
 )
 
-// testKeyFill is the fill byte the shared test key is built from. A second
-// value gives a second, unrelated key when a test needs to tell two apart.
 const (
 	testKeyFill      = 0xa5
 	testKeyFillOther = 0x3c
 )
 
-// testKey returns 256 bytes of made-up but well-formed key material. The bytes
-// authenticate nothing and are deliberately not random: every byte differs from
-// its neighbours, so a partial leak is as visible as a whole one.
+// testKey returns 256 bytes of well-formed key material in which every byte
+// differs from its neighbours, so a partial leak is visible.
 func testKey(fill byte) []byte {
 	key := make([]byte, profile.StaticKeySize)
 	for i := range key {
@@ -31,12 +28,8 @@ func testKey(fill byte) []byte {
 	return key
 }
 
-// staticKeyHex renders testKey as the 512 hex digits a key file holds.
 func staticKeyHex(fill byte) string { return hex.EncodeToString(testKey(fill)) }
 
-// staticKeyBlock renders testKey as the body of a static key file: header,
-// sixteen lines of thirty-two digits, footer. It is what goes between
-// <tls-auth> and </tls-auth>.
 func staticKeyBlock(fill byte) string {
 	digits := staticKeyHex(fill)
 	var b strings.Builder
@@ -49,8 +42,6 @@ func staticKeyBlock(fill byte) string {
 	return b.String()
 }
 
-// wrappedProfile is a profile carrying a wrap key and a key direction, in the
-// shape a real config ships: a bare inline block, no file reference.
 func wrappedProfile(tag string, fill byte, extra string) string {
 	return "client\nremote vpn.example.test 1194\nproto udp\n" + extra +
 		"<" + tag + ">\n" + staticKeyBlock(fill) + "</" + tag + ">\n"
@@ -84,9 +75,7 @@ func TestParseStaticKeyAcceptsDeployedForms(t *testing.T) {
 		{"no trailing newline", strings.TrimRight(staticKeyBlock(testKeyFill), "\n")},
 		{"ragged line lengths", lines(7)},
 		{"uppercase digits", strings.ToUpper(lines(32))},
-		// openvpn --genkey writes a three-line comment banner above the
-		// header, and configs inline it with the key. The .ovpn parser
-		// strips '#' lines, but a key read from a file will not have been.
+		// openvpn --genkey writes a comment banner above the header.
 		{"generated comment banner", "#\n# 2048 bit OpenVPN static key\n#\n" + staticKeyBlock(testKeyFill)},
 		{"semicolon comments and blank lines", ";note\n\n" + staticKeyBlock(testKeyFill) + "\n;end\n"},
 		{"leading and trailing whitespace", "   \t" + lines(32) + "  \n"},
@@ -103,8 +92,6 @@ func TestParseStaticKeyAcceptsDeployedForms(t *testing.T) {
 			if len(key) != profile.StaticKeySize {
 				t.Fatalf("key is %d bytes, want %d", len(key), profile.StaticKeySize)
 			}
-			// Compared, never printed: a failure that dumped the bytes would
-			// defeat the point of the type.
 			if string(key[:]) != string(want) {
 				t.Fatal("parsed key does not match the bytes it was rendered from")
 			}
@@ -170,9 +157,7 @@ func TestParseLoadsWrapKeys(t *testing.T) {
 			if other != nil {
 				t.Errorf("<%s> body reached the other wrap field", tag)
 			}
-			// The block must still be recorded alongside the loaded key:
-			// the capability preflight reads this list, and loading a body
-			// must not consume the record of the block it came from.
+			// The block must still be recorded alongside the loaded key.
 			if len(p.InlineBlocks) != 1 || p.InlineBlocks[0].Tag != tag {
 				t.Errorf("InlineBlocks = %v, want one %s entry", p.InlineBlocks, tag)
 			}
@@ -193,9 +178,7 @@ func TestParseWithoutWrapBlocksLeavesKeysNil(t *testing.T) {
 	}
 }
 
-// TestParseUnterminatedWrapBlockLoadsNothing pins the inline-block behaviour
-// for the wrap tags: an unclosed block is consumed to end of file and nothing
-// is loaded, exactly as for <ca>. It is not a parse error, here or in OpenVPN.
+// TestParseUnterminatedWrapBlockLoadsNothing: as for <ca>, not a parse error.
 func TestParseUnterminatedWrapBlockLoadsNothing(t *testing.T) {
 	src := "remote vpn.example.test 1194\n<tls-auth>\n" + staticKeyBlock(testKeyFill)
 	p, err := profile.ParseString(src)
@@ -210,8 +193,7 @@ func TestParseUnterminatedWrapBlockLoadsNothing(t *testing.T) {
 	}
 }
 
-// TestParseMalformedWrapBlockIsClassConfig pins that a truncated, over-long or
-// non-hex wrap-key body is diag.ClassConfig and names the block it came from.
+// TestParseMalformedWrapBlockIsClassConfig pins ClassConfig naming the block.
 func TestParseMalformedWrapBlockIsClassConfig(t *testing.T) {
 	digits := staticKeyHex(testKeyFill)
 	cases := []struct {
@@ -254,10 +236,8 @@ func TestParseMalformedWrapBlockIsClassConfig(t *testing.T) {
 
 // ---- key-direction ---------------------------------------------------
 
-// TestKeyDirectionAbsentIsNotZero is the trap the parser has to avoid: OpenVPN
-// uses the whole key in both directions when no key-direction is given and
-// per-direction halves when one is, so an absent direction read as 0 produces a
-// client that HMACs with the wrong material.
+// TestKeyDirectionAbsentIsNotZero pins that an absent key-direction is not
+// read as 0: OpenVPN uses the whole key in both directions then.
 func TestKeyDirectionAbsentIsNotZero(t *testing.T) {
 	absent, err := profile.ParseString(wrappedProfile("tls-auth", testKeyFill, ""))
 	if err != nil {
@@ -279,8 +259,6 @@ func TestKeyDirectionAbsentIsNotZero(t *testing.T) {
 	if n, ok := zero.KeyDirection.Value(); !ok || n != 0 {
 		t.Errorf("key-direction 0: Value() = %d, %v; want 0, true", n, ok)
 	}
-	// The zero value of the field is absent, so a hand-built profile that
-	// never went near the parser reports the right behaviour too.
 	if (&profile.Profile{}).KeyDirection != profile.KeyDirectionAbsent {
 		t.Error("the zero value of KeyDirection is not absent")
 	}
@@ -330,15 +308,12 @@ func TestParseKeyDirectionInvalid(t *testing.T) {
 
 // ---- Leak scan -------------------------------------------------------
 
-// needle is one rendering of the test key that must never appear in anything
-// the profile package emits. A leak through %v looks nothing like a leak
-// through json.Marshal, and a partial leak looks nothing like either.
+// needle is one rendering of the test key that must never be emitted.
 type needle struct {
 	name string
 	text string
 }
 
-// keyNeedles returns every encoding a leak could plausibly take.
 func keyNeedles(fill byte) []needle {
 	key := testKey(fill)
 	digits := staticKeyHex(fill)
@@ -354,7 +329,6 @@ func keyNeedles(fill byte) []needle {
 	}
 }
 
-// scan reports the needles present in text.
 func scan(text string, needles []needle) []string {
 	var found []string
 	for _, n := range needles {
@@ -365,9 +339,7 @@ func scan(text string, needles []needle) []string {
 	return found
 }
 
-// TestKeyNeedlesAreDiscriminating proves the scan below is not vacuous, the
-// way diag's redaction test proves each secret is present before checking it
-// is gone. A needle that matched nothing would make every assertion pass.
+// TestKeyNeedlesAreDiscriminating proves the leak scan is not vacuous.
 func TestKeyNeedlesAreDiscriminating(t *testing.T) {
 	needles := keyNeedles(testKeyFill)
 	key := testKey(testKeyFill)
@@ -384,9 +356,7 @@ func TestKeyNeedlesAreDiscriminating(t *testing.T) {
 	}
 }
 
-// TestStaticKeyNeverLeaks is the containment rule for key material: it appears
-// in no String, no error and no report. Everything the package can emit about a
-// wrapped profile is scanned for every encoding in keyNeedles.
+// TestStaticKeyNeverLeaks scans all package output for every keyNeedles form.
 func TestStaticKeyNeverLeaks(t *testing.T) {
 	needles := keyNeedles(testKeyFill)
 	src := wrappedProfile("tls-auth", testKeyFill, "key-direction 1\ncipher AES-256-CBC\n")
@@ -418,9 +388,7 @@ func TestStaticKeyNeverLeaks(t *testing.T) {
 		"%v of the key":             fmt.Sprintf("%v", p.TLSAuth),
 		"%+v of the key":            fmt.Sprintf("%+v", p.TLSAuth),
 		"%#v of the key":            fmt.Sprintf("%#v", p.TLSAuth),
-		// The surrounding brackets keep this a genuine trip through fmt's %s
-		// verb; without them staticcheck folds the call into String() and the
-		// verb goes untested.
+		// The brackets stop staticcheck folding this into String().
 		"%s of the key":            fmt.Sprintf("<%s>", p.TLSAuth),
 		"%v of the key value":      fmt.Sprintf("%v", *p.TLSAuth),
 		"%#v of the key value":     fmt.Sprintf("%#v", *p.TLSAuth),
@@ -453,7 +421,6 @@ func TestStaticKeyNeverLeaks(t *testing.T) {
 }
 
 // parseErrorText returns the full error chain of a failing parse, flattened.
-// A test that only looked at err.Error() would miss a wrapped cause.
 func parseErrorText(t *testing.T, src string) string {
 	t.Helper()
 	_, err := profile.ParseString(src)
@@ -463,7 +430,6 @@ func parseErrorText(t *testing.T, src string) string {
 	return strings.Join(diag.ErrorChain(err), "\n")
 }
 
-// staticKeyError returns the error text ParseStaticKey produces for body.
 func staticKeyError(t *testing.T, body []byte) string {
 	t.Helper()
 	_, err := profile.ParseStaticKey(body)
@@ -473,9 +439,6 @@ func staticKeyError(t *testing.T, body []byte) string {
 	return strings.Join(diag.ErrorChain(err), "\n")
 }
 
-// TestStaticKeyRenderingsAreThePlaceholder checks the positive half: the
-// renderings do not merely omit the key, they say what has been withheld, so
-// a reader of a log line knows a key was there.
 func TestStaticKeyRenderingsAreThePlaceholder(t *testing.T) {
 	var k profile.StaticKey
 	copy(k[:], testKey(testKeyFill))

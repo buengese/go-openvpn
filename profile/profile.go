@@ -1,25 +1,12 @@
-// Package profile parses OpenVPN .ovpn configuration files.
+// Package profile parses OpenVPN .ovpn configuration files, and builds
+// profiles programmatically from a Spec.
 //
-// It handles the directives that go-openvpn needs: remote, port, proto,
-// inline PEM blocks (<ca>, <cert>, <key>), the static-key blocks <tls-auth>
-// and <tls-crypt>, cipher, auth, rekey timing, and common extra options such
-// as comp-lzo / compress.
-//
-// Inline <tag>...</tag> blocks are recognised generically, so a block the
-// client has no field for is consumed as a block rather than having its body
-// parsed as directives. Every directive line is recorded on
-// Profile.Directives, and every block tag on Profile.InlineBlocks, for the
-// capability preflight in the caps package.
-//
-// A profile may also name its CA, certificate or key in a separate file
-// rather than inlining it. Resolving that name needs a directory, which is
-// the one behaviour that differs between the entry points: ParsePath and
-// ParseFileIn have one and read the file, ParseFile and ParseString do not
-// and refuse the profile rather than returning one with an empty trust
-// store. See ErrNoProfileDir and resolveFileRefs.
-//
-// <tls-auth> and <tls-crypt> bodies are secrets rather than public material:
-// see StaticKey for how they are kept out of logs, errors and reports.
+// Every directive line is recorded on Profile.Directives, and every inline
+// block tag on Profile.InlineBlocks, for the capability preflight in the caps
+// package. A profile that names its CA, certificate or key in a separate file
+// needs a directory to resolve it: ParsePath, ParseFileIn and ParseFileInFS
+// have one, ParseFile and ParseString refuse such a profile with
+// ErrNoProfileDir.
 package profile
 
 import (
@@ -38,10 +25,7 @@ import (
 	"github.com/buengese/go-openvpn/dns"
 )
 
-// Directive is one directive line exactly as the parser saw it, recorded
-// whether or not ParseFile acts on it. It lets the capability registry
-// answer what a profile asks for without re-reading the file; nothing on the
-// connection path reads it.
+// Directive is one directive line as the parser saw it.
 type Directive struct {
 	// Name is the directive keyword, lowercased.
 	Name string `json:"name"`
@@ -53,7 +37,7 @@ type Directive struct {
 	Line int `json:"line,omitempty"`
 }
 
-// String renders the directive back into its source form, keyword first.
+// String renders the directive back into its source form.
 func (d Directive) String() string {
 	if len(d.Args) == 0 {
 		return d.Name
@@ -61,37 +45,27 @@ func (d Directive) String() string {
 	return d.Name + " " + strings.Join(d.Args, " ")
 }
 
-// InlineBlock records that an inline <tag>...</tag> block was present.
-//
-// Only the tag name and its opening line are kept. Block bodies are
-// certificates, private keys and tls-auth keys; they are never copied into
-// this record, so an InlineBlock is always safe to log.
+// InlineBlock records that an inline <tag>...</tag> block was present. The
+// body is never kept, so an InlineBlock is safe to log.
 type InlineBlock struct {
-	// Tag is the block's tag name, verbatim, for example "ca" or "tls-auth".
+	// Tag is the block's tag name, verbatim.
 	Tag string
 	// Line is the 1-based line number of the opening tag.
 	Line int
 }
 
-// FileRef records a ca, cert or key directive that named a file instead of
-// inlining the material, and what the parser did with it.
-//
-// "The material is loaded" and "the file was read" are different facts and
-// the capability registry has to tell them apart: a profile carrying both an
-// inline <ca> block and a "ca ca.crt" line loads the CA from the block, as
-// OpenVPN does, and never opens the file.
-//
-// The file name is not kept — these records reach session reports.
+// FileRef records a ca, cert or key directive that named a file, and what the
+// parser did with it. The file name is not kept, since these records reach
+// session reports.
 type FileRef struct {
 	// Tag is the directive keyword: "ca", "cert" or "key".
 	Tag string
 	// Line is the 1-based line number the directive appeared on.
 	Line int
-	// Loaded reports that the file was read from the profile's directory
-	// into the matching field.
+	// Loaded reports that the file was read into the matching field.
 	Loaded bool
-	// Superseded reports that the profile also carried an inline <tag>
-	// block. The block is what the client uses and the file is not opened.
+	// Superseded reports that an inline block of the same tag was used
+	// instead, and the file was not opened.
 	Superseded bool
 }
 
@@ -113,17 +87,9 @@ func (p Proto) String() string {
 	return "udp"
 }
 
-// ParseProto normalises one of OpenVPN's transport spellings. It serves both
-// places a profile can name a transport — the --proto directive and the third
-// field of a --remote line — which accept the same vocabulary in OpenVPN.
-//
-// The address-family spellings (udp4, tcp6-client) are reduced to their
-// transport. The family half restricts which addresses the name may resolve
-// to; the client does not implement that, and the capability registry reports
-// the directive as degraded rather than supported.
-//
-// The -server spellings are refused: they ask this process to listen, and a
-// client that quietly dialed instead would not be doing what the config said.
+// ParseProto normalises an OpenVPN transport spelling, as used by --proto and
+// the third field of --remote. Address-family spellings (udp4, tcp6-client)
+// reduce to their transport; the -server spellings are refused.
 func ParseProto(s string) (Proto, bool) {
 	switch strings.ToLower(strings.TrimSpace(s)) {
 	case "udp", "udp4", "udp6":
@@ -136,30 +102,22 @@ func ParseProto(s string) (Proto, bool) {
 	}
 }
 
-// X509NameMatch is the match type of the --verify-x509-name directive: which
-// part of the server certificate's subject the directive's value is compared
-// against.
-//
-// It is never a SAN. OpenVPN's verify_cert compares the value against the
-// subject DN, or against the common name taken out of that DN, and no part of
-// the check looks at subjectAltName.
+// X509NameMatch is the match type of --verify-x509-name: which part of the
+// server certificate's subject the value is compared against.
 type X509NameMatch int
 
 const (
-	// X509NameSubject compares the value against the whole subject DN. It is
-	// the zero value because it is also OpenVPN's default: a
-	// --verify-x509-name line with no second argument means this one.
+	// X509NameSubject compares against the whole subject DN, OpenVPN's
+	// default.
 	X509NameSubject X509NameMatch = iota
-	// X509NameCN compares the value against the certificate's common name,
-	// spelled "name" in the profile.
+	// X509NameCN compares against the common name, spelled "name".
 	X509NameCN
-	// X509NameCNPrefix requires the certificate's common name to start with
-	// the value, spelled "name-prefix" in the profile.
+	// X509NameCNPrefix requires the common name to start with the value,
+	// spelled "name-prefix".
 	X509NameCNPrefix
 )
 
-// String returns the directive spelling of the match type, so that the value
-// a profile round-trips back to is the text the profile contained.
+// String returns the directive spelling of the match type.
 func (m X509NameMatch) String() string {
 	switch m {
 	case X509NameSubject:
@@ -196,16 +154,8 @@ func (m *X509NameMatch) UnmarshalText(text []byte) error {
 }
 
 // ParseX509NameMatch normalises the optional second argument of
-// --verify-x509-name. The empty string is the default, which is "subject".
-//
-// An unrecognised type is refused rather than defaulted: defaulting to
-// subject applies a stricter check than the profile asked for, and defaulting
-// to no check drops a certificate check on the floor. OpenVPN refuses it too
-// ("Unrecognized --verify-x509-name type" in options.c).
-//
-// The keyword is matched without regard to case, where OpenVPN's streq is
-// exact: a spelling OpenVPN would refuse to start on is accepted here, and
-// the certificate check is the same one either way.
+// --verify-x509-name, case-insensitively. The empty string is "subject". An
+// unrecognised type is refused, as OpenVPN refuses it.
 func ParseX509NameMatch(s string) (X509NameMatch, bool) {
 	switch strings.ToLower(strings.TrimSpace(s)) {
 	case "", "subject":
@@ -219,23 +169,16 @@ func ParseX509NameMatch(s string) (X509NameMatch, bool) {
 	}
 }
 
-// Remote is one --remote line: a host, a port, and optionally a protocol
-// that overrides the profile's own.
-//
-// Port and Proto are always resolved: a line that named neither carries the
-// profile's --port and --proto, which is what OpenVPN dials. ProtoSet is what
-// records whether the file said so.
+// Remote is one --remote line. Port and Proto are resolved against the
+// profile's --port and --proto when the line does not name them.
 type Remote struct {
 	// Host is the hostname or address as written in the profile.
 	Host string
 	// Port is the port to dial.
 	Port int
-	// Proto is the per-remote protocol from the third field. Absent means
-	// the profile's --proto applies, which is what OpenVPN does.
+	// Proto is the transport to dial.
 	Proto Proto
-	// ProtoSet reports whether the remote line named a protocol itself. It
-	// distinguishes a remote that inherited the profile's transport from one
-	// that chose the same transport explicitly.
+	// ProtoSet reports whether the remote line named a protocol itself.
 	ProtoSet bool
 }
 
@@ -244,185 +187,100 @@ type Remote struct {
 // It holds key material. TLSAuth and TLSCrypt redact under %v and
 // json.Marshal; CA, Cert and Key do not.
 type Profile struct {
-	// Remote is the VPN server hostname or IP.
+	// Remote, Port and Proto are Remotes[0].
 	Remote string
-	// Port is the server port (default 1194).
-	Port int
-	// Proto is the transport protocol.
-	Proto Proto
+	Port   int
+	Proto  Proto
 
-	// Remotes is every --remote line, in file order. It is never empty in a
-	// parsed profile: a file with no remote is refused.
-	//
-	// Remote, Port and Proto above are Remotes[0] — the compatibility
-	// surface, not the model. Anything that has to know there were others
-	// reads this. The client dials them in turn, in file order or shuffled
-	// when --remote-random asks for it, until one completes a handshake.
+	// Remotes is every --remote line, in file order. Never empty in a parsed
+	// profile.
 	Remotes []Remote
 
-	// CA is the PEM-encoded certificate authority bundle, from an inline
-	// <ca> block or from the file a "ca <file>" directive named.
-	CA []byte
-	// Cert is the PEM-encoded client certificate, from <cert> or a file.
+	// CA, Cert and Key are PEM bodies, from inline blocks or referenced files.
+	CA   []byte
 	Cert []byte
-	// Key is the PEM-encoded client private key, from <key> or a file.
-	Key []byte
+	Key  []byte
 
-	// FileRefs records every ca, cert or key directive that named a file
-	// rather than inlining its contents, in file order, and says for each
-	// whether the file was read or an inline block superseded it. It never
-	// holds the name — see FileRef.
+	// FileRefs records every ca, cert or key directive that named a file, in
+	// file order.
 	FileRefs []FileRef
 
-	// TLSAuth is the static key from the profile's <tls-auth> block, or nil
-	// when the profile carries none. It authenticates every control packet,
-	// the opening HARD_RESET included.
-	TLSAuth *StaticKey
-	// TLSCrypt is the static key from the profile's <tls-crypt> block, or
-	// nil when the profile carries none. It encrypts as well as
-	// authenticates the control channel.
-	//
-	// A profile carrying both blocks is contradictory — the two wraps are
-	// alternatives, not layers — and the parser loads both rather than
-	// choosing between them. Refusing the combination is the wrapper's
-	// decision, made from the whole profile.
+	// TLSAuth and TLSCrypt are the <tls-auth> and <tls-crypt> keys, or nil.
+	// The parser loads both if both are present; the connect path refuses the
+	// pair.
+	TLSAuth  *StaticKey
 	TLSCrypt *StaticKey
-	// KeyDirection is the --key-direction value: 0, 1, or absent. Absent is
-	// a behaviour of its own and not a default of 0 — see KeyDirection.
+	// KeyDirection is --key-direction: 0, 1, or absent.
 	KeyDirection KeyDirection
 
-	// Cipher is the negotiated data-channel cipher name, e.g. "AES-256-GCM".
+	// Cipher is the data-channel cipher name, e.g. "AES-256-GCM".
 	Cipher string
-	// Auth is the HMAC digest, e.g. "SHA256" (unused for GCM). A profile
-	// with no 'auth' directive gets OpenVPN's built-in default of SHA1; see
-	// the default in ParseFile for why that is not SHA256.
+	// Auth is the HMAC digest, e.g. "SHA256"; SHA1 when absent.
 	Auth string
-	// AuthSet reports whether the profile carried an explicit 'auth'
-	// directive. It distinguishes "auth SHA1" from an omitted directive,
-	// which yields the same SHA1 but says nothing about what was asked for.
+	// AuthSet reports whether the profile carried an explicit auth directive.
 	AuthSet bool
-	// Verb controls optional diagnostic logging. It follows OpenVPN's 0–11
-	// verbosity scale; the default is 3. Verbosity 4 logs the verified server
-	// certificate during each TLS handshake.
+	// Verb is OpenVPN's 0–11 verbosity; the default is 3. At 4 the verified
+	// server certificate is logged on each handshake.
 	Verb int
 
-	// RenegSec is the data-channel key renegotiation interval in seconds.
-	// An explicit "reneg-sec 0" disables client-initiated renegotiation, as it
-	// does in OpenVPN3. Profiles without the directive use the OpenVPN default
-	// of 3600 seconds.
+	// RenegSec is the key renegotiation interval in seconds; 3600 when
+	// absent, and 0 disables client-initiated renegotiation.
 	RenegSec int
-	// RenegBytes is the data-channel key renegotiation byte threshold.
-	// 0 means no byte-limit renegotiation.
+	// RenegBytes is the renegotiation byte threshold; 0 means none.
 	RenegBytes int64
-	// BecomePrimarySec is the optional delay before a negotiated rekey becomes
-	// the primary send key. 0 uses the OpenVPN default derived from reneg-sec.
+	// BecomePrimarySec delays a renegotiated key becoming the send key; 0
+	// uses the default derived from reneg-sec.
 	BecomePrimarySec int
 
-	// HandWindowSec is "hand-window": the time a key exchange is given to
-	// finish, and the ceiling on how long a renegotiated key waits before it
-	// becomes the send key. 0 means the profile asked for nothing and the
-	// reference's 60 applies (openvpn-2.6.22 src/openvpn/options.c:880).
+	// HandWindowSec is --hand-window; 0 means the reference's 60
+	// (openvpn-2.6.22 src/openvpn/options.c:880).
 	HandWindowSec int
 
-	// PingInterval is the keepalive send interval in seconds, from "ping N"
-	// or the first argument of "keepalive N M". 0 means the profile asked for
-	// nothing, and the client's default applies.
+	// PingInterval is the keepalive send interval in seconds, from ping or
+	// keepalive; 0 means the client default.
 	PingInterval int
-
-	// PingTimeout is the dead-link receive timeout in seconds, from
-	// "ping-restart N", "ping-exit N", or the second argument of
-	// "keepalive N M". 0 means the profile asked for nothing.
-	//
-	// One field for three directives because the reference keeps one
-	// variable: OpenVPN 2.6.22 src/openvpn/options.c lines 6963-6975 writes
-	// both ping-restart and ping-exit into options->ping_rec_timeout and
-	// separates them only by ping_rec_timeout_action, which is what PingExit
-	// records here.
+	// PingTimeout is the dead-link timeout in seconds, from ping-restart,
+	// ping-exit or keepalive; 0 means none. One field for all three, as in
+	// openvpn-2.6.22 src/openvpn/options.c:6963-6975.
 	PingTimeout int
-
-	// PingExit reports that PingTimeout came from "ping-exit" rather than
-	// "ping-restart": the profile asked for the session to end when the link
-	// goes quiet, not to be restarted.
-	//
-	// Nothing acts on it — this client's dead-link teardown is terminal
-	// either way, and Reconnect is the caller's to invoke — but discarding it
-	// would make "ping-exit 60" indistinguishable from "ping-restart 60".
+	// PingExit reports that PingTimeout came from ping-exit. Nothing acts on
+	// it; the client's dead-link teardown is terminal either way.
 	PingExit bool
 
-	// ExplicitExitNotify is how many exit notifications a deliberate
-	// disconnect puts on the wire, from "explicit-exit-notify [n]". 0 sends
-	// none, and is both the absent directive and an explicit
-	// "explicit-exit-notify 0".
-	//
-	// The bare directive means one notification, not "on" (OpenVPN 2.4.12
-	// src/openvpn/options.c:6133 stores a literal 1 when no argument is
-	// present).
-	//
-	// Stock openvpn refuses the directive alongside a TCP transport
-	// (options.c:2181). This client parses it either way and declines to send
-	// instead — a profile is a thing to measure, not a thing to reject.
+	// ExplicitExitNotify is how many exit notifications a disconnect sends. A
+	// bare directive means 1 (openvpn-2.4.12 src/openvpn/options.c:6133).
 	ExplicitExitNotify int
 
-	// Compression is the data-channel framing the profile itself asked for,
-	// from 'comp-lzo' or 'compress [algo]', independent of what the server
-	// later pushes. compress.EffectiveMode reconciles the two.
-	//
-	// It matters more than a client-side preference usually would, because
-	// OpenVPN's server does not push its compression setting at all: a
-	// comp-lzo config talking to a comp-lzo server agrees by silence, and a
-	// client that reads only the PUSH_REPLY concludes there is no framing and
-	// sends unframed packets that the peer drops.
+	// Compression is the data-channel framing the profile asked for, from
+	// comp-lzo or compress. The server does not push its own, so a client that
+	// ignored this would send packets a comp-lzo peer drops.
 	Compression compress.Mode
-	// AllowCompression is the '--allow-compression' policy. 'no' refuses a
-	// compressing algorithm from either source and permits a framing stub.
+	// AllowCompression is the --allow-compression policy.
 	AllowCompression compress.AllowCompression
 
-	// TunMTU is the MTU for the TUN interface, from the 'tun-mtu' directive.
-	// 0 means use the default (1500).
+	// TunMTU is --tun-mtu; 0 means 1500.
 	TunMTU int
 
-	// MSSFix is the maximum segment size clamp value, from the 'mssfix' directive.
-	// A zero value with MSSFixSet true explicitly disables MSS clamping.
-	MSSFix int
-	// MSSFixMode is how the MSSFix number is measured, from the directive's
-	// optional second word.
+	// MSSFix is the --mssfix clamp and MSSFixMode how it is measured.
+	// MSSFixSet distinguishes "mssfix 0", which disables clamping, from an
+	// absent directive, which applies OpenVPN's default.
+	MSSFix     int
 	MSSFixMode MSSFixMode
-	// MSSFixSet reports whether the profile explicitly set a numeric mssfix
-	// value. It distinguishes "mssfix 0" from an omitted directive, for which
-	// OpenVPN applies its default MSS clamp.
-	MSSFixSet bool
+	MSSFixSet  bool
 
-	// RemoteRandom reports that the profile carried '--remote-random'. When
-	// true, the client shuffles Remotes before trying them, so that a fleet
-	// of clients sharing one config does not converge on the first endpoint.
-	//
-	// Remotes itself stays in file order: the shuffle is the dialer's, made
-	// per attempt. Writing it back into the parsed profile would make a
-	// second attempt against the same profile start from the first attempt's
-	// permutation.
+	// RemoteRandom asks the dialer to shuffle Remotes on each attempt.
+	// Remotes itself stays in file order.
 	RemoteRandom bool
 
-	// RandomHostname indicates the 'remote-random-hostname' directive was present.
-	// When true, the client must prepend a random subdomain to Remote before dialing.
-	// It is not cosmetic: a deployment that carries the directive may have no
-	// DNS record for the bare hostname at all, so the label is what makes the
-	// endpoint resolvable. The dialer applies it on both paths.
+	// RandomHostname asks the dialer to prepend a random label to the
+	// hostname; some deployments have no DNS record for the bare name.
 	RandomHostname bool
 
-	// VerifyX509Name is the value of the 'verify-x509-name' directive: the
-	// subject DN or common name the server certificate must present. It is
-	// empty when the profile carries no such directive, which is what the
-	// verifier reads to decide whether to make the check at all.
-	//
-	// It is not a hostname and it is not matched against a SAN. Profiles are
-	// issued that set it to the certificate's own CN, which is precisely not
-	// the endpoint they are dialled at.
+	// VerifyX509Name is the subject DN or common name the server certificate
+	// must present, empty for no check. It is not a hostname and is not
+	// matched against a SAN.
 	VerifyX509Name string
-
-	// VerifyX509NameMatch is the directive's optional second argument, which
-	// says which part of the subject VerifyX509Name is compared against.
-	// The zero value is X509NameSubject, matching OpenVPN's default for a
-	// line that omits it.
+	// VerifyX509NameMatch says which part of the subject is compared.
 	VerifyX509NameMatch X509NameMatch
 
 	// AuthUserPass reports that the profile carried auth-user-pass.
@@ -432,61 +290,37 @@ type Profile struct {
 	RemoteCertTLSServer bool
 	NSCertTypeServer    bool
 
-	// Federated is set when the profile contains 'auth-federate' or
-	// 'x-go-openvpn-flow saml' (or its former spelling
-	// 'x-openlawsvpn-flow saml'): the profile authenticates against an identity
-	// provider rather than with anything it carries itself.
-	//
-	// It reads the file and nothing else; recognising a federated endpoint by
-	// its hostname is auth/saml.IsAWSEndpoint's job.
+	// Federated is set by auth-federate or "x-go-openvpn-flow saml" (formerly
+	// x-openlawsvpn-flow): authenticate against an identity provider.
 	Federated bool
 
-	// DNS is the static resolver configuration the profile's dhcp-option
-	// directives asked for. It is merged with what the server pushes, which
-	// wins where the two overlap.
+	// DNS is the resolver configuration from the profile's dhcp-option
+	// directives. What the server pushes wins where the two overlap.
 	DNS dns.Config
 
-	// Directives records every directive line the parser encountered, in
-	// file order, including directives it does not act on. Lines inside an
-	// inline <tag>...</tag> block are never recorded here.
-	//
-	// This is diagnostic data for the capability preflight; the connection
-	// path uses the typed fields above.
+	// Directives records every directive line in file order, including those
+	// the parser ignores, for the capability preflight.
 	Directives []Directive
 
-	// InlineBlocks records the inline <tag>...</tag> blocks the profile
-	// contained, in file order — tag names and line numbers only, never the
-	// bodies. The parser loads the bodies of <ca>, <cert>, <key>,
-	// <tls-auth> and <tls-crypt>; any other tag, <tls-crypt-v2> among them,
-	// is recognised as a block so that its contents are not mistaken for
-	// directives, but is otherwise unused. This list is the input to the
-	// capability preflight, so it describes what the file said whether or not
-	// the client has anywhere to put it.
+	// InlineBlocks records every inline block's tag and line, in file order,
+	// for the capability preflight.
 	InlineBlocks []InlineBlock
 }
 
 // AuthFlow describes which authentication mechanism the profile asks for.
-// The zero value is a plain OpenVPN profile rather than a federated one.
 type AuthFlow int
 
 const (
-	// FlowCertAuth is standard mutual-TLS client certificate authentication.
-	// Read from a profile that embeds both <cert> and <key> and asks for no
-	// credentials.
+	// FlowCertAuth is mutual-TLS client certificate authentication: the
+	// profile embeds <cert> and <key> and asks for no credentials.
 	FlowCertAuth AuthFlow = iota
-	// FlowUserPass is username/password authentication (auth-user-pass).
-	// Read from a profile carrying an auth-user-pass directive, and used as
-	// the fallback when no other pattern matches.
+	// FlowUserPass is username/password authentication, and the fallback.
 	FlowUserPass
-	// FlowFederated is authentication against an identity provider, over the
-	// SAML/CRV1 two-exchange flow. Read from auth-federate, which is the
-	// directive AWS Client VPN profiles carry and which any other server can
-	// carry to ask for the same thing.
+	// FlowFederated is the SAML/CRV1 flow against an identity provider.
 	FlowFederated
 )
 
-// String names the flow, so that a value reaching a log line or a test failure
-// says which one it is.
+// String names the flow.
 func (f AuthFlow) String() string {
 	switch f {
 	case FlowCertAuth:
@@ -500,25 +334,15 @@ func (f AuthFlow) String() string {
 	}
 }
 
-// RequiresCredentials reports whether the profile carries an auth-user-pass
-// directive. The values themselves come from the client's credential
-// callback; a profile never carries them.
-//
-// It reads the recorded directives, so a profile assembled in memory rather
-// than parsed reports false — it carries no directives, and so nothing in it
-// has asked for credentials.
+// RequiresCredentials reports whether the profile carries auth-user-pass. The
+// values come from the client's credential callback.
 func (p *Profile) RequiresCredentials() bool {
 	return p.AuthUserPass
 }
 
-// AuthFlow reports which authentication mechanism the profile asks for. It
-// reads what the file says and nothing else; recognising an endpoint by its
-// hostname is auth/saml.IsAWSEndpoint's job, not a file parser's.
-//
-// auth-user-pass is tested before the embedded certificate because a profile
-// may carry both, and there the certificate is one half of the credential and
-// the password the other. Nothing is lost by preferring it: the certificate
-// reaches the TLS configuration from the profile fields, never from the flow.
+// AuthFlow reports which authentication mechanism the profile asks for, from
+// the profile alone. A profile with auth-user-pass and a certificate is
+// FlowUserPass; the certificate is still used.
 func (p *Profile) AuthFlow() AuthFlow {
 	if p.Federated {
 		return FlowFederated
@@ -532,21 +356,14 @@ func (p *Profile) AuthFlow() AuthFlow {
 	return FlowUserPass
 }
 
-// ParseFile parses an .ovpn profile from the provided reader.
-//
-// It has bytes and no location, so a profile that names its CA, certificate
-// or key in a file is refused with ErrNoProfileDir rather than returned with
-// the material missing. ParsePath, or ParseFileIn when the bytes are already
-// in hand, is the entry point that can read one.
+// ParseFile parses an .ovpn profile from r. A profile that names a file is
+// refused with ErrNoProfileDir.
 func ParseFile(r io.Reader) (*Profile, error) {
 	return parse(r, nil)
 }
 
-// ParseFileIn parses an .ovpn profile from r, resolving the file-referenced
-// ca, cert and key directives against baseDir.
-//
-// It is ParsePath for a caller that already holds the bytes, or that must not
-// let the path reach an error message. An empty baseDir behaves exactly as
+// ParseFileIn parses an .ovpn profile from r, resolving file-referenced ca,
+// cert and key directives against baseDir. An empty baseDir behaves as
 // ParseFile.
 func ParseFileIn(r io.Reader, baseDir string) (*Profile, error) {
 	if baseDir == "" {
@@ -580,15 +397,12 @@ func parse(r io.Reader, res fileResolver) (*Profile, error) {
 		lineNo++
 		line := strings.TrimSpace(scanner.Text())
 
-		// Skip blank lines and comments.
 		if line == "" || strings.HasPrefix(line, "#") || strings.HasPrefix(line, ";") {
 			continue
 		}
 
-		// Inside an inline block: the body is opaque to the directive parser.
-		// An unterminated block is not an error, here or in OpenVPN — the body
-		// is consumed to end of file and closeBlock never runs, so nothing is
-		// loaded from it.
+		// An unterminated block consumes the rest of the file and loads
+		// nothing, as in OpenVPN.
 		if inlineTag != "" {
 			if line == "</"+inlineTag+">" {
 				if err := a.closeBlock(inlineTag, inlineBuf.Bytes()); err != nil {
@@ -603,7 +417,6 @@ func parse(r io.Reader, res fileResolver) (*Profile, error) {
 			continue
 		}
 
-		// Opening inline block tag, for any tag name.
 		if tag, ok := inlineOpenTag(line); ok {
 			inlineTag = tag
 			inlineBuf.Reset()
@@ -611,11 +424,7 @@ func parse(r io.Reader, res fileResolver) (*Profile, error) {
 			continue
 		}
 
-		// Markup, not a directive: a well-formed opening tag was consumed
-		// above, so a line still starting with '<' is a stray closing tag or
-		// malformed markup. No OpenVPN directive begins with '<', and
-		// recording one would collide with the inline-block names the
-		// capability registry uses.
+		// A stray closing tag or malformed markup, not a directive.
 		if strings.HasPrefix(line, "<") {
 			continue
 		}
@@ -640,11 +449,8 @@ func parse(r io.Reader, res fileResolver) (*Profile, error) {
 }
 
 // inlineOpenTag reports whether line is an opening inline block tag such as
-// "<tls-auth>", returning the tag name.
-//
-// A tag name is a non-empty run of letters, digits, '-' and '_'. Anything
-// else — "<", "<>", "< ca >", "</ca>" — is not a tag, so a stray angle
-// bracket cannot swallow the rest of the file.
+// "<tls-auth>", returning the tag name: a non-empty run of letters, digits,
+// '-' and '_'.
 func inlineOpenTag(line string) (string, bool) {
 	if len(line) < 3 || line[0] != '<' || line[len(line)-1] != '>' {
 		return "", false
@@ -662,20 +468,13 @@ func inlineOpenTag(line string) (string, bool) {
 	return tag, true
 }
 
-// ParseString is a convenience wrapper around ParseFile for in-memory
-// profiles.
-//
-// Like ParseFile it has no directory, so a profile naming its CA in a file is
-// refused with ErrNoProfileDir rather than returned with an empty trust store.
+// ParseString parses an in-memory profile, as ParseFile.
 func ParseString(s string) (*Profile, error) {
 	return ParseFile(strings.NewReader(s))
 }
 
-// ParsePath opens path and parses it as an .ovpn profile file.
-//
-// It is the entry point that can resolve a "ca <file>" reference, because it
-// is the only one that knows where the profile came from. Names are resolved
-// against the profile's own directory and confined to it; see readConfined.
+// ParsePath opens path and parses it, resolving file references against the
+// profile's own directory and confined to it.
 func ParsePath(path string) (*Profile, error) {
 	f, err := os.Open(path)
 	if err != nil {
@@ -685,20 +484,18 @@ func ParsePath(path string) (*Profile, error) {
 	return parse(f, dirResolver{filepath.Dir(path)})
 }
 
-// MSSFixMode says how a numeric mssfix value is measured. It is the directive's
-// optional second word, and the three modes subtract different things before
-// the result becomes an MSS.
+// MSSFixMode says how a numeric mssfix value is measured, from the directive's
+// optional second word.
 type MSSFixMode int
 
 const (
-	// MSSFixLink counts the tunnel encapsulation — transport prefix, opcode,
-	// packet id and crypto — but not the outer IP and UDP/TCP headers. This is
-	// what a bare "mssfix N" means.
+	// MSSFixLink counts the tunnel encapsulation but not the outer IP and
+	// UDP/TCP headers: a bare "mssfix N".
 	MSSFixLink MSSFixMode = iota
-	// MSSFixEncap counts the outer IP and UDP/TCP headers as well: "mssfix N mtu".
+	// MSSFixEncap counts the outer headers as well: "mssfix N mtu".
 	MSSFixEncap
-	// MSSFixFixed counts no encapsulation at all. The value is the payload
-	// budget, less only the inner IPv4 and TCP headers: "mssfix N fixed".
+	// MSSFixFixed counts no encapsulation, only the inner IPv4 and TCP
+	// headers: "mssfix N fixed".
 	MSSFixFixed
 )
 

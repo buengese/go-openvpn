@@ -1,8 +1,3 @@
-// Tests for file-referenced ca, cert and key: that the material arrives — a
-// profile parsed from a path gets the bytes of the file beside it, one parsed
-// from a string is told why it did not — and that nothing else arrives, the
-// name having come out of a config this process did not write. The fixtures are
-// written per test into a temporary directory.
 package profile_test
 
 import (
@@ -21,9 +16,7 @@ import (
 	"github.com/buengese/go-openvpn/profile"
 )
 
-// caPEM is a plausible CA body. Nothing parses it as a certificate here; the
-// parser's job is to deliver the bytes, and TestFileReferencedCA is
-// where real PEM has to build a real pool.
+// caPEM is a plausible CA body; the parser only has to deliver the bytes.
 const caPEM = "-----BEGIN CERTIFICATE-----\nMIIBfixture\n-----END CERTIFICATE-----\n"
 
 // writeProfile writes body to dir as a .ovpn file and returns its path.
@@ -49,9 +42,7 @@ func writeFile(t *testing.T, dir, name, content string) string {
 	return path
 }
 
-// configErr asserts that err is a ClassConfig failure at StageParse, which is
-// what every file-reference refusal must be: fix the input, and knowable
-// before a socket is opened.
+// configErr asserts that err is a ClassConfig failure at StageParse.
 func configErr(t *testing.T, err error) {
 	t.Helper()
 	if err == nil {
@@ -69,8 +60,6 @@ func configErr(t *testing.T, err error) {
 	}
 }
 
-// TestParsePathReadsFileReferences is the file-reference shape: a name beside
-// the profile, no inline block, and the bytes have to arrive.
 func TestParsePathReadsFileReferences(t *testing.T) {
 	for _, tc := range []struct {
 		directive string
@@ -111,9 +100,8 @@ func TestParsePathReadsFileReferences(t *testing.T) {
 	}
 }
 
-// TestParsePathReadsAllThreeAtOnce covers the shape the matrix uses: a profile
-// naming all three files, each landing in its own field. The names differ from
-// the tags so a mix-up cannot pass.
+// TestParsePathReadsAllThreeAtOnce uses names that differ from the tags so a
+// mix-up cannot pass.
 func TestParsePathReadsAllThreeAtOnce(t *testing.T) {
 	dir := t.TempDir()
 	writeFile(t, dir, "authority.pem", "CA-BODY\n")
@@ -139,9 +127,6 @@ func TestParsePathReadsAllThreeAtOnce(t *testing.T) {
 	}
 }
 
-// TestParsePathResolvesASubdirectory allows what confinement is for: a name
-// under the profile's directory rather than beside it. "keys/ca.crt" is inside
-// and must be read.
 func TestParsePathResolvesASubdirectory(t *testing.T) {
 	dir := t.TempDir()
 	writeFile(t, dir, filepath.Join("keys", "ca.crt"), caPEM)
@@ -156,10 +141,8 @@ func TestParsePathResolvesASubdirectory(t *testing.T) {
 	}
 }
 
-// TestParseStringRefusesAFileReference pins what the entry point does with a
-// name it has no directory to resolve: ClassConfig, and a message saying which
-// call to make, rather than a profile whose empty CA reaches the TLS handshake
-// with nothing to verify the server against.
+// TestParseStringRefusesAFileReference pins ClassConfig and a message naming
+// the call to make instead.
 func TestParseStringRefusesAFileReference(t *testing.T) {
 	for _, directive := range []string{"ca", "cert", "key"} {
 		t.Run(directive, func(t *testing.T) {
@@ -179,10 +162,8 @@ func TestParseStringRefusesAFileReference(t *testing.T) {
 	}
 }
 
-// TestInlineBlockWinsOverAFileReference covers a config carrying both
-// spellings: the block wins and the file is not opened. The decoy is a real
-// file with the right name and the wrong contents, so a parser that read it is
-// caught by comparing the material rather than by hoping it did not.
+// TestInlineBlockWinsOverAFileReference uses a decoy file to prove it is
+// never read.
 func TestInlineBlockWinsOverAFileReference(t *testing.T) {
 	dir := t.TempDir()
 	writeFile(t, dir, "ca.crt", "DECOY: the file must not be read\n")
@@ -207,9 +188,8 @@ func TestInlineBlockWinsOverAFileReference(t *testing.T) {
 	}
 }
 
-// TestInlineBlockWinsWithNoDirectoryAtAll is why the redundancy is recorded
-// rather than warned about: such a config parses from a string, because the
-// reference it carries never needed a directory.
+// TestInlineBlockWinsWithNoDirectoryAtAll: a superseded reference needs no
+// directory.
 func TestInlineBlockWinsWithNoDirectoryAtAll(t *testing.T) {
 	p, err := profile.ParseString("remote vpn.example.test 443\nca ca.crt\n" +
 		"<ca>\n" + caPEM + "</ca>\n")
@@ -224,11 +204,7 @@ func TestInlineBlockWinsWithNoDirectoryAtAll(t *testing.T) {
 	}
 }
 
-// TestInlineBlockWinsWhateverCaseItIsWritten pins the upper-case tag, where two
-// halves of one decision can disagree: hasInlineBlock folds case, so the
-// reference is superseded and the file never opened, and closeBlock has to fold
-// too or the body goes nowhere and the CA ends up in neither place. The decoy
-// is what proves the file stayed shut.
+// TestInlineBlockWinsWhateverCaseItIsWritten pins the upper-case tag.
 func TestInlineBlockWinsWhateverCaseItIsWritten(t *testing.T) {
 	for _, tag := range []string{"CA", "Ca", "cA"} {
 		t.Run(tag, func(t *testing.T) {
@@ -254,9 +230,6 @@ func TestInlineBlockWinsWhateverCaseItIsWritten(t *testing.T) {
 	}
 }
 
-// TestInlineBlockWinsWhenItComesFirst covers the other ordering: a profile
-// writing the block above the reference must behave identically, which is why
-// resolution happens after the whole file is read rather than in the scan loop.
 func TestInlineBlockWinsWhenItComesFirst(t *testing.T) {
 	dir := t.TempDir()
 	writeFile(t, dir, "ca.crt", "DECOY\n")
@@ -272,15 +245,8 @@ func TestInlineBlockWinsWhenItComesFirst(t *testing.T) {
 	}
 }
 
-// TestFileReferenceEscapesAreRefused is the security half of the unit: every
-// case here is a way of naming something outside the profile's directory, and
-// each must be ErrFileRefEscapes, from the containment check, before anything is
-// opened. The secret is written where the escapes point, so a case that got past
-// the check would put it in Profile.CA.
-//
-// "../../etc/shadow" also pins the order of the checks: it resolves to a path
-// that does not exist, so a containment test made after the filesystem lookup
-// would refuse it as missing — the right outcome by accident.
+// TestFileReferenceEscapesAreRefused pins ErrFileRefEscapes before anything
+// is opened. The secret sits where each escape points.
 func TestFileReferenceEscapesAreRefused(t *testing.T) {
 	const secret = "SECRET-OUTSIDE-THE-PROFILE-DIRECTORY"
 
@@ -301,7 +267,6 @@ func TestFileReferenceEscapesAreRefused(t *testing.T) {
 			if err := os.MkdirAll(dir, 0o750); err != nil {
 				t.Fatalf("create directory: %v", err)
 			}
-			// Written at both levels the relative cases can reach.
 			writeFile(t, root, "secret.txt", secret)
 			writeFile(t, filepath.Join(root, "outer"), "secret.txt", secret)
 			path := writeProfile(t, dir, "remote vpn.example.test 443\nca "+tc.ref+"\n")
@@ -321,9 +286,8 @@ func TestFileReferenceEscapesAreRefused(t *testing.T) {
 	}
 }
 
-// TestFileReferenceWalkingBackInsideIsAllowed states the rule the escapes above
-// apply: what matters is where the name lands, not whether it contains "..".
-// Refusing it would refuse a config OpenVPN reads without comment.
+// TestFileReferenceWalkingBackInsideIsAllowed: where the name lands is what
+// counts, not whether it contains "..".
 func TestFileReferenceWalkingBackInsideIsAllowed(t *testing.T) {
 	root := t.TempDir()
 	dir := filepath.Join(root, "profiles")
@@ -342,9 +306,8 @@ func TestFileReferenceWalkingBackInsideIsAllowed(t *testing.T) {
 	}
 }
 
-// TestFileReferenceSymlinkEscapeIsRefused is the case a lexical check passes:
-// "ca ca.crt" names a file inside the profile's directory by every spelling test
-// there is, and points out of it. Containment is tested after EvalSymlinks.
+// TestFileReferenceSymlinkEscapeIsRefused pins that containment is tested
+// after EvalSymlinks.
 func TestFileReferenceSymlinkEscapeIsRefused(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("symlink creation needs a privilege this test will not ask for")
@@ -375,9 +338,6 @@ func TestFileReferenceSymlinkEscapeIsRefused(t *testing.T) {
 	}
 }
 
-// TestFileReferenceSymlinkInsideIsAllowed is the other side of the same check:
-// confinement is about where the name resolves, not about whether a link was
-// involved.
 func TestFileReferenceSymlinkInsideIsAllowed(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("symlink creation needs a privilege this test will not ask for")
@@ -398,9 +358,8 @@ func TestFileReferenceSymlinkInsideIsAllowed(t *testing.T) {
 	}
 }
 
-// TestFileReferenceFailuresAreConfigErrors covers the ways a name inside the
-// directory still cannot be read. All are ClassConfig: the caller has to change
-// the input rather than retry.
+// TestFileReferenceFailuresAreConfigErrors covers unreadable names inside
+// the directory.
 func TestFileReferenceFailuresAreConfigErrors(t *testing.T) {
 	t.Run("missing", func(t *testing.T) {
 		dir := t.TempDir()
@@ -450,9 +409,6 @@ func TestFileReferenceFailuresAreConfigErrors(t *testing.T) {
 	})
 }
 
-// TestFileReferenceSurvivesCRLF covers the other line ending. bufio.ScanLines
-// strips the carriage return, and a file name is a path that gets opened rather
-// than a value that gets compared: "ca.crt\r" is a name no directory holds.
 func TestFileReferenceSurvivesCRLF(t *testing.T) {
 	dir := t.TempDir()
 	writeFile(t, dir, "ca.crt", caPEM)
@@ -467,9 +423,6 @@ func TestFileReferenceSurvivesCRLF(t *testing.T) {
 	}
 }
 
-// TestFileReferenceToleratesTrailingWhitespace is the same concern from the
-// other direction: whatever the line carries after the name must not reach
-// os.Open.
 func TestFileReferenceToleratesTrailingWhitespace(t *testing.T) {
 	dir := t.TempDir()
 	writeFile(t, dir, "ca.crt", caPEM)
@@ -484,9 +437,6 @@ func TestFileReferenceToleratesTrailingWhitespace(t *testing.T) {
 	}
 }
 
-// TestProfileWithNoFileReferenceRecordsNone keeps the common case honest: a
-// profile that inlines everything it uses has an empty FileRefs, not a record
-// of a directive it does not have.
 func TestProfileWithNoFileReferenceRecordsNone(t *testing.T) {
 	p, err := profile.ParseString("remote vpn.example.test 443\n<ca>\n" + caPEM + "</ca>\n")
 	if err != nil {

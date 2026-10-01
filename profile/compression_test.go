@@ -1,11 +1,3 @@
-// Parser tests for the compression directives. A profile that carries one and
-// parses it into nothing reaches the data channel believing there is no
-// framing.
-//
-// TestCompressionDirectives in fixtures_test.go holds the parsing to the
-// framing each spelling names.
-// What is here is the shape of the parse — every spelling, including the ones
-// deployed profiles do not use, and the refusals.
 package profile_test
 
 import (
@@ -21,10 +13,8 @@ func compressionProfile(src string) string {
 	return strings.Join([]string{"client", "dev tun", "remote host.example.test 1194", src}, "\n") + "\n"
 }
 
-// TestParseCompressionDirectives covers every spelling OpenVPN accepts, and
-// the two that decide the framing rather than the algorithm: bare "compress"
-// carries COMP_F_SWAP and "comp-lzo no" does not, though both select
-// COMP_ALG_STUB and neither ever compresses.
+// TestParseCompressionDirectives covers every spelling OpenVPN accepts. Bare
+// "compress" swaps and "comp-lzo no" does not, though both are stubs.
 func TestParseCompressionDirectives(t *testing.T) {
 	cases := []struct {
 		src  string
@@ -41,9 +31,8 @@ func TestParseCompressionDirectives(t *testing.T) {
 		{"compress lzo", compress.ModeLZO},
 		{"compress lz4", compress.ModeLZ4},
 		{"compress lz4-v2", compress.ModeLZ4v2},
-		// OpenVPN applies its options in order, so the last one wins.
+		// Last one wins.
 		{"comp-lzo\ncompress stub-v2", compress.ModeStubV2},
-		// Case is folded, as it is for every other directive argument.
 		{"COMPRESS LZ4", compress.ModeLZ4},
 	}
 	for _, tc := range cases {
@@ -58,9 +47,6 @@ func TestParseCompressionDirectives(t *testing.T) {
 	}
 }
 
-// TestParseAllowCompressionDirective covers the policy directive. Profiles
-// carry "allow-compression no", and a parser that reads no compression
-// directive at all honours it by accident: there is nothing to refuse.
 func TestParseAllowCompressionDirective(t *testing.T) {
 	cases := []struct {
 		src  string
@@ -83,10 +69,6 @@ func TestParseAllowCompressionDirective(t *testing.T) {
 	}
 }
 
-// TestParseCompressionRefusesWhatOpenVPNRefuses keeps the parser from
-// inventing a mode for a directive OpenVPN would reject. A profile that names
-// an algorithm nobody implements is a config error, and saying so is more use
-// than silently framing it as something else.
 func TestParseCompressionRefusesWhatOpenVPNRefuses(t *testing.T) {
 	for _, src := range []string{
 		"comp-lzo maybe",
@@ -101,10 +83,8 @@ func TestParseCompressionRefusesWhatOpenVPNRefuses(t *testing.T) {
 	}
 }
 
-// TestCompressionSurvivesAllowCompressionNo states the interaction the parser
-// does *not* resolve. Both fields are recorded as the file wrote them;
-// reconciling them is compress.EffectiveMode's job, at the point where the
-// server's pushed directive is also known.
+// TestCompressionSurvivesAllowCompressionNo pins that the parser records both
+// fields as written; compress.EffectiveMode reconciles them.
 func TestCompressionSurvivesAllowCompressionNo(t *testing.T) {
 	p, err := profile.ParseString(compressionProfile("comp-lzo\nallow-compression no"))
 	if err != nil {

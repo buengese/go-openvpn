@@ -11,9 +11,7 @@ import (
 	"github.com/buengese/go-openvpn/profile"
 )
 
-// render writes a Spec as the .ovpn text a file would have carried. It exists
-// only so the equivalence property below has something to compare against: if
-// Build and the parser agree on this text, they agree on the rules.
+// render is Spec.Render, failing the test on error.
 func render(t *testing.T, s profile.Spec) string {
 	t.Helper()
 	out, err := s.Render()
@@ -23,9 +21,7 @@ func render(t *testing.T, s profile.Spec) string {
 	return out
 }
 
-// stripLines clears Line on every recorded directive and block. Build numbers
-// them by the order it emits; a file numbers them by where they sit in it, and
-// nothing reads the number except a human looking at a report.
+// stripLines clears Line, which Build numbers in emit order.
 func stripLines(p *profile.Profile) {
 	for i := range p.Directives {
 		p.Directives[i].Line = 0
@@ -45,10 +41,7 @@ MIIBkTCB+wIJAKZ1x2Y3Z4Q5MA0GCSqGSIb3DQEBCwUAMBQxEjAQBgNVBAMMCXRl
 -----END CERTIFICATE-----
 `
 
-// TestBuildEqualsParse is the property the whole design rests on: a profile
-// built from a Spec is the profile the parser would have produced from the
-// equivalent file. Without it, Build is a second set of rules that will drift
-// from the first.
+// TestBuildEqualsParse pins that Build matches parsing the equivalent file.
 func TestBuildEqualsParse(t *testing.T) {
 	specs := map[string]profile.Spec{
 		"bare remote": {
@@ -128,9 +121,7 @@ func TestBuildEqualsParse(t *testing.T) {
 			VerifyX509Name:      "server-",
 			VerifyX509NameMatch: profile.X509NameCNPrefix,
 		},
-		// A file's directive names are case-folded by the parser, and
-		// Compression is the only Spec field that carries one: unfolded, this
-		// spec and the identical file put different bytes on the wire.
+		// The parser case-folds directive names.
 		"an upper-case compression directive": {
 			Remotes:     []profile.Endpoint{{Host: "vpn.example.test"}},
 			Compression: "COMP-LZO",
@@ -170,9 +161,7 @@ func TestBuildEqualsParse(t *testing.T) {
 	}
 }
 
-// TestBuildRefusesWhatAFileCouldNotSay covers the shapes a Spec can express
-// but a profile cannot, which are exactly the ones that would let a caller
-// build something the parser could never produce.
+// TestBuildRefusesWhatAFileCouldNotSay covers Specs no file could express.
 func TestBuildRefusesWhatAFileCouldNotSay(t *testing.T) {
 	base := func() profile.Spec {
 		return profile.Spec{Remotes: []profile.Endpoint{{Host: "vpn.example.test"}}}
@@ -184,26 +173,15 @@ func TestBuildRefusesWhatAFileCouldNotSay(t *testing.T) {
 		"extra carries a field's directive": func(s *profile.Spec) {
 			s.Extra = []profile.Directive{{Name: "ping-restart", Args: []string{"60"}}}
 		},
-		"extra names a block":      func(s *profile.Spec) { s.Extra = []profile.Directive{{Name: "ca", Args: []string{"x"}}} },
-		"argument with whitespace": func(s *profile.Spec) { s.Extra = []profile.Directive{{Name: "setenv", Args: []string{"a b"}}} },
-		"unparseable proto":        func(s *profile.Spec) { s.Remotes[0].Proto = "tcp-server" },
-		"unusable static key":      func(s *profile.Spec) { s.TLSAuth = []byte("not a key") },
-		// Compression is the one field that hands over a directive name, so
-		// it is the one that can be handed a string naming no directive at
-		// all — an empty strings.Fields result, where a neighbour returns.
+		"extra names a block":            func(s *profile.Spec) { s.Extra = []profile.Directive{{Name: "ca", Args: []string{"x"}}} },
+		"argument with whitespace":       func(s *profile.Spec) { s.Extra = []profile.Directive{{Name: "setenv", Args: []string{"a b"}}} },
+		"unparseable proto":              func(s *profile.Spec) { s.Remotes[0].Proto = "tcp-server" },
+		"unusable static key":            func(s *profile.Spec) { s.TLSAuth = []byte("not a key") },
 		"compression is only whitespace": func(s *profile.Spec) { s.Compression = " " },
-		// strings.Fields does not stop at a line break, so two lines weld
-		// into one directive carrying the second line's words as arguments.
-		"compression spans two lines": func(s *profile.Spec) { s.Compression = "comp-lzo\nno" },
-		// The caller slip the round-trip guard exists to catch: the whole
-		// directive written into Name with nothing in Args, which comes back
-		// from the parser as a name carrying an argument.
+		"compression spans two lines":    func(s *profile.Spec) { s.Compression = "comp-lzo\nno" },
 		"extra name carries its argument": func(s *profile.Spec) {
 			s.Extra = []profile.Directive{{Name: "tls-version-min 1.2"}}
 		},
-		// A name is the first word of a line, and these three characters
-		// make a line something other than a directive: "<ca>" opens an
-		// inline block, and the other two make the line a comment.
 		"extra name opens an inline block": func(s *profile.Spec) {
 			s.Extra = []profile.Directive{{Name: "<ca>"}}
 		},
@@ -221,29 +199,18 @@ func TestBuildRefusesWhatAFileCouldNotSay(t *testing.T) {
 	}
 }
 
-// FuzzBuildEqualsParse drives the same property over generated specs, the half
-// that would notice a field added to Spec without a matching line in the
-// renderer. A spec Build rejects is not interesting — Build is allowed to be
-// stricter than a file; what must never happen is Build accepting something the
-// parser then reads differently. Compression and Extra are generated because
-// their contents are directive text rather than a typed value, so they are the
-// two fields that can say something a file cannot.
+// FuzzBuildEqualsParse drives TestBuildEqualsParse over generated specs.
+// Build may reject a spec; it must never accept one the parser reads differently.
 func FuzzBuildEqualsParse(f *testing.F) {
 	f.Add("vpn.example.test", 1194, "udp", "AES-256-GCM", "SHA256", 1500, 1400, 3600, 10, 60, true, false,
 		"comp-lzo", "tls-version-min", "1.2")
 	f.Add("a.test", 0, "", "", "", 0, 0, 0, 0, 0, false, false, "", "", "")
 	f.Add("b.test", 443, "tcp", "AES-128-CBC", "SHA1", 1400, 0, 0, 5, 30, false, true,
 		"compress lz4-v2", "", "")
-	// Two seeds from this fuzzer: an empty host renders as "remote  1130" and
-	// strings.Fields reads the port as the hostname, and a host of " 0"
-	// renders as "remote  0 443" and is trimmed to "0". Build refuses any
-	// argument that is not already one whitespace-free word.
+	// Hosts that do not render as one whitespace-free word.
 	f.Add("", 1130, "", "", "", 0, 0, 0, 0, 0, false, false, "", "", "")
 	f.Add(" 0", 443, "", "0", "0", 1400, 0, 0, 153, 30, true, true, "", "", "")
-	// Four more seeds: " " indexes an empty strings.Fields result; "COMP-LZO"
-	// builds a profile with compression off where the identical file parses to
-	// comp-lzo; "0\n0" welds into one directive where the file holds two; and a
-	// whole directive in Extra's Name comes back split into name and argument.
+	// Compression and Extra text that a file would read differently.
 	f.Add("c.test", 0, "", "", "", 0, 0, 0, 0, 0, false, false, " ", "", "")
 	f.Add("d.test", 0, "", "", "", 0, 0, 0, 0, 0, false, false, "COMP-LZO", "", "")
 	f.Add("0", 13, "", "", "0", 0, 0, 0, 0, 91, true, false, "0\n0", "1", "0")
@@ -265,9 +232,7 @@ func FuzzBuildEqualsParse(f *testing.F) {
 			Compression:         compression,
 		}
 		s.PingTimeout = keepalive
-		// An empty name with an argument is generated on purpose: it is the
-		// one Extra shape Build refuses outright, and refusing it is what
-		// keeps a nameless directive out of the rendered file.
+		// An empty name with an argument is the Extra shape Build refuses.
 		if extraName != "" || extraArg != "" {
 			d := profile.Directive{Name: extraName}
 			if extraArg != "" {
@@ -295,9 +260,7 @@ func FuzzBuildEqualsParse(f *testing.F) {
 	})
 }
 
-// ExampleSpec_Build shows the shape a caller writes when there is no file to
-// read, and what the assembler fills in around it: the port and transport a
-// remote did not name, and the cipher and digest an absent directive implies.
+// ExampleSpec_Build shows the defaults the assembler fills in around a Spec.
 func ExampleSpec_Build() {
 	p, err := profile.Spec{
 		Remotes:             []profile.Endpoint{{Host: "vpn.example.test"}},
