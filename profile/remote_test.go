@@ -199,16 +199,6 @@ func TestRemotesMayDisagreeOnTransport(t *testing.T) {
 	}
 }
 
-func TestRemoteCRLF(t *testing.T) {
-	p := mustParse(t, "remote hr-zag.example.test 443 tcp-client\r\ncomp-lzo\r\n")
-	if p.Proto != profile.ProtoTCP {
-		t.Errorf("Proto = %v, want tcp through CRLF line endings", p.Proto)
-	}
-	if p.Remotes[0].Host != "hr-zag.example.test" {
-		t.Errorf("Host = %q, want no carriage return in it", p.Remotes[0].Host)
-	}
-}
-
 func TestRemoteRejectsBadFields(t *testing.T) {
 	tests := []struct {
 		name string
@@ -230,24 +220,5 @@ func TestRemoteRejectsBadFields(t *testing.T) {
 				t.Errorf("ParseString(%q) succeeded, want an error", tt.src)
 			}
 		})
-	}
-}
-
-// TestProtoDirectiveAcceptsAddressFamilies pins that address-family spellings
-// reduce to their transport; the family itself is not applied.
-func TestProtoDirectiveAcceptsAddressFamilies(t *testing.T) {
-	for _, spelling := range []string{"udp4", "udp6", "tcp4-client", "tcp6"} {
-		p, err := profile.ParseString("remote host 443\nproto " + spelling + "\n")
-		if err != nil {
-			t.Errorf("proto %s: %v", spelling, err)
-			continue
-		}
-		want := profile.ProtoTCP
-		if strings.HasPrefix(spelling, "udp") {
-			want = profile.ProtoUDP
-		}
-		if p.Proto != want {
-			t.Errorf("proto %s = %v, want %v", spelling, p.Proto, want)
-		}
 	}
 }

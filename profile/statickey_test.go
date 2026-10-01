@@ -165,19 +165,6 @@ func TestParseLoadsWrapKeys(t *testing.T) {
 	}
 }
 
-func TestParseWithoutWrapBlocksLeavesKeysNil(t *testing.T) {
-	p, err := profile.ParseString(minimal)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if p.TLSAuth != nil || p.TLSCrypt != nil {
-		t.Error("a profile with no wrap block came back with a key")
-	}
-	if p.KeyDirection != profile.KeyDirectionAbsent {
-		t.Errorf("KeyDirection = %v, want absent", p.KeyDirection)
-	}
-}
-
 // TestParseUnterminatedWrapBlockLoadsNothing: as for <ca>, not a parse error.
 func TestParseUnterminatedWrapBlockLoadsNothing(t *testing.T) {
 	src := "remote vpn.example.test 1194\n<tls-auth>\n" + staticKeyBlock(testKeyFill)

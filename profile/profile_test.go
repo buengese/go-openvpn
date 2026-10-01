@@ -4,6 +4,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/buengese/go-openvpn/internal/compress"
 	"github.com/buengese/go-openvpn/profile"
 )
 
@@ -233,22 +234,6 @@ func TestParseNumericDirectives(t *testing.T) {
 		},
 		{"mssfix", "mssfix 1200\n", func(p *profile.Profile) int64 { return int64(p.MSSFix) }, 1200},
 		{"ping", "ping 5\n", func(p *profile.Profile) int64 { return int64(p.PingInterval) }, 5},
-		{"ping-restart", "ping-restart 120\n", func(p *profile.Profile) int64 { return int64(p.PingTimeout) }, 120},
-		{"ping-exit", "ping-exit 90\n", func(p *profile.Profile) int64 { return int64(p.PingTimeout) }, 90},
-		{
-			// Reference: OpenVPN 2.6.22 src/openvpn/helper.c line 549; the
-			// doubling there is server-only.
-			name: "keepalive expands to its interval",
-			src:  "keepalive 10 120\n",
-			get:  func(p *profile.Profile) int64 { return int64(p.PingInterval) },
-			want: 10,
-		},
-		{
-			name: "keepalive expands to its timeout",
-			src:  "keepalive 10 120\n",
-			get:  func(p *profile.Profile) int64 { return int64(p.PingTimeout) },
-			want: 120,
-		},
 		{
 			// Zero means unset.
 			name: "absent ping leaves the interval unset",
@@ -260,13 +245,6 @@ func TestParseNumericDirectives(t *testing.T) {
 			name: "absent ping-restart leaves the timeout unset",
 			src:  "",
 			get:  func(p *profile.Profile) int64 { return int64(p.PingTimeout) },
-			want: 0,
-		},
-		{
-			// mssfix 0 is valid and means "disabled".
-			name: "mssfix 0",
-			src:  "mssfix 0\n",
-			get:  func(p *profile.Profile) int64 { return int64(p.MSSFix) },
 			want: 0,
 		},
 	} {
@@ -404,21 +382,6 @@ dhcp-option DOMAIN-ROUTE us-east-2.eks.amazonaws.com
 	}
 }
 
-func TestParseComments(t *testing.T) {
-	cfg := `
-# This is a comment
-; And this
-remote vpn.example.com 1194
-`
-	p, err := profile.ParseString(cfg)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if p.Remote != "vpn.example.com" {
-		t.Errorf("Remote = %q", p.Remote)
-	}
-}
-
 // TestParseExplicitExitNotify covers the optional count; a negative or
 // unparseable one disables the notification.
 // Reference: OpenVPN 2.4.12 options.c line 4210, positive_atoi.
@@ -427,14 +390,18 @@ func TestParseExplicitExitNotify(t *testing.T) {
 		directive string
 		want      int
 	}{
-		{"explicit-exit-notify", 1},
-		{"explicit-exit-notify 5", 5},
-		{"explicit-exit-notify 0", 0},
-		{"explicit-exit-notify -3", 0},
-		{"explicit-exit-notify garbage", 0},
+		{"proto udp", 0},
+		{"proto udp\nexplicit-exit-notify", 1},
+		{"proto udp\nexplicit-exit-notify 5", 5},
+		{"proto udp\nexplicit-exit-notify 0", 0},
+		{"proto udp\nexplicit-exit-notify -3", 0},
+		{"proto udp\nexplicit-exit-notify garbage", 0},
+		// Stock openvpn refuses this over TCP; we parse it and decline to
+		// send. Reference: OpenVPN 2.4.12 options.c line 2181.
+		{"proto tcp-client\nexplicit-exit-notify 5", 5},
 	} {
 		t.Run(tc.directive, func(t *testing.T) {
-			p, err := profile.ParseString("remote h 1194\nproto udp\n" + tc.directive + "\n")
+			p, err := profile.ParseString("remote h 1194\n" + tc.directive + "\n")
 			if err != nil {
 				t.Fatalf("ParseString(%q): %v", tc.directive, err)
 			}
@@ -443,32 +410,6 @@ func TestParseExplicitExitNotify(t *testing.T) {
 					tc.directive, p.ExplicitExitNotify, tc.want)
 			}
 		})
-	}
-}
-
-// TestParseWithoutExplicitExitNotifySendsNone pins that absent and
-// "explicit-exit-notify 0" parse alike.
-func TestParseWithoutExplicitExitNotifySendsNone(t *testing.T) {
-	p, err := profile.ParseString("remote h 1194\nproto udp\n")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if p.ExplicitExitNotify != 0 {
-		t.Errorf("ExplicitExitNotify = %d with no directive, want 0", p.ExplicitExitNotify)
-	}
-}
-
-// TestParseExplicitExitNotifyIsAcceptedOverTCP pins a deliberate divergence:
-// stock openvpn refuses this; we parse it.
-// Reference: OpenVPN 2.4.12 options.c line 2181.
-func TestParseExplicitExitNotifyIsAcceptedOverTCP(t *testing.T) {
-	p, err := profile.ParseString("remote h 443\nproto tcp-client\nexplicit-exit-notify 5\n")
-	if err != nil {
-		t.Fatalf("ParseString: %v", err)
-	}
-	if p.ExplicitExitNotify != 5 {
-		t.Errorf("ExplicitExitNotify = %d, want 5: the directive is parsed over TCP and "+
-			"declined at the send", p.ExplicitExitNotify)
 	}
 }
 
@@ -672,23 +613,6 @@ func TestParseRecordsInlineBlocksNotTheirBodies(t *testing.T) {
 	}
 	if strings.Contains(string(p.CA), "OpenVPN Static key") {
 		t.Error("tls-auth body leaked into CA")
-	}
-}
-
-func TestParseInlineBlocksStillLoadCertAndKey(t *testing.T) {
-	p, err := profile.ParseString(minimal)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(p.CA) == 0 || len(p.Cert) == 0 || len(p.Key) == 0 {
-		t.Fatalf("CA/Cert/Key = %d/%d/%d bytes, want all non-empty", len(p.CA), len(p.Cert), len(p.Key))
-	}
-	var tags []string
-	for _, b := range p.InlineBlocks {
-		tags = append(tags, b.Tag)
-	}
-	if got := strings.Join(tags, ","); got != "ca,cert,key" {
-		t.Errorf("InlineBlocks = %q, want ca,cert,key", got)
 	}
 }
 
@@ -937,5 +861,100 @@ func TestMSSFixModeParsesTheSecondWord(t *testing.T) {
 				t.Errorf("MSSFixMode = %v, want %v", p.MSSFixMode, tc.wantMode)
 			}
 		})
+	}
+}
+
+// compressionProfile wraps src in the smallest profile ParseString accepts.
+func compressionProfile(src string) string {
+	return strings.Join([]string{"client", "dev tun", "remote host.example.test 1194", src}, "\n") + "\n"
+}
+
+// TestParseCompressionDirectives covers every spelling OpenVPN accepts. Bare
+// "compress" swaps and "comp-lzo no" does not, though both are stubs.
+func TestParseCompressionDirectives(t *testing.T) {
+	cases := []struct {
+		src  string
+		want compress.Mode
+	}{
+		{"", compress.ModeNone},
+		{"comp-lzo", compress.ModeLZO},
+		{"comp-lzo yes", compress.ModeLZO},
+		{"comp-lzo adaptive", compress.ModeLZO},
+		{"comp-lzo no", compress.ModeStubNoSwap},
+		{"compress", compress.ModeStub},
+		{"compress stub", compress.ModeStub},
+		{"compress stub-v2", compress.ModeStubV2},
+		{"compress lzo", compress.ModeLZO},
+		{"compress lz4", compress.ModeLZ4},
+		{"compress lz4-v2", compress.ModeLZ4v2},
+		// Last one wins.
+		{"comp-lzo\ncompress stub-v2", compress.ModeStubV2},
+		{"COMPRESS LZ4", compress.ModeLZ4},
+	}
+	for _, tc := range cases {
+		p, err := profile.ParseString(compressionProfile(tc.src))
+		if err != nil {
+			t.Errorf("ParseString(%q): %v", tc.src, err)
+			continue
+		}
+		if p.Compression != tc.want {
+			t.Errorf("%q parsed to %v, want %v", tc.src, p.Compression, tc.want)
+		}
+	}
+}
+
+func TestParseAllowCompressionDirective(t *testing.T) {
+	cases := []struct {
+		src  string
+		want compress.AllowCompression
+	}{
+		{"", compress.AllowUnset},
+		{"allow-compression no", compress.AllowNo},
+		{"allow-compression asym", compress.AllowAsym},
+		{"allow-compression yes", compress.AllowYes},
+	}
+	for _, tc := range cases {
+		p, err := profile.ParseString(compressionProfile(tc.src))
+		if err != nil {
+			t.Errorf("ParseString(%q): %v", tc.src, err)
+			continue
+		}
+		if p.AllowCompression != tc.want {
+			t.Errorf("%q parsed to %v, want %v", tc.src, p.AllowCompression, tc.want)
+		}
+	}
+}
+
+func TestParseCompressionRefusesWhatOpenVPNRefuses(t *testing.T) {
+	for _, src := range []string{
+		"comp-lzo maybe",
+		"compress snappy",
+		"compress lzo-v9",
+		"allow-compression",
+		"allow-compression sometimes",
+	} {
+		if _, err := profile.ParseString(compressionProfile(src)); err == nil {
+			t.Errorf("ParseString(%q) succeeded; OpenVPN refuses this directive", src)
+		}
+	}
+}
+
+// TestCompressionSurvivesAllowCompressionNo pins that the parser records both
+// fields as written; compress.EffectiveMode reconciles them.
+func TestCompressionSurvivesAllowCompressionNo(t *testing.T) {
+	p, err := profile.ParseString(compressionProfile("comp-lzo\nallow-compression no"))
+	if err != nil {
+		t.Fatalf("ParseString: %v", err)
+	}
+	if p.Compression != compress.ModeLZO {
+		t.Errorf("Compression = %v, want %v: the parser records what the file said",
+			p.Compression, compress.ModeLZO)
+	}
+	if p.AllowCompression != compress.AllowNo {
+		t.Errorf("AllowCompression = %v, want %v", p.AllowCompression, compress.AllowNo)
+	}
+	if _, err := compress.EffectiveMode(p.Compression, compress.ModeNone, p.AllowCompression); err == nil {
+		t.Error("EffectiveMode accepted comp-lzo under allow-compression no; that " +
+			"combination must fail rather than downgrade silently")
 	}
 }

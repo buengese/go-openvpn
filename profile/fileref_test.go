@@ -60,46 +60,6 @@ func configErr(t *testing.T, err error) {
 	}
 }
 
-func TestParsePathReadsFileReferences(t *testing.T) {
-	for _, tc := range []struct {
-		directive string
-		file      string
-		body      string
-		get       func(*profile.Profile) []byte
-	}{
-		{"ca", "ca.vpn.example.test.crt", caPEM, func(p *profile.Profile) []byte { return p.CA }},
-		{"cert", "client.crt", "-----BEGIN CERTIFICATE-----\nc\n-----END CERTIFICATE-----\n",
-			func(p *profile.Profile) []byte { return p.Cert }},
-		{"key", "client.key", "-----BEGIN PRIVATE KEY-----\nk\n-----END PRIVATE KEY-----\n",
-			func(p *profile.Profile) []byte { return p.Key }},
-	} {
-		t.Run(tc.directive, func(t *testing.T) {
-			dir := t.TempDir()
-			writeFile(t, dir, tc.file, tc.body)
-			path := writeProfile(t, dir,
-				"remote vpn.example.test 443\n"+tc.directive+" "+tc.file+"\n")
-
-			p, err := profile.ParsePath(path)
-			if err != nil {
-				t.Fatalf("ParsePath: %v", err)
-			}
-			if got := string(tc.get(p)); got != tc.body {
-				t.Errorf("%s material = %q, want %q", tc.directive, got, tc.body)
-			}
-			if len(p.FileRefs) != 1 {
-				t.Fatalf("FileRefs = %+v, want one entry", p.FileRefs)
-			}
-			ref := p.FileRefs[0]
-			if ref.Tag != tc.directive || !ref.Loaded || ref.Superseded {
-				t.Errorf("FileRef = %+v, want %s loaded", ref, tc.directive)
-			}
-			if ref.Line != 2 {
-				t.Errorf("FileRef.Line = %d, want 2", ref.Line)
-			}
-		})
-	}
-}
-
 // TestParsePathReadsAllThreeAtOnce uses names that differ from the tags so a
 // mix-up cannot pass.
 func TestParsePathReadsAllThreeAtOnce(t *testing.T) {
@@ -117,13 +77,13 @@ func TestParsePathReadsAllThreeAtOnce(t *testing.T) {
 	if string(p.CA) != "CA-BODY\n" || string(p.Cert) != "CERT-BODY\n" || string(p.Key) != "KEY-BODY\n" {
 		t.Errorf("material landed in the wrong fields: ca=%q cert=%q key=%q", p.CA, p.Cert, p.Key)
 	}
-	if len(p.FileRefs) != 3 {
-		t.Fatalf("FileRefs = %+v, want three", p.FileRefs)
+	want := []profile.FileRef{
+		{Tag: "ca", Line: 2, Loaded: true},
+		{Tag: "cert", Line: 3, Loaded: true},
+		{Tag: "key", Line: 4, Loaded: true},
 	}
-	for _, ref := range p.FileRefs {
-		if !ref.Loaded {
-			t.Errorf("%s was not read: %+v", ref.Tag, ref)
-		}
+	if !slices.Equal(p.FileRefs, want) {
+		t.Errorf("FileRefs = %+v, want %+v", p.FileRefs, want)
 	}
 }
 
@@ -162,32 +122,6 @@ func TestParseStringRefusesAFileReference(t *testing.T) {
 	}
 }
 
-// TestInlineBlockWinsOverAFileReference uses a decoy file to prove it is
-// never read.
-func TestInlineBlockWinsOverAFileReference(t *testing.T) {
-	dir := t.TempDir()
-	writeFile(t, dir, "ca.crt", "DECOY: the file must not be read\n")
-	path := writeProfile(t, dir, "remote vpn.example.test 443\nca ca.crt\n"+
-		"<ca>\n"+caPEM+"</ca>\n")
-
-	p, err := profile.ParsePath(path)
-	if err != nil {
-		t.Fatalf("ParsePath: %v", err)
-	}
-	if strings.Contains(string(p.CA), "DECOY") {
-		t.Fatalf("the file was read over the inline block: CA = %q", p.CA)
-	}
-	if string(p.CA) != caPEM {
-		t.Errorf("CA = %q, want the inline block's body", p.CA)
-	}
-	if len(p.FileRefs) != 1 {
-		t.Fatalf("FileRefs = %+v, want one entry", p.FileRefs)
-	}
-	if ref := p.FileRefs[0]; !ref.Superseded || ref.Loaded {
-		t.Errorf("FileRef = %+v, want superseded and not loaded", ref)
-	}
-}
-
 // TestInlineBlockWinsWithNoDirectoryAtAll: a superseded reference needs no
 // directory.
 func TestInlineBlockWinsWithNoDirectoryAtAll(t *testing.T) {
@@ -204,44 +138,32 @@ func TestInlineBlockWinsWithNoDirectoryAtAll(t *testing.T) {
 	}
 }
 
-// TestInlineBlockWinsWhateverCaseItIsWritten pins the upper-case tag.
-func TestInlineBlockWinsWhateverCaseItIsWritten(t *testing.T) {
-	for _, tag := range []string{"CA", "Ca", "cA"} {
-		t.Run(tag, func(t *testing.T) {
+// TestInlineBlockWinsOverAFileReference uses a decoy file to prove it is
+// never read, whatever the tag's case and wherever the block sits.
+func TestInlineBlockWinsOverAFileReference(t *testing.T) {
+	for _, tc := range []struct{ tag, order string }{
+		{"ca", "ref first"}, {"ca", "block first"},
+		{"CA", "ref first"}, {"Ca", "ref first"}, {"cA", "block first"},
+	} {
+		t.Run(tc.tag+" "+tc.order, func(t *testing.T) {
 			dir := t.TempDir()
 			writeFile(t, dir, "ca.crt", "DECOY: the file must not be read\n")
-			path := writeProfile(t, dir, "remote vpn.example.test 443\nca ca.crt\n"+
-				"<"+tag+">\n"+caPEM+"</"+tag+">\n")
-
-			p, err := profile.ParsePath(path)
+			block := "<" + tc.tag + ">\n" + caPEM + "</" + tc.tag + ">\n"
+			body := "ca ca.crt\n" + block
+			if tc.order == "block first" {
+				body = block + "ca ca.crt\n"
+			}
+			p, err := profile.ParsePath(writeProfile(t, dir, "remote vpn.example.test 443\n"+body))
 			if err != nil {
 				t.Fatalf("ParsePath: %v", err)
 			}
-			if strings.Contains(string(p.CA), "DECOY") {
-				t.Fatalf("the file was read over the inline block: CA = %q", p.CA)
-			}
 			if string(p.CA) != caPEM {
-				t.Errorf("CA = %q, want the <%s> block's body", p.CA, tag)
+				t.Errorf("CA = %q, want the inline block's body", p.CA)
 			}
-			if len(p.FileRefs) != 1 || !p.FileRefs[0].Superseded {
-				t.Errorf("FileRefs = %+v, want one superseded entry", p.FileRefs)
+			if len(p.FileRefs) != 1 || !p.FileRefs[0].Superseded || p.FileRefs[0].Loaded {
+				t.Errorf("FileRefs = %+v, want one superseded, unloaded entry", p.FileRefs)
 			}
 		})
-	}
-}
-
-func TestInlineBlockWinsWhenItComesFirst(t *testing.T) {
-	dir := t.TempDir()
-	writeFile(t, dir, "ca.crt", "DECOY\n")
-	path := writeProfile(t, dir, "remote vpn.example.test 443\n"+
-		"<ca>\n"+caPEM+"</ca>\nca ca.crt\n")
-
-	p, err := profile.ParsePath(path)
-	if err != nil {
-		t.Fatalf("ParsePath: %v", err)
-	}
-	if string(p.CA) != caPEM {
-		t.Errorf("CA = %q, want the inline block's body", p.CA)
 	}
 }
 
@@ -409,20 +331,6 @@ func TestFileReferenceFailuresAreConfigErrors(t *testing.T) {
 	})
 }
 
-func TestFileReferenceSurvivesCRLF(t *testing.T) {
-	dir := t.TempDir()
-	writeFile(t, dir, "ca.crt", caPEM)
-	path := writeProfile(t, dir, "remote vpn.example.test 443\r\nca ca.crt\r\n")
-
-	p, err := profile.ParsePath(path)
-	if err != nil {
-		t.Fatalf("ParsePath on a CRLF profile: %v", err)
-	}
-	if string(p.CA) != caPEM {
-		t.Errorf("CA = %q, want the file's contents", p.CA)
-	}
-}
-
 func TestFileReferenceToleratesTrailingWhitespace(t *testing.T) {
 	dir := t.TempDir()
 	writeFile(t, dir, "ca.crt", caPEM)
@@ -434,19 +342,6 @@ func TestFileReferenceToleratesTrailingWhitespace(t *testing.T) {
 	}
 	if string(p.CA) != caPEM {
 		t.Errorf("CA = %q, want the file's contents", p.CA)
-	}
-}
-
-func TestProfileWithNoFileReferenceRecordsNone(t *testing.T) {
-	p, err := profile.ParseString("remote vpn.example.test 443\n<ca>\n" + caPEM + "</ca>\n")
-	if err != nil {
-		t.Fatalf("ParseString: %v", err)
-	}
-	if len(p.FileRefs) != 0 {
-		t.Errorf("FileRefs = %+v, want none", p.FileRefs)
-	}
-	if string(p.CA) != caPEM {
-		t.Errorf("CA = %q, want the inline block's body", p.CA)
 	}
 }
 

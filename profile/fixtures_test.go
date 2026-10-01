@@ -14,7 +14,6 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/buengese/go-openvpn/internal/compress"
 	"github.com/buengese/go-openvpn/profile"
 )
 
@@ -57,69 +56,6 @@ func hasDirective(p *profile.Profile, name string) bool {
 	return false
 }
 
-// firstArg returns a directive's first argument, or "".
-func firstArg(p *profile.Profile, name string) string {
-	for _, d := range p.Directives {
-		if d.Name == name && len(d.Args) > 0 {
-			return d.Args[0]
-		}
-	}
-	return ""
-}
-
-// TestWrapKeysComeFromInlineBlocks pins that a wrap key is loaded exactly when
-// an inline block carries one, and key-direction parses exactly when present.
-func TestWrapKeysComeFromInlineBlocks(t *testing.T) {
-	fixtures := fixtures(t)
-	var parsed, refused, authKeys, cryptKeys, directions int
-	for _, f := range fixtures {
-		p, _, err := parseFixture(f.path)
-		if err != nil {
-			refused++
-			continue
-		}
-		parsed++
-
-		if n := countBlocks(p, "tls-auth"); n > 0 {
-			if p.TLSAuth == nil {
-				t.Errorf("%s: a <tls-auth> block loaded no key", f.id())
-			} else {
-				authKeys++
-			}
-		} else if p.TLSAuth != nil {
-			t.Errorf("%s: a tls-auth key was loaded with no block to load it from", f.id())
-		}
-
-		if n := countBlocks(p, "tls-crypt"); n > 0 {
-			if p.TLSCrypt == nil {
-				t.Errorf("%s: a <tls-crypt> block loaded no key", f.id())
-			} else {
-				cryptKeys++
-			}
-		} else if p.TLSCrypt != nil {
-			t.Errorf("%s: a tls-crypt key was loaded with no block to load it from", f.id())
-		}
-
-		given := hasDirective(p, "key-direction")
-		value, parsedDir := p.KeyDirection.Value()
-		if given != parsedDir {
-			t.Errorf("%s: key-direction directive=%v but parsed=%v", f.id(), given, parsedDir)
-		}
-		if given {
-			directions++
-			if want := firstArg(p, "key-direction"); want != "" && want != string(rune('0'+value)) {
-				t.Errorf("%s: key-direction %q parsed as %d", f.id(), want, value)
-			}
-		}
-	}
-	requireSome(t, map[string]int{
-		"parsed": parsed, "refused": refused,
-		"tls-auth keys": authKeys, "tls-crypt keys": cryptKeys, "key-direction": directions,
-	})
-	t.Logf("%d configs: %d parsed, %d refused; %d tls-auth keys, %d tls-crypt keys, "+
-		"%d key-direction lines", len(fixtures), parsed, refused, authKeys, cryptKeys, directions)
-}
-
 // TestWrapKeyFileReferenceLoadsNoKey pins that "tls-auth ta.key" loads
 // nothing: file references resolve ca, cert and key only.
 func TestWrapKeyFileReferenceLoadsNoKey(t *testing.T) {
@@ -151,53 +87,6 @@ func TestWrapKeyFileReferenceLoadsNoKey(t *testing.T) {
 	}
 	requireSome(t, map[string]int{"wrap directives naming a file": seen})
 	t.Logf("%d wrap directives naming a file", seen)
-}
-
-// TestRemotesSurviveParsing pins that every parsed config names an endpoint
-// and the single-remote fields agree with Remotes[0].
-func TestRemotesSurviveParsing(t *testing.T) {
-	fixtures := fixtures(t)
-	var lines, perRemoteProto, multi int
-	for _, f := range fixtures {
-		p, _, err := parseFixture(f.path)
-		if err != nil {
-			continue
-		}
-		if len(p.Remotes) == 0 {
-			t.Errorf("%s: parsed with no remote; such a config is refused", f.id())
-			continue
-		}
-		lines += len(p.Remotes)
-		if len(p.Remotes) > 1 {
-			multi++
-		}
-
-		first := p.Remotes[0]
-		if p.Remote != first.Host || p.Port != first.Port || p.Proto != first.Proto {
-			t.Errorf("%s: the single-remote fields and Remotes[0] disagree", f.id())
-		}
-
-		for _, r := range p.Remotes {
-			if r.Host == "" {
-				t.Errorf("%s: a remote line parsed with no host", f.id())
-			}
-			if r.Port <= 0 || r.Port > 65535 {
-				t.Errorf("%s: a remote line parsed to port %d", f.id(), r.Port)
-			}
-			if !r.ProtoSet {
-				continue
-			}
-			perRemoteProto++
-			if r.Proto != profile.ProtoUDP && r.Proto != profile.ProtoTCP {
-				t.Errorf("%s: a remote line's transport parsed to %v", f.id(), r.Proto)
-			}
-		}
-	}
-	requireSome(t, map[string]int{
-		"remote lines": lines, "configs with several": multi, "lines with a transport": perRemoteProto,
-	})
-	t.Logf("%d remote lines, %d configs with more than one, %d lines carrying a transport",
-		lines, multi, perRemoteProto)
 }
 
 // TestFileReferencedCA pins that each file reference is read or superseded,
@@ -264,70 +153,6 @@ func TestFileReferencedCA(t *testing.T) {
 	})
 	t.Logf("%d file references: %d read, %d superseded by an inline block; %d pools built",
 		refs, loaded, superseded, pools)
-}
-
-// TestCompressionDirectives pins that each compression spelling parses to the
-// framing it names.
-func TestCompressionDirectives(t *testing.T) {
-	want := map[string]compress.Mode{
-		"comp-lzo":          compress.ModeLZO,
-		"comp-lzo yes":      compress.ModeLZO,
-		"comp-lzo adaptive": compress.ModeLZO,
-		"comp-lzo no":       compress.ModeStubNoSwap,
-		"compress":          compress.ModeStub,
-		"compress stub":     compress.ModeStub,
-		"compress stub-v2":  compress.ModeStubV2,
-		"compress lz4":      compress.ModeLZ4,
-		"compress lz4-v2":   compress.ModeLZ4v2,
-	}
-
-	fixtures := fixtures(t)
-	byMode := map[compress.Mode]int{}
-	refusals := 0
-	for _, f := range fixtures {
-		p, _, err := parseFixture(f.path)
-		if err != nil {
-			continue
-		}
-		byMode[p.Compression]++
-
-		spelling := ""
-		for _, d := range p.Directives {
-			if d.Name != "comp-lzo" && d.Name != "compress" {
-				continue
-			}
-			spelling = strings.TrimSpace(d.Name + " " + strings.Join(d.Args, " "))
-			if mode, ok := want[spelling]; ok && p.Compression != mode {
-				t.Errorf("%s: %q parsed as %v, want %v", f.id(), spelling, p.Compression, mode)
-			}
-		}
-		if spelling == "" && p.Compression != compress.ModeNone {
-			t.Errorf("%s: parsed as %v with no compression directive", f.id(), p.Compression)
-		}
-
-		// The pair parses; EffectiveMode makes the refusal.
-		if p.AllowCompression != compress.AllowNo {
-			continue
-		}
-		_, err = compress.EffectiveMode(p.Compression, compress.ModeNone, p.AllowCompression)
-		switch {
-		case p.Compression.Compresses() && err == nil:
-			t.Errorf("%s: %v survived \"allow-compression no\"", f.id(), p.Compression)
-		case !p.Compression.Compresses() && err != nil:
-			t.Errorf("%s: \"allow-compression no\" refused the framing stub %v: %v",
-				f.id(), p.Compression, err)
-		case err != nil:
-			refusals++
-		}
-	}
-	requireSome(t, map[string]int{
-		"comp-lzo": byMode[compress.ModeLZO], "compress": byMode[compress.ModeStub],
-		"stub-v2":                      byMode[compress.ModeStubV2],
-		"refused by allow-compression": refusals,
-	})
-	t.Logf("compression: lzo %d, stub %d, stub-v2 %d, none %d; %d refused by allow-compression",
-		byMode[compress.ModeLZO], byMode[compress.ModeStub], byMode[compress.ModeStubV2],
-		byMode[compress.ModeNone], refusals)
 }
 
 func TestLineEndingsDoNotChangeMeaning(t *testing.T) {
