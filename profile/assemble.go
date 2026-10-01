@@ -199,6 +199,7 @@ func (a *assembler) directive(d Directive) error {
 			return fmt.Errorf("profile: %s: invalid %q", directive, fields[1])
 		}
 		p.PingTimeout = n
+		p.PingTimeoutSet = true
 		p.PingExit = directive == "ping-exit"
 	case "keepalive":
 		// Expands to ping N and ping-restart M in finish. Both arguments
@@ -367,6 +368,7 @@ func (a *assembler) finish(res fileResolver) (*Profile, error) {
 	if a.keepaliveSeen {
 		p.PingInterval = a.keepalivePing
 		p.PingTimeout = a.keepaliveTimeout
+		p.PingTimeoutSet = true
 		p.PingExit = false
 	}
 

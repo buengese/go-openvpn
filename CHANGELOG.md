@@ -26,6 +26,9 @@ and releases follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   renders a static key as the block `openvpn --genkey` writes. The output is
   key material.
 
+- `Profile.PingTimeoutSet` distinguishes an explicit `ping-restart 0` from an
+  absent directive, and `Spec.PingTimeoutOff` carries it.
+
 - `Profile.AuthUserPass`, `Profile.RemoteCertTLSServer` and
   `Profile.NSCertTypeServer`, set by the parser. `RequiresCredentials` and the
   certificate verifier read them instead of scanning `Profile.Directives`.
@@ -265,6 +268,10 @@ and releases follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   what it asks for. `fragment 0` is `ignored`: it asks for no fragmentation.
   A non-zero `fragment` stays `fatal`, since the peer would frame every data
   packet with a 4-byte header this client cannot strip.
+
+- An explicit `ping-restart 0` in a profile disables the dead-link timer, as
+  it does in openvpn3 and OpenVPN 2.x, where it used to arm the 40 s default.
+  A pushed value still wins. Published provider profiles carry it.
 
 - **Breaking:** a nil `Client.EventFn`, and a nil `netstack.Options.EventFn`,
   is now silent instead of writing to `os.Stderr`. Set

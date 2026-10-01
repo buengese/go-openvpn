@@ -240,9 +240,12 @@ type Profile struct {
 	// keepalive; 0 means the client default.
 	PingInterval int
 	// PingTimeout is the dead-link timeout in seconds, from ping-restart,
-	// ping-exit or keepalive; 0 means none. One field for all three, as in
-	// openvpn-2.6.22 src/openvpn/options.c:6963-6975.
-	PingTimeout int
+	// ping-exit or keepalive. One field for all three, as in
+	// openvpn-2.6.22 src/openvpn/options.c:6963-6975. PingTimeoutSet
+	// distinguishes an explicit 0, which disables the timer, from an absent
+	// directive, which leaves the client default.
+	PingTimeout    int
+	PingTimeoutSet bool
 	// PingExit reports that PingTimeout came from ping-exit. Nothing acts on
 	// it; the client's dead-link teardown is terminal either way.
 	PingExit bool

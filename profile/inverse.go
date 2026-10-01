@@ -39,6 +39,7 @@ func (p *Profile) Spec() (Spec, error) {
 		BecomePrimary:        p.BecomePrimarySec,
 		Ping:                 p.PingInterval,
 		PingTimeout:          p.PingTimeout,
+		PingTimeoutOff:       p.PingTimeoutSet && p.PingTimeout == 0,
 		PingExit:             p.PingExit,
 		ExplicitExitNotify:   p.ExplicitExitNotify,
 		RemoteRandom:         p.RemoteRandom,

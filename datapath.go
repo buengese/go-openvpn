@@ -281,16 +281,17 @@ const (
 // ssl/proto.hpp line 752 runs load_common over the pushed option list after
 // the config file, and load_duration_parm writes only when the option it names
 // is present, so a PUSH_REPLY carrying ping and no ping-restart leaves the
-// profile's ping-restart standing. A zero means "said nothing"; keepalive
-// cannot be switched off through it, since openvpn3 refuses a ping below 1
-// (load_duration_parm's min_value, ssl/proto.hpp lines 1292-1293).
+// profile's ping-restart standing. A pushed zero means "pushed nothing". A
+// profile's explicit "ping-restart 0" disables the dead-link timer, as
+// openvpn3's set_duration_parm turns a zero into its 7-day maximum
+// (time/durhelper.hpp:34).
 func (c *Client) keepaliveFor(pushedInterval, pushedRestart int) (interval, restart int) {
 	interval, restart = defaultPingInterval, defaultPingRestart
 	if c.prof != nil {
 		if c.prof.PingInterval > 0 {
 			interval = c.prof.PingInterval
 		}
-		if c.prof.PingTimeout > 0 {
+		if c.prof.PingTimeout > 0 || c.prof.PingTimeoutSet {
 			restart = c.prof.PingTimeout
 		}
 	}

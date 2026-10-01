@@ -200,6 +200,18 @@ func TestKeepaliveResolutionPrecedence(t *testing.T) {
 			wantInterval:  8, wantRestart: 15,
 		},
 		{
+			// "ping-restart 0": no dead-link timer, as in openvpn3.
+			name:         "an explicit zero in the profile disables the timer",
+			prof:         &profile.Profile{PingInterval: 15, PingTimeoutSet: true},
+			wantInterval: 15, wantRestart: 0,
+		},
+		{
+			name:          "a pushed restart beats an explicit zero",
+			prof:          &profile.Profile{PingTimeoutSet: true},
+			pushedRestart: 60,
+			wantInterval:  8, wantRestart: 60,
+		},
+		{
 			name:         "a nil profile is not a crash",
 			prof:         nil,
 			wantInterval: 8, wantRestart: 40,
@@ -227,6 +239,15 @@ func TestKeepaliveReadsTheProfileEndToEnd(t *testing.T) {
 	interval, restart := (&Client{prof: p}).keepaliveFor(0, 0)
 	if interval != 10 || restart != 120 {
 		t.Errorf("keepalive 10 120 against a silent server = %d/%d, want 10/120", interval, restart)
+	}
+
+	p, err = profile.ParseString("remote vpn.example.test 1194\nping 15\nping-restart 0\n")
+	if err != nil {
+		t.Fatalf("ParseString: %v", err)
+	}
+	interval, restart = (&Client{prof: p}).keepaliveFor(0, 0)
+	if interval != 15 || restart != 0 {
+		t.Errorf("ping 15, ping-restart 0 against a silent server = %d/%d, want 15/0", interval, restart)
 	}
 }
 

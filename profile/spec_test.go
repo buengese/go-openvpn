@@ -167,9 +167,11 @@ func TestBuildRefusesWhatAFileCouldNotSay(t *testing.T) {
 		return profile.Spec{Remotes: []profile.Endpoint{{Host: "vpn.example.test"}}}
 	}
 	for name, mutate := range map[string]func(*profile.Spec){
-		"no remote":              func(s *profile.Spec) { s.Remotes = nil },
-		"mssfix set and off":     func(s *profile.Spec) { s.MSSFix, s.MSSFixOff = 1400, true },
-		"reneg set and disabled": func(s *profile.Spec) { s.RenegSec, s.NoReneg = 1800, true },
+		"no remote":                 func(s *profile.Spec) { s.Remotes = nil },
+		"mssfix set and off":        func(s *profile.Spec) { s.MSSFix, s.MSSFixOff = 1400, true },
+		"reneg set and disabled":    func(s *profile.Spec) { s.RenegSec, s.NoReneg = 1800, true },
+		"ping timeout set and off":  func(s *profile.Spec) { s.PingTimeout, s.PingTimeoutOff = 60, true },
+		"ping-exit with no timeout": func(s *profile.Spec) { s.PingExit = true },
 		"extra carries a field's directive": func(s *profile.Spec) {
 			s.Extra = []profile.Directive{{Name: "ping-restart", Args: []string{"60"}}}
 		},

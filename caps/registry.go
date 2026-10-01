@@ -249,7 +249,7 @@ var registry = map[string]entry{
 	"ping": sup(supported,
 		"sets the probe interval, below a pushed one and above the 8 s default"),
 	"ping-restart": sup(supported,
-		"sets the dead-link timeout, below a pushed one and above the 40 s default"),
+		"sets the dead-link timeout, below a pushed one and above the 40 s default; 0 disables it"),
 	// "rem" is remote: don't start the timers until a peer is known, which a
 	// client that dials already satisfies.
 	// Reference: openvpn3-core client/cliopt.hpp ~773 refuses it as a

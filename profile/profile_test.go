@@ -340,6 +340,30 @@ func TestParseKeepaliveOutranksPingDirectives(t *testing.T) {
 	}
 }
 
+// TestParsePingTimeoutSetSeparatesZeroFromAbsent pins that "ping-restart 0",
+// which disables the dead-link timer, is distinguishable from no directive.
+func TestParsePingTimeoutSetSeparatesZeroFromAbsent(t *testing.T) {
+	for _, tc := range []struct {
+		src     string
+		wantSet bool
+	}{
+		{"", false},
+		{"ping 15\n", false},
+		{"ping-restart 0\n", true},
+		{"ping-exit 0\n", true},
+		{"ping-restart 60\n", true},
+		{"keepalive 10 60\n", true},
+	} {
+		p, err := profile.ParseString("remote vpn.example.test 443\n" + tc.src)
+		if err != nil {
+			t.Fatalf("ParseString(%q): %v", tc.src, err)
+		}
+		if p.PingTimeoutSet != tc.wantSet {
+			t.Errorf("%q: PingTimeoutSet = %v, want %v", tc.src, p.PingTimeoutSet, tc.wantSet)
+		}
+	}
+}
+
 // TestParsePingExitIsNotPingRestart pins the action bit separating two
 // directives that share a timeout.
 // Reference: OpenVPN 2.6.22 src/openvpn/options.c lines 6963-6975.

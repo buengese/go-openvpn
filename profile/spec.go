@@ -75,11 +75,14 @@ type Spec struct {
 	BecomePrimary int `json:"become_primary,omitempty"`
 
 	// Ping is the keepalive send interval and PingTimeout the dead-link
-	// timeout, in seconds. PingExit ends the session on timeout instead of
-	// restarting it.
-	Ping        int  `json:"ping,omitempty"`
-	PingTimeout int  `json:"ping_timeout,omitempty"`
-	PingExit    bool `json:"ping_exit,omitempty"`
+	// timeout, in seconds. PingTimeoutOff is an explicit "ping-restart 0",
+	// which disables the dead-link timer. PingExit ends the session on
+	// timeout instead of restarting it, and needs PingTimeout or
+	// PingTimeoutOff.
+	Ping           int  `json:"ping,omitempty"`
+	PingTimeout    int  `json:"ping_timeout,omitempty"`
+	PingTimeoutOff bool `json:"ping_timeout_off,omitempty"`
+	PingExit       bool `json:"ping_exit,omitempty"`
 	// ExplicitExitNotify is how many exit notifications a disconnect sends.
 	ExplicitExitNotify int `json:"explicit_exit_notify,omitempty"`
 
@@ -180,6 +183,12 @@ func (s Spec) directives() ([]specBlock, []Directive, error) {
 	}
 	if s.RenegSec > 0 && s.NoReneg {
 		return nil, nil, fmt.Errorf("profile: spec: RenegSec and NoReneg both set")
+	}
+	if s.PingTimeout > 0 && s.PingTimeoutOff {
+		return nil, nil, fmt.Errorf("profile: spec: PingTimeout and PingTimeoutOff both set")
+	}
+	if s.PingExit && s.PingTimeout == 0 && !s.PingTimeoutOff {
+		return nil, nil, fmt.Errorf("profile: spec: PingExit needs PingTimeout or PingTimeoutOff")
 	}
 	if s.MSSFixMode < MSSFixLink || int(s.MSSFixMode) >= len(mssFixModeNames) {
 		return nil, nil, fmt.Errorf("profile: spec: MSSFixMode %d is not a mode", int(s.MSSFixMode))
@@ -293,7 +302,7 @@ func (s Spec) directives() ([]specBlock, []Directive, error) {
 		if s.Ping != 0 {
 			add("ping", itoa(s.Ping))
 		}
-		if s.PingTimeout != 0 {
+		if s.PingTimeout != 0 || s.PingTimeoutOff {
 			add("ping-restart", itoa(s.PingTimeout))
 		}
 	}

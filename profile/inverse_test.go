@@ -97,6 +97,14 @@ func TestSpecFields(t *testing.T) {
 			}
 		},
 	}, {
+		name: "ping-restart 0 disables the dead-link timer",
+		src:  head + "ping 15\nping-restart 0\n",
+		want: func(t *testing.T, s profile.Spec) {
+			if s.Ping != 15 || !s.PingTimeoutOff || s.PingTimeout != 0 {
+				t.Errorf("Ping=%d PingTimeout=%d PingTimeoutOff=%v", s.Ping, s.PingTimeout, s.PingTimeoutOff)
+			}
+		},
+	}, {
 		name: "reneg-sec 0 disables renegotiation",
 		src:  head + "reneg-sec 0\n",
 		want: func(t *testing.T, s profile.Spec) {
@@ -185,6 +193,8 @@ func TestSpecTimerFormsRoundTrip(t *testing.T) {
 		"keepalive 10 60\nping 5\n",
 		"ping 10\nping-restart 60\n",
 		"ping 10\n",
+		"ping 15\nping-restart 0\n",
+		"ping-restart 0\nkeepalive 5 30\n",
 	} {
 		t.Run(strings.ReplaceAll(strings.TrimSpace(src), "\n", " + "), func(t *testing.T) {
 			p, err := profile.ParseString(head + src)
