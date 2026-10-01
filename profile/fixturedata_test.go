@@ -60,6 +60,16 @@ var fixtureShapes = []fixtureShape{
 		directives: "ca ca.crt\nauth-user-pass\n",
 		beside:     []string{"ca.crt"}},
 
+	// A published provider profile, directive for directive.
+	{Group: "provider", Name: "legacy-udp-fileref",
+		directives: "proto udp\nnobind\nremote-random\n" +
+			"remote vpn1.example.test 443\nremote vpn2.example.test 1912\n" +
+			"ca ca.crt\nauth-user-pass\nremote-cert-tls server\ncipher BF-CBC\n" +
+			"resolv-retry 5\ntun-mtu 48000\nfragment 0\nmssfix 0\nroute-delay 5 30\n" +
+			"ping-restart 0\nkeepalive 5 30\ncomp-lzo\nmute-replay-warnings\nfast-io\n" +
+			"sndbuf 524288\nrcvbuf 524288\n",
+		beside: []string{"ca.crt"}},
+
 	// ca.crt is deliberately not written; the inline block supersedes it.
 	{Group: "trust", Name: "fileref-ca-superseded",
 		directives: "ca ca.crt\nauth-user-pass\n",

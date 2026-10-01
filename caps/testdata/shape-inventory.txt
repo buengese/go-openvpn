@@ -175,6 +175,7 @@ argument shape
   reneg-bytes: number
   reneg-sec: number
   resolv-retry: lower-case word
+  resolv-retry: number
   route-delay: number
   route-method: lower-case word
   route-metric: number

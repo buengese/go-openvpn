@@ -274,6 +274,17 @@ var fixtureShapes = []fixtureShape{
 		directives: "fragment 0\nmssfix 1400\nauth-user-pass\n",
 		inline:     []string{"ca"}},
 
+	// A published provider profile, directive for directive, with the CA as a
+	// sibling file as its archive ships it.
+	{Group: "provider", Name: "legacy-udp-fileref",
+		directives: "proto udp\nnobind\nremote-random\n" +
+			"remote vpn1.example.test 443\nremote vpn2.example.test 1912\n" +
+			"ca ca.crt\nauth-user-pass\nremote-cert-tls server\ncipher BF-CBC\n" +
+			"resolv-retry 5\ntun-mtu 48000\nfragment 0\nmssfix 0\nroute-delay 5 30\n" +
+			"ping-restart 0\nkeepalive 5 30\ncomp-lzo\nmute-replay-warnings\nfast-io\n" +
+			"sndbuf 524288\nrcvbuf 524288\n",
+		beside: []string{"ca.crt"}},
+
 	{Group: "misc", Name: "hooks",
 		directives: "up /etc/openvpn/up.sh\ndown /etc/openvpn/down.sh\nup-restart\n" +
 			"script-security 2\nsetenv opt example\nuser nobody\ngroup nogroup\n" +
