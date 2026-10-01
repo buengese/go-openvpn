@@ -1,6 +1,6 @@
 module github.com/buengese/go-openvpn
 
-go 1.25.9
+go 1.25.5
 
 require (
 	github.com/godbus/dbus/v5 v5.2.2

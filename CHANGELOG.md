@@ -223,6 +223,10 @@ and releases follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- The `go` directive is `1.25.5` rather than `1.25.9`: `1.25.5` is the real
+  floor, declared by `gvisor.dev/gvisor`, and a dependency's directive raises
+  every consumer's.
+
 - **Breaking:** the project is renamed. The Go module is
   `github.com/buengese/go-openvpn` and every import path moves with it; the
   repository lives at <https://github.com/buengese/go-openvpn>. An importer has
