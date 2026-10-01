@@ -112,7 +112,10 @@ func ConnectWithReport(ctx context.Context, prof *profile.Profile, opts Options)
 	if err != nil {
 		c.Disconnect()        //nolint:errcheck
 		c.WaitForDisconnect() //nolint:errcheck
-		return nil, reportOf(c), err
+		// No report attached: the recorder already wrote a successful outcome.
+		derr := diag.Wrap(diag.ClassLocal, diag.StageData, err,
+			"the tunnel device went away before its network could be read")
+		return nil, reportOf(c), derr
 	}
 
 	return &Tunnel{Net: n, client: c}, reportOf(c), nil

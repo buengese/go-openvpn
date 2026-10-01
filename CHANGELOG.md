@@ -30,6 +30,10 @@ and releases follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `Profile.NSCertTypeServer`, set by the parser. `RequiresCredentials` and the
   certificate verifier read them instead of scanning `Profile.Directives`.
 
+- `diag.Error.Report()` and `diag.Error.SetReport()`: every error from
+  `Connect` carries the attempt's report, recoverable through `diag.AsError`
+  after any `%w` wrapping. It is always the `Redacted()` form.
+
 - `profile.Spec` carries json tags, and `KeyDirection`, `X509NameMatch` and
   `MSSFixMode` serialise as their names through `MarshalText` and
   `UnmarshalText`; an unknown name is refused. `ParseMSSFixMode` is added. A

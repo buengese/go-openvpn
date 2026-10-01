@@ -132,6 +132,10 @@ type Error struct {
 	RetryAfter time.Duration
 	// Err is the wrapped cause, if any.
 	Err error
+
+	// report is the redacted report for the attempt this error ended. It is
+	// unexported so that logging the error does not serialise the report.
+	report *SessionReport
 }
 
 // Error implements the error interface. The message is
@@ -180,6 +184,32 @@ func Wrap(class Class, stage Stage, cause error, detail string) *Error {
 // it appears on the wire or in the profile, for example "tls-crypt".
 func Unsupported(stage Stage, feature, detail string) *Error {
 	return &Error{Class: ClassUnsupported, Stage: stage, Feature: feature, Detail: detail}
+}
+
+// SetReport attaches r.Redacted() to the error, so the diagnosis survives %w
+// wrapping. What survives redaction still reaches every log line that prints
+// the error: endpoints, certificate subjects (which can name the user),
+// pushed routes and resolvers, and directive names.
+//
+// A nil r clears the report. Safe on a nil receiver.
+func (e *Error) SetReport(r *SessionReport) {
+	if e == nil {
+		return
+	}
+	e.report = r.Redacted()
+}
+
+// Report returns the redacted report for the attempt this error ended, or nil
+// when none was attached. Safe on a nil receiver.
+//
+//	if derr := diag.AsError(err); derr != nil {
+//	    if rep := derr.Report(); rep != nil { store(rep) }
+//	}
+func (e *Error) Report() *SessionReport {
+	if e == nil {
+		return nil
+	}
+	return e.report
 }
 
 // AsError returns the first *Error in err's unwrap chain, or nil when there

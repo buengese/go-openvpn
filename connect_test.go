@@ -12,6 +12,7 @@ package vpn
 import (
 	"context"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"io"
 	"net"
@@ -595,4 +596,44 @@ func newPushTestClient(t *testing.T) *Client {
 		Remote: "vpn.example.com", Port: 1194, Proto: profile.ProtoUDP,
 		Cipher: "AES-256-CBC", Auth: "SHA256", AuthSet: true, CA: testCAPEM(t),
 	})
+}
+
+// TestConnectErrorCarriesTheReport pins that an error from the real Connect
+// path carries its report.
+func TestConnectErrorCarriesTheReport(t *testing.T) {
+	// tap mode is fatal at preflight, so the attempt ends at StageParse
+	// without a socket.
+	p, err := profile.ParseString("client\ndev tap\nremote vpn.example.test 1194\n" +
+		"<ca>\n-----BEGIN CERTIFICATE-----\nnot-parsed-here\n-----END CERTIFICATE-----\n</ca>\n")
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+
+	c := New(p)
+	err = c.Connect(context.Background())
+	if err == nil {
+		t.Fatal("a tap profile connected")
+	}
+
+	derr := diag.AsError(err)
+	if derr == nil {
+		t.Fatalf("Connect returned %T, not a *diag.Error", err)
+	}
+	if derr.Class != diag.ClassUnsupported || derr.Stage != diag.StageParse {
+		t.Errorf("class/stage = %v/%v, want unsupported/parse", derr.Class, derr.Stage)
+	}
+
+	rep := derr.Report()
+	if rep == nil {
+		t.Fatal("the error carries no report")
+	}
+	if rep.Outcome.Class != diag.ClassUnsupported {
+		t.Errorf("report outcome class = %v, want unsupported", rep.Outcome.Class)
+	}
+	if len(rep.Profile.Gaps) == 0 {
+		t.Error("the attached report records no capability gaps")
+	}
+	if _, err := json.Marshal(rep); err != nil {
+		t.Errorf("marshal the attached report: %v", err)
+	}
 }

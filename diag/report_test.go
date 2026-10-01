@@ -450,3 +450,48 @@ func TestSessionReportIsNotJSONMarshaler(t *testing.T) {
 type encodingTextMarshaler interface {
 	MarshalText() ([]byte, error)
 }
+
+// TestRedactedBlanksPushedCredentials pins that pushed credentials are
+// blanked in Parsed and UnknownOptions, not only in Raw.
+func TestRedactedBlanksPushedCredentials(t *testing.T) {
+	rep := &diag.SessionReport{}
+	rep.Push.Raw = "PUSH_REPLY,auth-token TOKEN,ifconfig 10.8.0.2 255.255.255.0,route 10.0.0.0 255.0.0.0"
+	rep.Push.Parsed = map[string][]string{
+		"auth-token":      {"TOKEN"},
+		"auth-token-user": {"dXNlcg=="},
+		"ifconfig":        {"10.8.0.2", "255.255.255.0"},
+		"ifconfig-ipv6":   {"fd00::2/64"},
+		"route":           {"10.0.0.0", "255.0.0.0"},
+	}
+	rep.Push.UnknownOptions = []string{"auth-token-user dXNlcg==", "some-future-option keep-me"}
+
+	red := rep.Redacted()
+
+	for _, keyword := range []string{"auth-token", "auth-token-user", "ifconfig", "ifconfig-ipv6"} {
+		for i, got := range red.Push.Parsed[keyword] {
+			if got != diag.RedactedPlaceholder {
+				t.Errorf("Push.Parsed[%q][%d] = %q, want it blanked", keyword, i, got)
+			}
+		}
+		if len(red.Push.Parsed[keyword]) == 0 {
+			t.Errorf("Push.Parsed[%q] disappeared; the keyword should survive", keyword)
+		}
+	}
+	// A non-credential option survives.
+	if got := red.Push.Parsed["route"]; len(got) != 2 || got[0] != "10.0.0.0" {
+		t.Errorf("Push.Parsed[route] = %v, want it untouched", got)
+	}
+	if got := red.Push.UnknownOptions[1]; got != "some-future-option keep-me" {
+		t.Errorf("UnknownOptions[1] = %q, want it untouched", got)
+	}
+	if got := red.Push.UnknownOptions[0]; strings.Contains(got, "dXNlcg==") {
+		t.Errorf("UnknownOptions[0] = %q, still carries the username", got)
+	}
+
+	if got := rep.Push.Parsed["auth-token"][0]; got != "TOKEN" {
+		t.Errorf("Redacted mutated the caller's report: auth-token = %q", got)
+	}
+	if got := rep.Push.UnknownOptions[0]; got != "auth-token-user dXNlcg==" {
+		t.Errorf("Redacted mutated the caller's UnknownOptions: %q", got)
+	}
+}

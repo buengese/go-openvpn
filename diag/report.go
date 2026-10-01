@@ -296,14 +296,17 @@ type NegotiatedInfo struct {
 // PushInfo is the server's PUSH_REPLY.
 type PushInfo struct {
 	// Raw is the PUSH_REPLY exactly as received. It carries pushed internal
-	// addresses and may carry an auth token, so Redacted blanks it.
+	// addresses and may carry an auth token, so Redacted blanks it whole.
 	Raw string `json:"raw,omitempty"`
 	// Parsed maps each pushed option keyword to the argument text of every
 	// occurrence, in the order received; one appearing twice has two entries.
 	// It is neutral on purpose: diag stays free of platform routing code.
+	//
+	// Redacted blanks the arguments of credential-bearing keywords.
 	Parsed map[string][]string `json:"parsed,omitempty"`
 	// UnknownOptions lists every pushed option whose keyword the client does
-	// not handle. Each is a candidate feature, discovered empirically.
+	// not handle. Redacted blanks the arguments of credential-bearing
+	// keywords.
 	UnknownOptions []string `json:"unknown_options,omitempty"`
 }
 
@@ -505,6 +508,9 @@ func (r *SessionReport) Redacted() *SessionReport {
 	out.Credentials.Password = blank(out.Credentials.Password)
 	out.Credentials.AuthToken = blank(out.Credentials.AuthToken)
 	out.Push.Raw = blank(out.Push.Raw)
+	// Denied by keyword rather than via AddSecret, which a malformed
+	// PUSH_REPLY never reaches.
+	redactPushOptions(&out.Push)
 	// A pushed internal address identifies the account it was issued to,
 	// so it is blanked for the same reason a credential is. The rest of
 	// DeviceInfo is a measurement field and survives.
@@ -512,6 +518,34 @@ func (r *SessionReport) Redacted() *SessionReport {
 	out.Device.IPv6 = blank(out.Device.IPv6)
 
 	return out
+}
+
+// credentialPushOptions are the pushed keywords whose arguments are a
+// credential (auth-token, auth-token-user) or the account's tunnel address.
+var credentialPushOptions = map[string]struct{}{
+	"auth-token":      {},
+	"auth-token-user": {},
+	"ifconfig":        {},
+	"ifconfig-ipv6":   {},
+}
+
+// redactPushOptions blanks the arguments of credential-bearing pushed
+// options in place, keeping the keyword.
+func redactPushOptions(p *PushInfo) {
+	for keyword, args := range p.Parsed {
+		if _, deny := credentialPushOptions[strings.ToLower(keyword)]; !deny {
+			continue
+		}
+		for i := range args {
+			args[i] = RedactedPlaceholder
+		}
+	}
+	for i, opt := range p.UnknownOptions {
+		keyword, _, _ := strings.Cut(opt, " ")
+		if _, deny := credentialPushOptions[strings.ToLower(keyword)]; deny {
+			p.UnknownOptions[i] = keyword + " " + RedactedPlaceholder
+		}
+	}
 }
 
 // replacer builds the substitution used to scrub free text. Longer secrets

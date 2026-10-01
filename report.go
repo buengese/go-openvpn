@@ -261,11 +261,12 @@ func (c *Client) completeStage(s diag.Stage) {
 
 // failStage records cause as the failure of stage s and returns the typed
 // error to propagate. Every stage boundary funnels its errors through this, so
-// a caller of Connect never receives an error without a class and a stage.
+// a caller of Connect never receives an error without a class, a stage, and
+// a report.
 func (c *Client) failStage(class diag.Class, s diag.Stage, cause error, detail string) *diag.Error {
 	derr := diag.Wrap(class, s, cause, detail)
 	c.recorder().fail(derr)
-	return derr
+	return c.attachReport(derr)
 }
 
 // failUnsupported is failStage for a capability we have not built. feature
@@ -273,6 +274,13 @@ func (c *Client) failStage(class diag.Class, s diag.Stage, cause error, detail s
 func (c *Client) failUnsupported(s diag.Stage, feature, detail string) *diag.Error {
 	derr := diag.Unsupported(s, feature, detail)
 	c.recorder().fail(derr)
+	return c.attachReport(derr)
+}
+
+// attachReport attaches the attempt's report, redacted by SetReport, to the
+// error. It runs after recorder.fail so the report records this failure.
+func (c *Client) attachReport(derr *diag.Error) *diag.Error {
+	derr.SetReport(c.Report())
 	return derr
 }
 

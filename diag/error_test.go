@@ -1,6 +1,7 @@
 package diag_test
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -139,5 +140,120 @@ func TestErrorChainJoined(t *testing.T) {
 		if !strings.Contains(joined, want) {
 			t.Errorf("ErrorChain over errors.Join lost %q: %q", want, joined)
 		}
+	}
+}
+
+// TestReportSurvivesWrapping pins that the report is reachable through any
+// amount of %w wrapping.
+func TestReportSurvivesWrapping(t *testing.T) {
+	rep := &diag.SessionReport{}
+	rep.Endpoint.Host = "vpn.example.test"
+	rep.SetCredentials("alice", "s3cret")
+
+	derr := diag.Wrap(diag.ClassAuth, diag.StageAuth, nil, "rejected")
+	derr.SetReport(rep)
+
+	err := fmt.Errorf("outer: %w", fmt.Errorf("middle: %w", fmt.Errorf("inner: %w", derr)))
+
+	got := diag.AsError(err)
+	if got == nil {
+		t.Fatal("AsError found no *Error through three wraps")
+	}
+	if got.Report() == nil {
+		t.Fatal("the report did not survive wrapping")
+	}
+	if got.Report().Endpoint.Host != "vpn.example.test" {
+		t.Errorf("Endpoint.Host = %q, want the host the report carried", got.Report().Endpoint.Host)
+	}
+}
+
+// TestSetReportRedacts pins that the error never carries the unredacted
+// report.
+func TestSetReportRedacts(t *testing.T) {
+	rep := &diag.SessionReport{}
+	rep.SetCredentials("alice", "s3cret")
+	rep.SetAuthToken("tok-abcdef")
+	rep.SetClientKeyPEM("-----BEGIN PRIVATE KEY-----\nSUPERSECRET\n-----END PRIVATE KEY-----")
+	rep.Push.Raw = "PUSH_REPLY,auth-token SESSIONTOKEN,route 10.0.0.0 255.0.0.0"
+	rep.Endpoint.Host = "vpn.example.test"
+
+	derr := diag.Wrap(diag.ClassAuth, diag.StageAuth, nil, "rejected")
+	derr.SetReport(rep)
+
+	got := derr.Report()
+	if got == nil {
+		t.Fatal("no report attached")
+	}
+	// The attachment must not alias the caller's report.
+	if got == rep {
+		t.Fatal("the error aliases the unredacted report")
+	}
+	for _, field := range []struct {
+		name string
+		got  string
+	}{
+		{"Credentials.Password", got.Credentials.Password},
+		{"Credentials.Username", got.Credentials.Username},
+		{"Credentials.AuthToken", got.Credentials.AuthToken},
+		{"TLS.ClientKeyPEM", got.TLS.ClientKeyPEM},
+		{"Push.Raw", got.Push.Raw},
+	} {
+		if field.got != "" && field.got != diag.RedactedPlaceholder {
+			t.Errorf("%s survived attachment as %q", field.name, field.got)
+		}
+	}
+	blob, err := json.Marshal(got)
+	if err != nil {
+		t.Fatalf("marshal the attached report: %v", err)
+	}
+	for _, secret := range []string{"s3cret", "SUPERSECRET", "SESSIONTOKEN", "tok-abcdef"} {
+		if strings.Contains(string(blob), secret) {
+			t.Errorf("the attached report serialises %q:\n%s", secret, blob)
+		}
+	}
+	if got.Endpoint.Host != "vpn.example.test" {
+		t.Errorf("Endpoint.Host = %q, want it to survive redaction", got.Endpoint.Host)
+	}
+}
+
+// TestErrorMessageIgnoresTheReport pins that a report does not change what
+// an error prints.
+func TestErrorMessageIgnoresTheReport(t *testing.T) {
+	rep := &diag.SessionReport{}
+	rep.Endpoint.Host = "vpn.example.test"
+	rep.SetCredentials("alice", "s3cret")
+
+	bare := diag.Wrap(diag.ClassAuth, diag.StageAuth, nil, "rejected")
+	withReport := diag.Wrap(diag.ClassAuth, diag.StageAuth, nil, "rejected")
+	withReport.SetReport(rep)
+
+	if bare.Error() != withReport.Error() {
+		t.Errorf("Error() changed when a report was attached:\n bare %q\n with %q",
+			bare.Error(), withReport.Error())
+	}
+	for _, verb := range []string{"%v", "%s", "%+v"} {
+		out := fmt.Sprintf(verb, withReport)
+		if strings.Contains(out, "vpn.example.test") || strings.Contains(out, "s3cret") {
+			t.Errorf("%s on the error exposed report contents: %q", verb, out)
+		}
+	}
+}
+
+func TestReportAccessorsAreNilSafe(t *testing.T) {
+	if got := diag.Wrap(diag.ClassAuth, diag.StageAuth, nil, "x").Report(); got != nil {
+		t.Errorf("a fresh error reports %v, want nil", got)
+	}
+	var nilErr *diag.Error
+	if got := nilErr.Report(); got != nil {
+		t.Errorf("nil *Error reported %v, want nil", got)
+	}
+	nilErr.SetReport(&diag.SessionReport{}) // must not panic
+	derr := diag.Wrap(diag.ClassAuth, diag.StageAuth, nil, "x")
+	derr.SetReport(nil)
+	if got := derr.Report(); got != nil {
+		t.Errorf("SetReport(nil) left %v, want nil", got)
+	}
+	if got := diag.AsError(errors.New("not a diag error")).Report(); got != nil {
+		t.Errorf("AsError on a foreign error reported %v, want nil", got)
 	}
 }
