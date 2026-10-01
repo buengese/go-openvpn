@@ -8,6 +8,11 @@ and releases follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- `profile.ParseFileInFS(r io.Reader, fsys fs.FS)` resolves file-referenced
+  `ca`, `cert` and `key` directives against an `fs.FS`, so an archive held in
+  memory parses where it is. `os.DirFS` does not confine symlinks; for a real
+  directory use `os.OpenRoot(dir).FS()` or `ParseFileIn`.
+
 - `profile.Profile.Spec()`, the inverse of `Spec.Build`: a parsed profile
   yields a Spec that builds an equivalent profile, so a caller can store one as
   structured data and connect from it later. It is a field copy; settings at

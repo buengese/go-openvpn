@@ -27,6 +27,7 @@ import (
 	"bytes"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -538,7 +539,7 @@ func (p *Profile) AuthFlow() AuthFlow {
 // the material missing. ParsePath, or ParseFileIn when the bytes are already
 // in hand, is the entry point that can read one.
 func ParseFile(r io.Reader) (*Profile, error) {
-	return parse(r, "")
+	return parse(r, nil)
 }
 
 // ParseFileIn parses an .ovpn profile from r, resolving the file-referenced
@@ -548,13 +549,26 @@ func ParseFile(r io.Reader) (*Profile, error) {
 // let the path reach an error message. An empty baseDir behaves exactly as
 // ParseFile.
 func ParseFileIn(r io.Reader, baseDir string) (*Profile, error) {
-	return parse(r, baseDir)
+	if baseDir == "" {
+		return parse(r, nil)
+	}
+	return parse(r, dirResolver{baseDir})
 }
 
-// parse is the parser proper. The exported entry points differ in one thing
-// only: baseDir, the directory a "ca <file>" reference resolves against, and
-// whether they have one at all.
-func parse(r io.Reader, baseDir string) (*Profile, error) {
+// ParseFileInFS parses an .ovpn profile from r, resolving file-referenced ca,
+// cert and key directives against fsys. A nil fsys behaves as ParseFile.
+//
+// fs.FS does not confine symlinks, and os.DirFS follows one out of the tree.
+// For a real directory pass os.OpenRoot(dir).FS(), or use ParseFileIn.
+func ParseFileInFS(r io.Reader, fsys fs.FS) (*Profile, error) {
+	if fsys == nil {
+		return parse(r, nil)
+	}
+	return parse(r, fsResolver{fsys})
+}
+
+// parse is the parser proper; the entry points differ only in the resolver.
+func parse(r io.Reader, res fileResolver) (*Profile, error) {
 	a := newAssembler()
 
 	scanner := bufio.NewScanner(r)
@@ -622,7 +636,7 @@ func parse(r io.Reader, baseDir string) (*Profile, error) {
 		return nil, fmt.Errorf("profile: read: %w", err)
 	}
 
-	return a.finish(baseDir)
+	return a.finish(res)
 }
 
 // inlineOpenTag reports whether line is an opening inline block tag such as
@@ -668,7 +682,7 @@ func ParsePath(path string) (*Profile, error) {
 		return nil, fmt.Errorf("profile: open %s: %w", path, err)
 	}
 	defer f.Close()
-	return parse(f, filepath.Dir(path))
+	return parse(f, dirResolver{filepath.Dir(path)})
 }
 
 // MSSFixMode says how a numeric mssfix value is measured. It is the directive's

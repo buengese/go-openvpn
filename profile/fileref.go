@@ -40,18 +40,11 @@ type pendingFileRef struct {
 	line int
 }
 
-// resolveFileRefs reads the ca, cert and key files a profile named, and
-// records what became of each reference. Three rules, in order:
-//
-//   - An inline <tag> block wins, as it does in OpenVPN: the file is not
-//     opened and the reference is recorded superseded rather than refused,
-//     since naming a CA twice is redundant and not wrong.
-//   - With no directory to resolve against, the reference is ErrNoProfileDir.
-//   - Otherwise the file is read, confined to the profile's own directory.
-//
-// Every failure is diag.ClassConfig at diag.StageParse. The failure quotes the
-// name the profile gave; the path it resolved to is never recorded.
-func (p *Profile) resolveFileRefs(refs []pendingFileRef, baseDir string) error {
+// resolveFileRefs reads the files a profile named and records each on
+// FileRefs. An inline block of the same tag wins, as in OpenVPN, and the file
+// is not opened. Failures are diag.ClassConfig at diag.StageParse and quote the
+// name, never the resolved path.
+func (p *Profile) resolveFileRefs(refs []pendingFileRef, res fileResolver) error {
 	for _, ref := range refs {
 		rec := FileRef{Tag: ref.tag, Line: ref.line}
 		if p.hasInlineBlock(ref.tag) {
@@ -59,10 +52,10 @@ func (p *Profile) resolveFileRefs(refs []pendingFileRef, baseDir string) error {
 			p.FileRefs = append(p.FileRefs, rec)
 			continue
 		}
-		if baseDir == "" {
+		if res == nil {
 			return configError(ErrNoProfileDir, ref.tag+" file reference")
 		}
-		data, err := readConfined(baseDir, ref.name)
+		data, err := res.read(ref.name)
 		if err != nil {
 			return configError(err, ref.tag+" file reference")
 		}
@@ -97,6 +90,81 @@ func (p *Profile) hasInlineBlock(tag string) bool {
 		}
 	}
 	return false
+}
+
+// fileResolver reads a file a profile named. A nil fileResolver means
+// references cannot be resolved (ErrNoProfileDir).
+type fileResolver interface {
+	// read returns the named file's contents. Errors may quote the name but
+	// must not contain the resolved path.
+	read(name string) ([]byte, error)
+}
+
+// dirResolver resolves against a real directory, confined to it.
+type dirResolver struct{ dir string }
+
+func (d dirResolver) read(name string) ([]byte, error) { return readConfined(d.dir, name) }
+
+// fsResolver resolves against an fs.FS. Names must pass fs.ValidPath; symlink
+// confinement is up to the FS (see ParseFileInFS).
+type fsResolver struct{ fsys fs.FS }
+
+func (r fsResolver) read(name string) ([]byte, error) {
+	if name == "" {
+		return nil, errors.New("names no file")
+	}
+	if !fs.ValidPath(name) {
+		return nil, fmt.Errorf("%q %w", name, ErrFileRefEscapes)
+	}
+
+	f, err := r.fsys.Open(name)
+	if err != nil {
+		return nil, fmt.Errorf("%q: %w", name, fsErr(err))
+	}
+	if f == nil {
+		// The FS is caller-supplied; nothing below trusts it.
+		return nil, fmt.Errorf("%q: the filesystem returned no file", name)
+	}
+	defer func() { _ = f.Close() }()
+
+	// Anything but a regular file is refused: io.ReadAll caps bytes, not
+	// time, and a Read returning (0, nil) forever would never finish.
+	info, err := f.Stat()
+	if err != nil {
+		return nil, fmt.Errorf("%q: %w", name, fsErr(err))
+	}
+	if info == nil || !info.Mode().IsRegular() {
+		return nil, fmt.Errorf("%q is not a regular file", name)
+	}
+
+	// Enforced on the read, not from the stat, which may disagree.
+	data, err := io.ReadAll(io.LimitReader(f, maxFileRefBytes+1))
+	if err != nil {
+		return nil, fmt.Errorf("%q: %w", name, fsErr(err))
+	}
+	if len(data) > maxFileRefBytes {
+		return nil, fmt.Errorf("%q is larger than the %d-byte limit on a file a profile names",
+			name, maxFileRefBytes)
+	}
+	if len(data) == 0 {
+		return nil, fmt.Errorf("%q is empty", name)
+	}
+	return data, nil
+}
+
+// fsErr reduces an error from a caller-supplied fs.FS to an fs sentinel, so
+// nothing the FS wrote, such as a host path, reaches the error.
+func fsErr(err error) error {
+	switch {
+	case errors.Is(err, fs.ErrNotExist):
+		return fs.ErrNotExist
+	case errors.Is(err, fs.ErrPermission):
+		return fs.ErrPermission
+	case errors.Is(err, fs.ErrInvalid):
+		return fs.ErrInvalid
+	default:
+		return errors.New("could not be read")
+	}
 }
 
 // readConfined reads name relative to dir, refusing anything that resolves

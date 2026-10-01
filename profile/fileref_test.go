@@ -7,11 +7,15 @@ package profile_test
 
 import (
 	"errors"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strings"
 	"testing"
+	"testing/fstest"
+	"time"
 
 	"github.com/buengese/go-openvpn/diag"
 	"github.com/buengese/go-openvpn/profile"
@@ -480,36 +484,6 @@ func TestFileReferenceToleratesTrailingWhitespace(t *testing.T) {
 	}
 }
 
-// TestParseFileInMatchesParsePath pins the seam: the two entry points differ in
-// where the bytes come from and in nothing else, which is what lets a caller
-// read the file itself and still resolve the reference.
-func TestParseFileInMatchesParsePath(t *testing.T) {
-	dir := t.TempDir()
-	writeFile(t, dir, "ca.crt", caPEM)
-	body := "remote vpn.example.test 443\nca ca.crt\n"
-	path := writeProfile(t, dir, body)
-
-	fromPath, err := profile.ParsePath(path)
-	if err != nil {
-		t.Fatalf("ParsePath: %v", err)
-	}
-	fromReader, err := profile.ParseFileIn(strings.NewReader(body), dir)
-	if err != nil {
-		t.Fatalf("ParseFileIn: %v", err)
-	}
-	if string(fromPath.CA) != string(fromReader.CA) {
-		t.Errorf("ParseFileIn CA = %q, ParsePath CA = %q", fromReader.CA, fromPath.CA)
-	}
-	if len(fromReader.FileRefs) != 1 || !fromReader.FileRefs[0].Loaded {
-		t.Errorf("ParseFileIn FileRefs = %+v, want one loaded entry", fromReader.FileRefs)
-	}
-
-	// An empty base directory is ParseFile, explicitly.
-	if _, err := profile.ParseFileIn(strings.NewReader(body), ""); !errors.Is(err, profile.ErrNoProfileDir) {
-		t.Errorf("ParseFileIn with no directory: %v, want ErrNoProfileDir", err)
-	}
-}
-
 // TestProfileWithNoFileReferenceRecordsNone keeps the common case honest: a
 // profile that inlines everything it uses has an empty FileRefs, not a record
 // of a directive it does not have.
@@ -523,5 +497,310 @@ func TestProfileWithNoFileReferenceRecordsNone(t *testing.T) {
 	}
 	if string(p.CA) != caPEM {
 		t.Errorf("CA = %q, want the inline block's body", p.CA)
+	}
+}
+
+// TestEntryPointsAgree pins that ParsePath, ParseFileIn and ParseFileInFS
+// resolve the same references to the same profile.
+func TestEntryPointsAgree(t *testing.T) {
+	const src = "remote vpn.example.test 443\nca ca.crt\ncert keys/client.crt\nkey keys/client.key\n"
+	files := map[string]string{"ca.crt": caPEM, "keys/client.crt": caPEM, "keys/client.key": inertKey}
+
+	dir := t.TempDir()
+	mapFS := fstest.MapFS{}
+	for name, body := range files {
+		writeFile(t, dir, name, body)
+		mapFS[name] = &fstest.MapFile{Data: []byte(body)}
+	}
+
+	fromPath, err := profile.ParsePath(writeProfile(t, dir, src))
+	if err != nil {
+		t.Fatalf("ParsePath: %v", err)
+	}
+	if string(fromPath.CA) != caPEM || string(fromPath.Key) != inertKey || len(fromPath.FileRefs) != 3 {
+		t.Fatalf("ParsePath did not read all three files: %+v", fromPath.FileRefs)
+	}
+	fromDir, err := profile.ParseFileIn(strings.NewReader(src), dir)
+	if err != nil {
+		t.Fatalf("ParseFileIn: %v", err)
+	}
+	fromFS, err := profile.ParseFileInFS(strings.NewReader(src), mapFS)
+	if err != nil {
+		t.Fatalf("ParseFileInFS: %v", err)
+	}
+	for name, p := range map[string]*profile.Profile{"ParseFileIn": fromDir, "ParseFileInFS": fromFS} {
+		if diff := profileDiff(fromPath, p); diff != "" {
+			t.Errorf("%s disagrees with ParsePath:\n%s", name, diff)
+		}
+		if !slices.Equal(p.FileRefs, fromPath.FileRefs) {
+			t.Errorf("%s FileRefs = %+v, want %+v", name, p.FileRefs, fromPath.FileRefs)
+		}
+	}
+
+	if _, err := profile.ParseFileIn(strings.NewReader(src), ""); !errors.Is(err, profile.ErrNoProfileDir) {
+		t.Errorf("ParseFileIn with no directory: %v, want ErrNoProfileDir", err)
+	}
+}
+
+// TestParseFileInFSRefusesEscapes is the FS parallel of
+// TestFileReferenceEscapesAreRefused.
+func TestParseFileInFSRefusesEscapes(t *testing.T) {
+	const secret = "SECRET-OUTSIDE-THE-ARCHIVE"
+
+	for _, tc := range []struct {
+		name string
+		ref  string
+	}{
+		{"parent", "../secret.txt"},
+		{"grandparent", "../../secret.txt"},
+		{"down and back out", "keys/../../secret.txt"},
+		{"absolute", "/etc/shadow"},
+		{"out of the tree entirely", "../../../../../../etc/passwd"},
+		{"a bare parent", ".."},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			// Present under both spellings, so a refusal is the guard working.
+			fsys := fstest.MapFS{
+				"secret.txt":    {Data: []byte(secret)},
+				"../secret.txt": {Data: []byte(secret)},
+				"etc/shadow":    {Data: []byte(secret)},
+				"/etc/shadow":   {Data: []byte(secret)},
+				"etc/passwd":    {Data: []byte(secret)},
+			}
+			src := "remote vpn.example.test 443\nca " + tc.ref + "\n"
+
+			p, err := profile.ParseFileInFS(strings.NewReader(src), fsys)
+			if p != nil {
+				t.Fatalf("a profile pointing outside the FS parsed: CA = %q", p.CA)
+			}
+			if err == nil {
+				t.Fatal("no error")
+			}
+			if !errors.Is(err, profile.ErrFileRefEscapes) {
+				t.Errorf("error does not wrap ErrFileRefEscapes: %v", err)
+			}
+			if strings.Contains(err.Error(), secret) {
+				t.Error("the contents of the escaped file reached the error")
+			}
+		})
+	}
+}
+
+// TestParseFileInFSIsStricterAboutNames pins that fs.ValidPath refuses any
+// "..", even one that lands back inside.
+func TestParseFileInFSIsStricterAboutNames(t *testing.T) {
+	const src = "remote vpn.example.test 443\nca ../profiles/ca.crt\n"
+
+	root := t.TempDir()
+	dir := filepath.Join(root, "profiles")
+	writeFile(t, dir, "ca.crt", caPEM)
+	if _, err := profile.ParseFileIn(strings.NewReader(src), dir); err != nil {
+		t.Fatalf("ParseFileIn refused a walk back inside: %v", err)
+	}
+
+	fsys := fstest.MapFS{"profiles/ca.crt": {Data: []byte(caPEM)}}
+	_, err := profile.ParseFileInFS(strings.NewReader(src), fsys)
+	if err == nil {
+		t.Fatal("ParseFileInFS accepted a name with a .. element")
+	}
+	if !errors.Is(err, profile.ErrFileRefEscapes) {
+		t.Errorf("error does not wrap ErrFileRefEscapes: %v", err)
+	}
+}
+
+func TestParseFileInFSRefusesNonRegularAndOversized(t *testing.T) {
+	t.Run("a directory is not a file", func(t *testing.T) {
+		fsys := fstest.MapFS{"ca.crt/inner": {Data: []byte(caPEM)}}
+		if _, err := profile.ParseFileInFS(
+			strings.NewReader("remote a.test 443\nca ca.crt\n"), fsys); err == nil {
+			t.Error("a directory was read as a CA")
+		}
+	})
+
+	t.Run("an empty file is refused", func(t *testing.T) {
+		fsys := fstest.MapFS{"ca.crt": {Data: []byte{}}}
+		_, err := profile.ParseFileInFS(
+			strings.NewReader("remote a.test 443\nca ca.crt\n"), fsys)
+		if err == nil || !strings.Contains(err.Error(), "empty") {
+			t.Errorf("error = %v, want it to name the file as empty", err)
+		}
+	})
+
+	t.Run("an oversized file is refused", func(t *testing.T) {
+		fsys := fstest.MapFS{"ca.crt": {Data: make([]byte, (1<<20)+1)}}
+		_, err := profile.ParseFileInFS(
+			strings.NewReader("remote a.test 443\nca ca.crt\n"), fsys)
+		if err == nil || !strings.Contains(err.Error(), "limit") {
+			t.Errorf("error = %v, want it to name the size limit", err)
+		}
+	})
+}
+
+// TestParseFileInFSWithNoFSRefusesAReference pins that a nil fsys behaves
+// as ParseFile does.
+func TestParseFileInFSWithNoFSRefusesAReference(t *testing.T) {
+	_, err := profile.ParseFileInFS(strings.NewReader("remote a.test 443\nca ca.crt\n"), nil)
+	if !errors.Is(err, profile.ErrNoProfileDir) {
+		t.Errorf("error = %v, want ErrNoProfileDir", err)
+	}
+	p, err := profile.ParseFileInFS(
+		strings.NewReader("remote a.test 443\n<ca>\n"+caPEM+"</ca>\n"), nil)
+	if err != nil {
+		t.Fatalf("a profile with no reference failed: %v", err)
+	}
+	if string(p.CA) != caPEM {
+		t.Error("the inline CA did not survive")
+	}
+}
+
+// TestOpenRootFSRefusesASymlinkEscapeAndDirFSDoesNot backs the warning in
+// ParseFileInFS's doc comment.
+func TestOpenRootFSRefusesASymlinkEscapeAndDirFSDoesNot(t *testing.T) {
+	const secret = "SECRET-REACHED-THROUGH-A-SYMLINK"
+
+	root := t.TempDir()
+	dir := filepath.Join(root, "profiles")
+	if err := os.MkdirAll(dir, 0o750); err != nil {
+		t.Fatalf("create directory: %v", err)
+	}
+	writeFile(t, root, "secret.txt", secret)
+	if err := os.Symlink(filepath.Join(root, "secret.txt"), filepath.Join(dir, "ca.crt")); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+	src := "remote vpn.example.test 443\nca ca.crt\n"
+
+	// ParseFileIn refuses: containment is tested after EvalSymlinks.
+	if _, err := profile.ParseFileIn(strings.NewReader(src), dir); err == nil {
+		t.Error("ParseFileIn followed a symlink out of the profile's directory")
+	} else if !errors.Is(err, profile.ErrFileRefEscapes) {
+		t.Errorf("ParseFileIn error does not wrap ErrFileRefEscapes: %v", err)
+	}
+
+	p, err := profile.ParseFileInFS(strings.NewReader(src), os.DirFS(dir))
+	if err == nil && string(p.CA) == secret {
+		t.Log("confirmed: os.DirFS followed the symlink, as its documentation says it does — " +
+			"this is why ParseFileIn is not defined in terms of it")
+	} else {
+		t.Logf("os.DirFS refused it on this platform (err=%v); the warning is still right "+
+			"for the platforms where it does not", err)
+	}
+
+	r, err := os.OpenRoot(dir)
+	if err != nil {
+		t.Fatalf("os.OpenRoot: %v", err)
+	}
+	defer func() { _ = r.Close() }()
+	got, err := profile.ParseFileInFS(strings.NewReader(src), r.FS())
+	if err == nil {
+		t.Errorf("os.OpenRoot(dir).FS() followed the symlink: CA = %q", got.CA)
+	}
+	if err != nil && strings.Contains(err.Error(), secret) {
+		t.Error("the escaped file's contents reached the error")
+	}
+}
+
+// FuzzParseFileInFS fuzzes the resolver path, which FuzzParseString cannot
+// reach.
+func FuzzParseFileInFS(f *testing.F) {
+	f.Add("remote vpn.example.test 443\nca ca.crt\n", "ca.crt", caPEM)
+	f.Add("remote vpn.example.test 443\nca ../escape\n", "escape", "SECRET")
+	f.Add("remote vpn.example.test 443\nca /absolute\n", "absolute", "SECRET")
+	f.Add("remote vpn.example.test 443\ncert c\nkey k\n", "c", caPEM)
+	f.Add("remote vpn.example.test 443\nca .\n", "ca.crt", "")
+	f.Add("remote vpn.example.test 443\nca a/b/c\n", "a/b/c", caPEM)
+	f.Add("remote vpn.example.test 443\nca ca.crt\n<ca>\n"+caPEM+"</ca>\n", "ca.crt", "SECRET")
+
+	f.Fuzz(func(t *testing.T, src, name, body string) {
+		fsys := fstest.MapFS{name: {Data: []byte(body)}}
+
+		p, err := profile.ParseFileInFS(strings.NewReader(src), fsys)
+		if err != nil {
+			// The error must not carry the file's body.
+			if len(body) > 8 && strings.Contains(err.Error(), body) {
+				t.Fatalf("a file's contents reached the error: %v", err)
+			}
+			return
+		}
+		if p == nil {
+			t.Fatal("no profile and no error")
+		}
+		for _, ref := range p.FileRefs {
+			if ref.Loaded && !fs.ValidPath(name) {
+				t.Fatalf("%s loaded from %q, which is not a valid FS path", ref.Tag, name)
+			}
+		}
+	})
+}
+
+// hostileFS is an fs.FS that implements no Stat and returns a nil file, a
+// nil FileInfo, or a Read that makes no progress.
+type hostileFS struct{ mode hostileMode }
+
+type hostileMode int
+
+const (
+	hostileNilFile hostileMode = iota
+	hostileStatErrors
+	hostileNilInfo
+	hostileNoProgress
+	hostilePathInError
+)
+
+func (h hostileFS) Open(name string) (fs.File, error) {
+	switch h.mode {
+	case hostileNilFile:
+		return nil, nil
+	case hostilePathInError:
+		return nil, errors.New("could not open /home/victim/secrets/" + name + ": permission denied")
+	default:
+		return &hostileFile{mode: h.mode}, nil
+	}
+}
+
+type hostileFile struct{ mode hostileMode }
+
+func (f *hostileFile) Stat() (fs.FileInfo, error) {
+	switch f.mode {
+	case hostileStatErrors:
+		return nil, errors.New("stat says /home/victim/secrets is off limits")
+	case hostileNilInfo:
+		return nil, nil
+	default:
+		return nil, errors.New("no stat")
+	}
+}
+func (f *hostileFile) Read([]byte) (int, error) { return 0, nil } // never progresses
+func (f *hostileFile) Close() error             { return nil }
+
+// TestParseFileInFSSurvivesAHostileFS pins that the resolver refuses rather
+// than panicking or hanging, and leaks nothing the FS wrote.
+func TestParseFileInFSSurvivesAHostileFS(t *testing.T) {
+	const src = "remote vpn.example.test 443\nca ca.crt\n"
+
+	for name, mode := range map[string]hostileMode{
+		"Open returns a nil file": hostileNilFile,
+		"Stat errors":             hostileStatErrors,
+		"Stat returns a nil info": hostileNilInfo,
+		"Read never progresses":   hostileNoProgress,
+		"the error names a path":  hostilePathInError,
+	} {
+		t.Run(name, func(t *testing.T) {
+			done := make(chan error, 1)
+			go func() {
+				_, err := profile.ParseFileInFS(strings.NewReader(src), hostileFS{mode})
+				done <- err
+			}()
+			select {
+			case err := <-done:
+				if err == nil {
+					t.Fatal("a hostile FS was accepted")
+				}
+				if strings.Contains(err.Error(), "/home/victim") {
+					t.Errorf("the FS's own path reached the error: %v", err)
+				}
+			case <-time.After(5 * time.Second):
+				t.Fatal("the parser did not return; a non-regular file hung the read")
+			}
+		})
 	}
 }

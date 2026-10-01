@@ -154,9 +154,7 @@ func (s Spec) Build() (*Profile, error) {
 			return nil, err
 		}
 	}
-	// No base directory: a Spec carries bytes, never file references, so
-	// there is nothing outside it to resolve.
-	return a.finish("")
+	return a.finish(nil)
 }
 
 // specOwned is every directive name a Spec field covers. Extra may not carry

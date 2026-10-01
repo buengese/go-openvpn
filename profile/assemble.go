@@ -432,9 +432,8 @@ func (a *assembler) directive(d Directive) error {
 	return nil
 }
 
-// finish resolves what could only be settled once every directive was seen,
-// then hands back the profile.
-func (a *assembler) finish(baseDir string) (*Profile, error) {
+// finish resolves what needs the whole file, then returns the profile.
+func (a *assembler) finish(res fileResolver) (*Profile, error) {
 	p := a.p
 
 	// The keepalive helper expands here so that it wins over a ping or
@@ -475,10 +474,8 @@ func (a *assembler) finish(baseDir string) (*Profile, error) {
 	p.Port = p.Remotes[0].Port
 	p.Proto = p.Remotes[0].Proto
 
-	// Last, because it is the only step that reads anything outside the file
-	// and because an inline block anywhere in it can settle a reference
-	// without a read.
-	if err := p.resolveFileRefs(a.refs, baseDir); err != nil {
+	// Last: the only step that reads outside the file.
+	if err := p.resolveFileRefs(a.refs, res); err != nil {
 		return nil, err
 	}
 
