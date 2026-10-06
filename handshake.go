@@ -421,7 +421,7 @@ func (c *Client) tlsHandshake(ctx context.Context, rawConn net.Conn) (*tls.Conn,
 				sessionsMu.Lock()
 				allDue := dueRetransmits(sessions)
 				sessionsMu.Unlock()
-				c.retransmits.Add(uint64(len(allDue)))
+				c.stats().retransmits.Add(uint64(len(allDue)))
 				for _, e := range allDue {
 					c.writePacket(rawConn, e.Payload) //nolint:errcheck
 				}

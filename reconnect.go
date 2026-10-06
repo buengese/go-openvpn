@@ -430,10 +430,11 @@ func (c *Client) rewindConnectionLocked() {
 	c.backendIP = ""
 	c.keySource = prf.KeySource{}
 	c.serverKeySource = prf.KeySource{}
-	c.controlAuthFailures.Store(0)
-	c.controlReplays.Store(0)
-	c.controlStaleTimestamps.Store(0)
-	c.controlForeignSession.Store(0)
+	ctl := &c.stats().ctl
+	ctl.authFailures.Store(0)
+	ctl.replays.Store(0)
+	ctl.staleTimestamps.Store(0)
+	ctl.foreignSession.Store(0)
 }
 
 // reset returns the Client to a stateNew state so Connect can be called
@@ -466,16 +467,7 @@ func (c *Client) reset() {
 	c.peerRekeyCh = make(chan *controlSession, 1)
 	c.rekeyActive.Store(false)
 	c.nextKeyID = 1
-	c.bytesSent.Store(0)
-	c.bytesRecv.Store(0)
-	c.lastRecv.Store(0)
-	c.packetsSent.Store(0)
-	c.packetsRecv.Store(0)
-	c.decryptFailures.Store(0)
-	c.retransmits.Store(0)
-	c.rekeys.Store(0)
-	c.sawPlaintextTx.Store(false)
-	c.sawPlaintextRx.Store(false)
+	c.counts.Store(new(attemptStats))
 	// Each attempt gets its own report. Report therefore describes the most
 	// recent attempt, which is what a Reconnect loop needs to explain itself.
 	c.rec.Store(newSessionRecorder())

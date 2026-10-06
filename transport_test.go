@@ -312,10 +312,10 @@ func TestGarbageDatagramDoesNotEndTheSession(t *testing.T) {
 	if !bytes.Equal(got, genuine) {
 		t.Fatalf("readPacket = %x, want the genuine packet %x", got, genuine)
 	}
-	if n := c.controlAuthFailures.Load(); n != 3 {
+	if n := c.stats().ctl.authFailures.Load(); n != 3 {
 		t.Errorf("controlAuthFailures = %d, want 3; a drop nobody counts tells a sweep nothing", n)
 	}
-	if n := c.controlReplays.Load(); n != 0 {
+	if n := c.stats().ctl.replays.Load(); n != 0 {
 		t.Errorf("controlReplays = %d, want 0: none of those authenticated", n)
 	}
 }
@@ -369,10 +369,10 @@ func TestReplayedControlPacketIsRejectedAndCounted(t *testing.T) {
 	if !bytes.Equal(got, second) {
 		t.Fatalf("second packet = %x, want %x — the replay was delivered", got, second)
 	}
-	if n := c.controlReplays.Load(); n != 1 {
+	if n := c.stats().ctl.replays.Load(); n != 1 {
 		t.Errorf("controlReplays = %d, want 1", n)
 	}
-	if n := c.controlAuthFailures.Load(); n != 0 {
+	if n := c.stats().ctl.authFailures.Load(); n != 0 {
 		t.Errorf("controlAuthFailures = %d, want 0: the replay authenticated fine", n)
 	}
 }
@@ -386,13 +386,13 @@ func TestControlDropsAreCountedByReason(t *testing.T) {
 	c.countControlDrop(wrap.ErrStaleTimestamp)
 	c.countControlDrop(errors.New("something else entirely"))
 
-	if got := c.controlAuthFailures.Load(); got != 2 {
+	if got := c.stats().ctl.authFailures.Load(); got != 2 {
 		t.Errorf("controlAuthFailures = %d, want 2 (ErrAuth and the unclassified reason)", got)
 	}
-	if got := c.controlReplays.Load(); got != 1 {
+	if got := c.stats().ctl.replays.Load(); got != 1 {
 		t.Errorf("controlReplays = %d, want 1", got)
 	}
-	if got := c.controlStaleTimestamps.Load(); got != 1 {
+	if got := c.stats().ctl.staleTimestamps.Load(); got != 1 {
 		t.Errorf("controlStaleTimestamps = %d, want 1", got)
 	}
 
@@ -508,7 +508,7 @@ func TestSilentServerStaysClassNetwork(t *testing.T) {
 		t.Errorf("detail = %q, want empty", detail)
 	}
 
-	c.controlAuthFailures.Add(4)
+	c.stats().ctl.authFailures.Add(4)
 	class, detail = c.resetFailureClass()
 	if class != diag.ClassCrypto {
 		t.Errorf("class after 4 authentication failures = %s, want crypto", class)
@@ -519,8 +519,8 @@ func TestSilentServerStaysClassNetwork(t *testing.T) {
 
 	// A replay is not evidence of a wrong key: it authenticated.
 	var d Client
-	d.controlReplays.Add(9)
-	d.controlStaleTimestamps.Add(9)
+	d.stats().ctl.replays.Add(9)
+	d.stats().ctl.staleTimestamps.Add(9)
 	if class, _ := d.resetFailureClass(); class != diag.ClassNetwork {
 		t.Errorf("class from replays alone = %s, want network", class)
 	}
@@ -799,7 +799,7 @@ func TestUnwrapFailureDropsThePacket(t *testing.T) {
 	if errors.Is(err, sentinel) {
 		t.Fatalf("readPacket surfaced the unwrap failure as a connection error: %v", err)
 	}
-	if n := c.controlAuthFailures.Load(); n != 2 {
+	if n := c.stats().ctl.authFailures.Load(); n != 2 {
 		t.Errorf("controlAuthFailures = %d, want 2: both refused packets must be counted", n)
 	}
 }

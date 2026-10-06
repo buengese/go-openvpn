@@ -61,6 +61,7 @@ func (c *Client) tunToWire(ctx context.Context) {
 	if dev == nil {
 		return
 	}
+	st, sent := c.stats(), false
 	buf := make([]byte, 65535)
 	for {
 		// ReadPacket ends with ctx; a backend that needs a read deadline of its
@@ -94,9 +95,12 @@ func (c *Client) tunToWire(ctx context.Context) {
 			c.endSession(ctx, fmt.Errorf("vpn: tunToWire: write error: %w", werr))
 			return
 		}
-		c.bytesSent.Add(uint64(n))
-		c.packetsSent.Add(1)
-		c.markDataFlow(true)
+		st.tx.bytes.Add(uint64(n))
+		st.tx.packets.Add(1)
+		if !sent {
+			sent = true
+			c.markDataFlow(st, true)
+		}
 	}
 }
 
@@ -200,8 +204,8 @@ func (c *Client) failCompressedPayload(ctx context.Context, cause *compress.Comp
 // IP packets to the TUN device.
 //
 // Keepalive magic packets are recognised and discarded (not forwarded to TUN).
-// Each successfully decrypted packet (including keepalives) resets the
-// ping-restart dead-link timer via lastRecv.
+// Each successfully decrypted packet, keepalives included, counts as received
+// for the ping-restart dead-link timer.
 func (c *Client) wireToTun(ctx context.Context) {
 	defer c.wg.Done()
 	// See tunToWire: taken once, for the same reason.
@@ -216,6 +220,7 @@ func (c *Client) wireToTun(ctx context.Context) {
 	if dataCh == nil {
 		return
 	}
+	st, received := c.stats(), false
 	for {
 		select {
 		case <-ctx.Done():
@@ -233,19 +238,20 @@ func (c *Client) wireToTun(ctx context.Context) {
 				// Replay drops and LZO payloads that fail to decode reach us
 				// as ordinary errors, so diag.Counters.Replays stays zero and
 				// this tally covers all three.
-				c.decryptFailures.Add(1)
+				st.rx.decryptFailures.Add(1)
 				continue
 			}
-			c.packetsRecv.Add(1)
-			// Reset the last-received timestamp for dead-link detection.
-			c.lastRecv.Store(time.Now().UnixNano())
+			st.rx.packets.Add(1)
 			// Drop keepalive magic — it is not a real IP packet.
 			if occ.IsKeepalive(plain) {
 				continue
 			}
 			c.clampMSS(plain)
-			c.bytesRecv.Add(uint64(len(plain)))
-			c.markDataFlow(false)
+			st.rx.bytes.Add(uint64(len(plain)))
+			if !received {
+				received = true
+				c.markDataFlow(st, false)
+			}
 			dev.WritePacket(plain) //nolint:errcheck
 		}
 	}
@@ -303,8 +309,9 @@ func (c *Client) keepaliveFor(pushedInterval, pushedRestart int) (interval, rest
 // two arguments are what the server pushed; a zero means it pushed nothing,
 // and keepaliveFor fills the gap from the profile or the defaults.
 //
-// The dead-link check uses a 1-second polling ticker rather than a one-shot
-// timer so that it can account for packets arriving between ticks via lastRecv.
+// The dead-link check polls the received-packet count on a 1-second ticker
+// rather than arming a one-shot timer, so packets arriving between ticks are
+// noticed without a timestamp per packet.
 //
 // Reference: openvpn3-core ssl/proto.hpp
 //   - ProtoContext::housekeeping() line ~4580: calls primary->send_keepalive()
@@ -328,6 +335,8 @@ func (c *Client) keepaliveLoop(ctx context.Context, pingInterval, pingRestart in
 	if pingInterval > 0 {
 		nextSend = time.Now().Add(time.Duration(pingInterval) * time.Second)
 	}
+	st := c.stats()
+	lastPackets, lastRecv := st.rx.packets.Load(), time.Now()
 
 	for {
 		select {
@@ -348,13 +357,13 @@ func (c *Client) keepaliveLoop(ctx context.Context, pingInterval, pingRestart in
 				nextSend = now.Add(time.Duration(pingInterval) * time.Second)
 			}
 			// Dead-link detection: disconnect if nothing received for pingRestart seconds.
-			if pingRestart > 0 {
-				last := time.Unix(0, c.lastRecv.Load())
-				if time.Since(last) >= time.Duration(pingRestart)*time.Second {
-					c.emit(Event{Type: EventLog, Message: fmt.Sprintf("vpn: keepalive: no data for %d seconds, disconnecting", pingRestart)})
-					c.endSession(ctx, fmt.Errorf("vpn: keepalive timeout: no data for %d seconds", pingRestart))
-					return
-				}
+			if n := st.rx.packets.Load(); n != lastPackets {
+				lastPackets, lastRecv = n, now
+			}
+			if pingRestart > 0 && now.Sub(lastRecv) >= time.Duration(pingRestart)*time.Second {
+				c.emit(Event{Type: EventLog, Message: fmt.Sprintf("vpn: keepalive: no data for %d seconds, disconnecting", pingRestart)})
+				c.endSession(ctx, fmt.Errorf("vpn: keepalive timeout: no data for %d seconds", pingRestart))
+				return
 			}
 		}
 	}
@@ -377,9 +386,10 @@ func (c *Client) inactiveLoop(ctx context.Context, timeout, minBytes int) {
 	defer ticker.Stop()
 
 	// Snapshot traffic at start of window.
+	st := c.stats()
 	windowStart := time.Now()
-	startSent := c.bytesSent.Load()
-	startRecv := c.bytesRecv.Load()
+	startSent := st.tx.bytes.Load()
+	startRecv := st.rx.bytes.Load()
 
 	for {
 		select {
@@ -389,8 +399,8 @@ func (c *Client) inactiveLoop(ctx context.Context, timeout, minBytes int) {
 			if time.Since(windowStart) < time.Duration(timeout)*time.Second {
 				continue
 			}
-			sent := c.bytesSent.Load()
-			recv := c.bytesRecv.Load()
+			sent := st.tx.bytes.Load()
+			recv := st.rx.bytes.Load()
 			totalFlow := (sent - startSent) + (recv - startRecv)
 
 			// With no byte argument, any byte in either direction keeps the

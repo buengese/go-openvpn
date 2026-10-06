@@ -16,7 +16,10 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
+
+	"golang.org/x/sys/cpu"
 
 	"github.com/buengese/go-openvpn/caps"
 	"github.com/buengese/go-openvpn/device"
@@ -224,32 +227,76 @@ func (c *Client) recorder() *sessionRecorder {
 	return c.rec.Load()
 }
 
-// counters snapshots the data-channel tallies for the report.
-func (c *Client) counters() diag.Counters {
-	var decompressed uint64
-	if codec := c.codec.Load(); codec != nil {
-		decompressed = codec.Decompressed()
+// attemptStats are one attempt's tallies, behind diag.Counters and Stats. A
+// goroutine that writes them per packet loads the pointer once, so one left
+// over from an earlier attempt cannot write into the next. tx and rx sit on
+// separate cache lines: tunToWire and wireToTun write them concurrently.
+//
+// rx.packets counts keepalives and rx.bytes does not: the first is what the
+// dead-link timer watches, the second is tunnel traffic.
+type attemptStats struct {
+	tx struct {
+		bytes, packets atomic.Uint64
+		seen           atomic.Bool
 	}
+	_  cpu.CacheLinePad
+	rx struct {
+		bytes, packets, decryptFailures atomic.Uint64
+		seen                            atomic.Bool
+	}
+	_ cpu.CacheLinePad
+
+	retransmits, rekeys atomic.Uint64
+
+	// ctl tallies the control packets the wrap refused, per remote. An
+	// authentication failure means the profile's static key does not match
+	// the server's, which resetFailureClass reads; a data-channel failure is
+	// a mismatch in negotiated keys, so the two are kept apart.
+	ctl struct {
+		authFailures, replays, staleTimestamps, foreignSession atomic.Uint64
+	}
+}
+
+// counters snapshots the tallies as the report carries them.
+func (s *attemptStats) counters() diag.Counters {
 	return diag.Counters{
-		BytesSent:       c.bytesSent.Load(),
-		BytesRecv:       c.bytesRecv.Load(),
-		PacketsSent:     c.packetsSent.Load(),
-		PacketsRecv:     c.packetsRecv.Load(),
-		DecryptFailures: c.decryptFailures.Load(),
-		Decompressed:    decompressed,
-		Retransmits:     c.retransmits.Load(),
-		Rekeys:          c.rekeys.Load(),
+		BytesSent:       s.tx.bytes.Load(),
+		BytesRecv:       s.rx.bytes.Load(),
+		PacketsSent:     s.tx.packets.Load(),
+		PacketsRecv:     s.rx.packets.Load(),
+		DecryptFailures: s.rx.decryptFailures.Load(),
+		Retransmits:     s.retransmits.Load(),
+		Rekeys:          s.rekeys.Load(),
 		// Replays is deliberately left at zero: the sliding window lives in
 		// internal/datachannel and reports a replay as an ordinary decrypt
 		// error, so the two cannot be told apart from here.
 
 		// The control-channel tallies can be told apart, because the wrap
 		// returns a distinct sentinel for each reason it refuses a packet.
-		ControlAuthFailures:    c.controlAuthFailures.Load(),
-		ControlReplays:         c.controlReplays.Load(),
-		ControlStaleTimestamps: c.controlStaleTimestamps.Load(),
-		ControlForeignSession:  c.controlForeignSession.Load(),
+		ControlAuthFailures:    s.ctl.authFailures.Load(),
+		ControlReplays:         s.ctl.replays.Load(),
+		ControlStaleTimestamps: s.ctl.staleTimestamps.Load(),
+		ControlForeignSession:  s.ctl.foreignSession.Load(),
 	}
+}
+
+// stats returns the current attempt's tallies, creating them if the client has
+// not started an attempt yet.
+func (c *Client) stats() *attemptStats {
+	if st := c.counts.Load(); st != nil {
+		return st
+	}
+	c.counts.CompareAndSwap(nil, new(attemptStats))
+	return c.counts.Load()
+}
+
+// counters snapshots the data-channel tallies for the report.
+func (c *Client) counters() diag.Counters {
+	n := c.stats().counters()
+	if codec := c.codec.Load(); codec != nil {
+		n.Decompressed = codec.Decompressed()
+	}
+	return n
 }
 
 // enterStage records a stage transition and emits it as an EventStage.
@@ -460,18 +507,17 @@ func (c *Client) noteSessionFailure(err error) {
 	c.recorder().fail(diag.Wrap(class, diag.StageData, err, detail))
 }
 
-// markDataFlow records the first plaintext packet in one direction. StageData
-// completes only once plaintext has moved both ways; until then it stays open
-// and the report shows the tunnel as reached but not proven.
-func (c *Client) markDataFlow(outbound bool) {
+// markDataFlow records the first plaintext packet in one direction, and is
+// called once per direction. StageData completes only once plaintext has moved
+// both ways; until then it stays open and the report shows the tunnel as
+// reached but not proven.
+func (c *Client) markDataFlow(st *attemptStats, outbound bool) {
 	if outbound {
-		if c.sawPlaintextTx.Swap(true) {
-			return
-		}
-	} else if c.sawPlaintextRx.Swap(true) {
-		return
+		st.tx.seen.Store(true)
+	} else {
+		st.rx.seen.Store(true)
 	}
-	if c.sawPlaintextTx.Load() && c.sawPlaintextRx.Load() {
+	if st.tx.seen.Load() && st.rx.seen.Load() {
 		c.completeStage(diag.StageData)
 	}
 }

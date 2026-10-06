@@ -1089,9 +1089,6 @@ func (c *Client) startDataPath(pushOpts *routing.PushOptions) {
 	cctx, cancel := context.WithCancel(context.Background())
 	c.cancelFn = cancel
 
-	// Initialise lastRecv to now so dead-link detection doesn't fire immediately.
-	c.lastRecv.Store(time.Now().UnixNano())
-
 	c.wg.Add(2)
 	go c.tunToWire(cctx)
 	go c.wireToTun(cctx)

@@ -286,7 +286,7 @@ func TestInactiveCountsBothDirections(t *testing.T) {
 			case <-sending:
 				return
 			case <-tick.C:
-				c.bytesSent.Add(1024)
+				c.stats().tx.bytes.Add(1024)
 			}
 		}
 	}()
@@ -381,7 +381,7 @@ func TestInactiveByteThresholdCountsBothDirections(t *testing.T) {
 			case <-sending:
 				return
 			case <-tick.C:
-				c.bytesSent.Add(4096)
+				c.stats().tx.bytes.Add(4096)
 			}
 		}
 	}()

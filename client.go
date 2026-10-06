@@ -372,48 +372,13 @@ type Client struct {
 	// Connect is a sequence of one, a reconnect however many it takes.
 	reconnecting bool
 
-	// stats
-	bytesSent atomic.Uint64
-	bytesRecv atomic.Uint64
-
-	// packetsSent, packetsRecv, decryptFailures, retransmits and rekeys are
-	// the remaining diag.Counters fields. They are separate from Stats, which
-	// is the public traffic snapshot and part of the D-Bus surface.
-	packetsSent     atomic.Uint64
-	packetsRecv     atomic.Uint64
-	decryptFailures atomic.Uint64
-	retransmits     atomic.Uint64
-	rekeys          atomic.Uint64
-
-	// controlAuthFailures, controlReplays and controlStaleTimestamps tally the
-	// control packets the wrap refused, kept out of decryptFailures and
-	// Replays: a data-channel failure is a derivation mismatch in keys both
-	// peers negotiated, a control-channel one means the profile's static key
-	// does not match the server's.
-	controlAuthFailures    atomic.Uint64
-	controlReplays         atomic.Uint64
-	controlStaleTimestamps atomic.Uint64
-
-	// controlForeignSession tallies control packets that named another session.
-	// Apart from controlAuthFailures on purpose: an auth failure says our
-	// static key is wrong, this says the key was right — or absent — and the
-	// packet belonged to somebody else. A forgery attempt or a stale peer.
-	controlForeignSession atomic.Uint64
-
 	// rec accumulates the diag.SessionReport for the current attempt. It is an
 	// atomic pointer because reset replaces it between attempts while Report
 	// may be called from any goroutine, and some recording sites hold mu.
 	rec atomic.Pointer[sessionRecorder]
-
-	// sawPlaintextTx and sawPlaintextRx record whether a plaintext packet has
-	// crossed the tunnel in each direction. StageData completes when both are
-	// set: the data stage is proven by traffic, not by keys being installed.
-	sawPlaintextTx atomic.Bool
-	sawPlaintextRx atomic.Bool
-
-	// lastRecv is the UnixNano timestamp of the last successfully decrypted
-	// data-channel packet. Used by keepaliveLoop for dead-link detection.
-	lastRecv atomic.Int64
+	// counts holds the current attempt's tallies; see stats. Replaced, not
+	// zeroed, between attempts, for the reason rec is.
+	counts atomic.Pointer[attemptStats]
 
 	// keySource is our own key-method-2 contribution for the current key
 	// epoch, kept because the classic derivation consumes it after PUSH_REPLY,
@@ -595,9 +560,10 @@ func (c *Client) Stats() Stats {
 	up := c.connectedAt
 	c.mu.Unlock()
 
+	st := c.stats()
 	s := Stats{
-		BytesSent: c.bytesSent.Load(),
-		BytesRecv: c.bytesRecv.Load(),
+		BytesSent: st.tx.bytes.Load(),
+		BytesRecv: st.rx.bytes.Load(),
 	}
 	if !up.IsZero() {
 		s.Uptime = time.Since(up)

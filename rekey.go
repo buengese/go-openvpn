@@ -95,7 +95,7 @@ func (c *Client) runRekey(run func() error) {
 		c.noteTransient(err)
 		return
 	}
-	c.rekeys.Add(1)
+	c.stats().rekeys.Add(1)
 	c.completeStage(diag.StageRekey)
 }
 

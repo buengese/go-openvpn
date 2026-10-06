@@ -272,7 +272,7 @@ func (c *Client) readPacket(conn net.Conn) ([]byte, error) {
 // timestamps are deliberately not evidence: both mean the packet *did*
 // authenticate, so the key is right and the fault is on the path.
 func (c *Client) resetFailureClass() (diag.Class, string) {
-	n := c.controlAuthFailures.Load()
+	n := c.stats().ctl.authFailures.Load()
 	if n == 0 {
 		return diag.ClassNetwork, ""
 	}
@@ -288,15 +288,16 @@ func (c *Client) resetFailureClass() (diag.Class, string) {
 // timestamp means the key is right and the path duplicated or reordered a
 // packet. Anything else counts with the authentication failures.
 func (c *Client) countControlDrop(err error) {
+	ctl := &c.stats().ctl
 	switch {
 	case errors.Is(err, wrap.ErrReplay):
-		c.controlReplays.Add(1)
+		ctl.replays.Add(1)
 	case errors.Is(err, wrap.ErrStaleTimestamp):
-		c.controlStaleTimestamps.Add(1)
+		ctl.staleTimestamps.Add(1)
 	case errors.Is(err, errForeignSession):
-		c.controlForeignSession.Add(1)
+		ctl.foreignSession.Add(1)
 	default:
-		c.controlAuthFailures.Add(1)
+		ctl.authFailures.Add(1)
 	}
 }
 
