@@ -45,7 +45,7 @@ func TestManagerBasicRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("encrypt: %v", err)
 	}
-	plain, _, err := mgrB.Decrypt(pkt)
+	plain, err := mgrB.Decrypt(pkt)
 	if err != nil {
 		t.Fatalf("decrypt: %v", err)
 	}
@@ -55,7 +55,7 @@ func TestManagerBasicRoundTrip(t *testing.T) {
 }
 
 // TestManagerDecompressesLZO sends a payload the way a comp-lzo peer that
-// compressed it does, and checks MaxPayload bounds the result.
+// compressed it does, and checks the codec's bound applies.
 func TestManagerDecompressesLZO(t *testing.T) {
 	a, b := makeGCMPair(t, 0x18)
 	msg := bytes.Repeat([]byte{0x45, 0x00, 0x04, 0xb0}, 300)
@@ -64,21 +64,22 @@ func TestManagerDecompressesLZO(t *testing.T) {
 		t.Fatalf("encrypt: %v", err)
 	}
 
-	mgr := datachannel.NewManager(b, &datachannel.ManagerConfig{
-		Compress: compress.ModeLZO, MaxPayload: len(msg),
-	})
-	plain, decompressed, err := mgr.Decrypt(pkt)
-	if err != nil || !decompressed || !bytes.Equal(plain, msg) {
-		t.Fatalf("Decrypt = %d bytes, %v, %v; want the %d-byte packet, decompressed",
-			len(plain), decompressed, err, len(msg))
+	codec := compress.NewCodec(compress.ModeLZO, len(msg))
+	mgr := datachannel.NewManager(b, &datachannel.ManagerConfig{Compress: codec})
+	plain, err := mgr.Decrypt(pkt)
+	if err != nil || !bytes.Equal(plain, msg) {
+		t.Fatalf("Decrypt = %d bytes, %v; want the %d-byte packet", len(plain), err, len(msg))
+	}
+	if n := codec.Decompressed(); n != 1 {
+		t.Errorf("Decompressed = %d, want 1", n)
 	}
 
 	_, b = makeGCMPair(t, 0x18)
 	small := datachannel.NewManager(b, &datachannel.ManagerConfig{
-		Compress: compress.ModeLZO, MaxPayload: len(msg) - 1,
+		Compress: compress.NewCodec(compress.ModeLZO, len(msg)-1),
 	})
-	if _, _, err := small.Decrypt(pkt); err == nil || errors.Is(err, compress.ErrCompressed) {
-		t.Errorf("Decrypt past MaxPayload = %v, want a decompression error", err)
+	if _, err := small.Decrypt(pkt); err == nil || errors.Is(err, compress.ErrCompressed) {
+		t.Errorf("Decrypt past the bound = %v, want a decompression error", err)
 	}
 }
 
@@ -141,7 +142,7 @@ func TestManagerRotate(t *testing.T) {
 	if err != nil {
 		t.Fatalf("encrypt after rotate: %v", err)
 	}
-	plain, _, err := mgrB.Decrypt(pkt)
+	plain, err := mgrB.Decrypt(pkt)
 	if err != nil {
 		t.Fatalf("decrypt after rotate: %v", err)
 	}
@@ -174,7 +175,7 @@ func TestManagerRekeyTransitionAcceptsBothEpochs(t *testing.T) {
 	if err != nil {
 		t.Fatalf("encrypt with new secondary: %v", err)
 	}
-	if plain, _, err := mgr.Decrypt(newInbound); err != nil || !bytes.Equal(plain, []byte("new-secondary")) {
+	if plain, err := mgr.Decrypt(newInbound); err != nil || !bytes.Equal(plain, []byte("new-secondary")) {
 		t.Fatalf("new secondary packet = %q, %v", plain, err)
 	}
 
@@ -194,7 +195,7 @@ func TestManagerRekeyTransitionAcceptsBothEpochs(t *testing.T) {
 	if err != nil {
 		t.Fatalf("encrypt old in-flight packet: %v", err)
 	}
-	if plain, _, err := mgr.Decrypt(oldInbound); err != nil || !bytes.Equal(plain, []byte("old-in-flight")) {
+	if plain, err := mgr.Decrypt(oldInbound); err != nil || !bytes.Equal(plain, []byte("old-in-flight")) {
 		t.Fatalf("old in-flight packet = %q, %v", plain, err)
 	}
 }
@@ -235,7 +236,7 @@ func TestManagerCountsBothDirectionsTowardRenegBytes(t *testing.T) {
 		if mgr.NeedsRekey() {
 			t.Fatal("a fresh manager already wants a rekey")
 		}
-		if _, _, err := mgr.Decrypt(pkt); err != nil {
+		if _, err := mgr.Decrypt(pkt); err != nil {
 			t.Fatalf("Decrypt: %v", err)
 		}
 		if !mgr.NeedsRekey() {

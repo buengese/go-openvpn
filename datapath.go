@@ -183,12 +183,8 @@ func (c *Client) sendExitNotify(copies int) {
 // failCompressedPayload ends the session because the peer compressed a payload
 // with an algorithm this client cannot decompress. It is ClassUnsupported at
 // StageData, and Feature names the directive that selected the algorithm.
-func (c *Client) failCompressedPayload(ctx context.Context, cause error) {
-	feature := c.compression.String()
-	var cpe *compress.CompressedPayloadError
-	if errors.As(cause, &cpe) {
-		feature = c.compression.String() + " (" + cpe.Algorithm + ")"
-	}
+func (c *Client) failCompressedPayload(ctx context.Context, cause *compress.CompressedPayloadError) {
+	feature := cause.Mode.String() + " (" + cause.Algorithm + ")"
 	// Recorded rather than returned — the only caller is a data-path goroutine
 	// with nowhere to hand an error — and recorded before the teardown, because
 	// the first failure recorded wins the outcome.
@@ -225,23 +221,22 @@ func (c *Client) wireToTun(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case pkt := <-dataCh:
-			plain, decompressed, err := c.manager.Decrypt(pkt)
+			plain, err := c.manager.Decrypt(pkt)
 			if err != nil {
 				// A peer compressing with a codec we lack will keep doing so:
 				// end the session, naming the algorithm.
-				if errors.Is(err, compress.ErrCompressed) {
-					c.failCompressedPayload(ctx, err)
+				var cpe *compress.CompressedPayloadError
+				if errors.As(err, &cpe) {
+					c.failCompressedPayload(ctx, cpe)
 					return
 				}
-				// A replay drop reaches us as an ordinary decrypt error, so
-				// diag.Counters.Replays stays zero and this tally covers both.
+				// Replay drops and LZO payloads that fail to decode reach us
+				// as ordinary errors, so diag.Counters.Replays stays zero and
+				// this tally covers all three.
 				c.decryptFailures.Add(1)
 				continue
 			}
 			c.packetsRecv.Add(1)
-			if decompressed {
-				c.decompressed.Add(1)
-			}
 			// Reset the last-received timestamp for dead-link detection.
 			c.lastRecv.Store(time.Now().UnixNano())
 			// Drop keepalive magic — it is not a real IP packet.
@@ -444,7 +439,9 @@ func (c *Client) sessionMonitor(ctx context.Context) {
 
 // effectiveTunMTU picks the tunnel MTU from what the profile asked for and
 // what the server pushed. An explicit profileMTU is an upper bound: a server
-// may only reduce it. Returns profileMTU, or 1500 when neither side said.
+// may only reduce it, so a larger push cannot undo a profile MTU chosen to
+// avoid path fragmentation. Returns profileMTU, or OpenVPN 2's default when
+// neither side said.
 func effectiveTunMTU(pushedMTU, profileMTU int) int {
 	if profileMTU > 0 {
 		if pushedMTU > 0 && pushedMTU < profileMTU {
@@ -455,7 +452,7 @@ func effectiveTunMTU(pushedMTU, profileMTU int) int {
 	if pushedMTU > 0 {
 		return pushedMTU
 	}
-	return 1500
+	return openVPN2DefaultTunMTU
 }
 
 const (

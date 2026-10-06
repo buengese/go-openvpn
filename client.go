@@ -228,11 +228,10 @@ type Client struct {
 	// relay goroutine (which owns all reads from rawConn). wireToTun drains
 	// it.
 	dataCh chan []byte
-	// compression is the framing the data channel actually installed: what
-	// compress.EffectiveMode made of the profile's directive, the server's
-	// pushed one and allow-compression. Settled once in startDataChannel. The
-	// report shows this rather than the pushed mode, which is often nothing.
-	compression compress.Mode
+	// codec is the compression the data channel installed, built in
+	// startDataChannel from what compress.EffectiveMode settled on. Atomic
+	// because the report reads its count without the lock.
+	codec atomic.Pointer[compress.Codec]
 	// mssFix is an explicit maximum-MSS clamp in bytes (0 = not configured).
 	// A server-pushed value takes precedence over a profile value.
 	mssFix int
@@ -377,14 +376,12 @@ type Client struct {
 	bytesSent atomic.Uint64
 	bytesRecv atomic.Uint64
 
-	// packetsSent, packetsRecv, decryptFailures, decompressed, retransmits
-	// and rekeys are the remaining diag.Counters fields. They are separate
-	// from Stats, which is the public traffic snapshot and part of the D-Bus
-	// surface.
+	// packetsSent, packetsRecv, decryptFailures, retransmits and rekeys are
+	// the remaining diag.Counters fields. They are separate from Stats, which
+	// is the public traffic snapshot and part of the D-Bus surface.
 	packetsSent     atomic.Uint64
 	packetsRecv     atomic.Uint64
 	decryptFailures atomic.Uint64
-	decompressed    atomic.Uint64
 	retransmits     atomic.Uint64
 	rekeys          atomic.Uint64
 

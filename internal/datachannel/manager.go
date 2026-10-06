@@ -38,10 +38,6 @@ const DefaultRenegSec = 3600
 // 0 means no byte-limit renegotiation (openvpn3-core default).
 const DefaultRenegBytes = 0
 
-// DefaultMaxPayload bounds a decompressed payload when the config names no
-// bound: OpenVPN's default tun-mtu.
-const DefaultMaxPayload = 1500
-
 // Manager wraps a Channel and tracks the byte and time limits that trigger
 // key renegotiation.  It is safe for concurrent use.
 type Manager struct {
@@ -56,10 +52,9 @@ type Manager struct {
 	bytesSent  atomic.Int64 // bytes encrypted since last rotation
 	bytesRecv  atomic.Int64 // bytes decrypted since last rotation
 
-	// compress is the compression mode negotiated with the server.
+	// codec is the session's compression, fixed at construction.
 	// Reference: openvpn3-core ssl/proto.hpp parse_pushed_compression() line ~875.
-	compress   compress.Mode
-	maxPayload int
+	codec *compress.Codec
 }
 
 // ManagerConfig holds the renegotiation parameters parsed from PUSH_REPLY.
@@ -72,34 +67,25 @@ type ManagerConfig struct {
 	// 0 disables byte-based renegotiation.
 	RenegBytes int64
 
-	// Compress is the *effective* compression framing for this session: what
-	// compress.EffectiveMode made of the profile's directive, the server's
-	// pushed one and allow-compression, not the pushed mode on its own.
-	//
-	// ModeNone (the default) adds and strips nothing. Every other mode frames
-	// every data packet; which bytes, and whether the framing byte replaces the
-	// payload's first byte or precedes it, is internal/compress's business.
-	Compress compress.Mode
-
-	// MaxPayload is the largest plaintext a compressed payload may decompress
-	// to: the tunnel MTU. 0 means DefaultMaxPayload.
-	MaxPayload int
+	// Compress is the session's compression codec, built from the *effective*
+	// mode: what compress.EffectiveMode made of the profile's directive, the
+	// server's pushed one and allow-compression. nil adds and strips nothing.
+	Compress *compress.Codec
 }
 
 // NewManager creates a Manager wrapping ch with the given renegotiation config.
 // If cfg is nil, defaults are used (3600 s, no byte limit).
 func NewManager(ch *Channel, cfg *ManagerConfig) *Manager {
 	m := &Manager{
-		current:    ch,
-		startedAt:  time.Now(),
-		maxPayload: DefaultMaxPayload,
+		current:   ch,
+		startedAt: time.Now(),
+		codec:     compress.NewCodec(compress.ModeNone, 0),
 	}
 	if cfg != nil {
 		m.renegSec = cfg.RenegSec
 		m.renegBytes = cfg.RenegBytes
-		m.compress = cfg.Compress
-		if cfg.MaxPayload > 0 {
-			m.maxPayload = cfg.MaxPayload
+		if cfg.Compress != nil {
+			m.codec = cfg.Compress
 		}
 	} else {
 		m.renegSec = DefaultRenegSec
@@ -118,10 +104,9 @@ func NewManager(ch *Channel, cfg *ManagerConfig) *Manager {
 func (m *Manager) Encrypt(plaintext []byte) ([]byte, error) {
 	m.mu.RLock()
 	ch := m.current
-	cmode := m.compress
 	m.mu.RUnlock()
 
-	inner, err := compress.Wrap(cmode, plaintext)
+	inner, err := m.codec.Wrap(plaintext)
 	if err != nil {
 		return nil, err
 	}
@@ -134,32 +119,31 @@ func (m *Manager) Encrypt(plaintext []byte) ([]byte, error) {
 }
 
 // Decrypt decrypts a data-channel wire packet, updates the byte counter, and
-// returns the plaintext IP packet and whether the peer had compressed it.
+// returns the plaintext IP packet.
 //
 // If a compression mode is active the framing is stripped after decryption
 // (Unwrap). A payload compressed with an algorithm this client cannot
 // decompress comes back as compress.ErrCompressed.
 //
 // Reference: openvpn3-core ssl/proto.hpp KeyContext::decrypt().
-func (m *Manager) Decrypt(pkt []byte) ([]byte, bool, error) {
+func (m *Manager) Decrypt(pkt []byte) ([]byte, error) {
 	m.mu.RLock()
 	ch, err := m.decryptChannel(pkt)
-	cmode := m.compress
 	m.mu.RUnlock()
 	if err != nil {
-		return nil, false, err
+		return nil, err
 	}
 
 	inner, err := ch.Decrypt(pkt)
 	if err != nil {
-		return nil, false, err
+		return nil, err
 	}
-	plain, decompressed, err := compress.Unwrap(cmode, inner, m.maxPayload)
+	plain, err := m.codec.Unwrap(inner)
 	if err != nil {
-		return nil, false, err
+		return nil, err
 	}
 	m.bytesRecv.Add(int64(len(plain)))
-	return plain, decompressed, nil
+	return plain, nil
 }
 
 // decryptChannel selects the data-channel key epoch from the packet's key ID.

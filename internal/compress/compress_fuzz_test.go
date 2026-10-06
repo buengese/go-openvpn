@@ -9,8 +9,8 @@ import (
 	"github.com/buengese/go-openvpn/internal/compress"
 )
 
-// FuzzUnwrap feeds arbitrary payloads to Unwrap in every mode. A decrypted
-// payload is peer-controlled, so Unwrap must not panic, must keep a
+// FuzzUnwrap feeds arbitrary payloads to Codec.Unwrap in every mode. A
+// decrypted payload is peer-controlled, so Unwrap must not panic, must keep a
 // decompressed packet within maxLen, and may report ErrCompressed only for a
 // codec it does not link. The seeds include the captured LZO payloads.
 func FuzzUnwrap(f *testing.F) {
@@ -27,14 +27,15 @@ func FuzzUnwrap(f *testing.F) {
 	}
 	f.Fuzz(func(t *testing.T, payload []byte, maxLen uint16) {
 		for _, m := range modes {
-			got, decompressed, err := compress.Unwrap(m, payload, int(maxLen))
+			codec := compress.NewCodec(m, int(maxLen))
+			got, err := codec.Unwrap(payload)
 			if err != nil {
 				if errors.Is(err, compress.ErrCompressed) && m.Decompresses() {
 					t.Errorf("Unwrap(%v) = %v; this mode's codec is linked", m, err)
 				}
 				continue
 			}
-			if decompressed && (!m.Decompresses() || len(got) > int(maxLen)) {
+			if codec.Decompressed() > 0 && (!m.Decompresses() || len(got) > int(maxLen)) {
 				t.Errorf("Unwrap(%v, maxLen %d) decompressed %d bytes", m, maxLen, len(got))
 			}
 		}

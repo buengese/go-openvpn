@@ -535,11 +535,12 @@ func (c *Client) bringUpTunnel(ctx context.Context, samlToken string) error {
 		return err
 	}
 
-	if err := c.startDataChannel(pushOpts, keyMat256); err != nil {
+	tunMTU := effectiveTunMTU(pushOpts.TunMTU, c.prof.TunMTU)
+	if err := c.startDataChannel(pushOpts, keyMat256, tunMTU); err != nil {
 		return err
 	}
 
-	tunMTU := c.enterDataStage(pushOpts)
+	c.enterDataStage(pushOpts, tunMTU)
 
 	if err := c.bringUpDevice(ctx, pushOpts, dnsOpts, tunMTU); err != nil {
 		return err
@@ -913,8 +914,8 @@ func (c *Client) advertisedDataChannel() datachannel.Params {
 }
 
 // startDataChannel builds the cipher the server negotiated and installs the
-// manager that owns rekeys.
-func (c *Client) startDataChannel(pushOpts *routing.PushOptions, keyMat256 []byte) error {
+// manager that owns rekeys. tunMTU bounds a decompressed payload.
+func (c *Client) startDataChannel(pushOpts *routing.PushOptions, keyMat256 []byte, tunMTU int) error {
 	params, feature, err := c.negotiateDataChannel(pushOpts)
 	if err != nil {
 		c.rawConn.Close()
@@ -935,7 +936,8 @@ func (c *Client) startDataChannel(pushOpts *routing.PushOptions, keyMat256 []byt
 		c.setDisconnected(err)
 		return c.failUnsupported(diag.StageKeys, "allow-compression", err.Error())
 	}
-	c.compression = mode
+	codec := compress.NewCodec(mode, tunMTU)
+	c.codec.Store(codec)
 
 	// peerID and the wire format params carries were both parsed out of the
 	// PUSH_REPLY by applyPushReply and are connection-scoped, so they
@@ -953,8 +955,7 @@ func (c *Client) startDataChannel(pushOpts *routing.PushOptions, keyMat256 []byt
 		// OpenVPN default, or an unsupported rekey starts an hour in.
 		RenegSec:   c.prof.RenegSec,
 		RenegBytes: c.prof.RenegBytes,
-		Compress:   mode,
-		MaxPayload: effectiveTunMTU(pushOpts.TunMTU, c.prof.TunMTU),
+		Compress:   codec,
 	})
 	c.completeStage(diag.StageKeys)
 
@@ -997,27 +998,21 @@ func (c *Client) serverOptsSeen() string {
 	return c.serverOpts
 }
 
-// enterDataStage opens the data stage and settles the two size parameters the
-// data path frames against. It returns the tunnel MTU.
-func (c *Client) enterDataStage(pushOpts *routing.PushOptions) int {
+// enterDataStage opens the data stage and settles the MSS clamp the data path
+// frames against.
+func (c *Client) enterDataStage(pushOpts *routing.PushOptions, tunMTU int) {
 	// Bringing up the tunnel is the data stage. It stays open until plaintext
 	// has crossed in both directions — see markDataFlow — so a report whose
 	// StageData record has no duration reached the tunnel but never proved it.
 	c.enterStage(diag.StageData)
 
-	// A server-pushed MTU can reduce the local MTU, but an explicit profile
-	// value remains an upper bound. This prevents a larger PUSH_REPLY value
-	// from undoing a user-selected MTU that avoids path fragmentation.
-	tunMTU := effectiveTunMTU(pushOpts.TunMTU, c.prof.TunMTU)
-	// c.compression, not pushOpts.Compression: the framing byte comes off the
-	// link budget whichever of the two sources asked for it, and for a
+	// The codec's mode, not pushOpts.Compression: the framing byte comes off
+	// the link budget whichever of the two sources asked for it, and for a
 	// profile-declared mode the push says nothing at all.
 	c.mssFix = c.effectiveMSSFix(
-		pushOpts.Mssfix, tunMTU, c.dataParams, c.compression,
+		pushOpts.Mssfix, tunMTU, c.dataParams, c.codec.Load().Mode(),
 		c.rawConn.RemoteAddr(),
 	)
-
-	return tunMTU
 }
 
 // tunnelBackend returns the backend that will carry this tunnel: the one the

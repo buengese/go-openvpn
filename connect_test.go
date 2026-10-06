@@ -531,7 +531,7 @@ func TestPushedPeerIDDecidesTheWireFormat(t *testing.T) {
 			if c.wire != tc.wantWire {
 				t.Fatalf("wire format = %v, want %v", c.wire, tc.wantWire)
 			}
-			if err := c.startDataChannel(pushOpts, make([]byte, 256)); err != nil {
+			if err := c.startDataChannel(pushOpts, make([]byte, 256), openVPN2DefaultTunMTU); err != nil {
 				t.Fatalf("startDataChannel: %v", err)
 			}
 
@@ -562,7 +562,7 @@ func TestRekeyParametersKeepTheWireFormat(t *testing.T) {
 	if err != nil {
 		t.Fatalf("applyPushReply: %v", err)
 	}
-	if err := c.startDataChannel(pushOpts, make([]byte, 256)); err != nil {
+	if err := c.startDataChannel(pushOpts, make([]byte, 256), openVPN2DefaultTunMTU); err != nil {
 		t.Fatalf("startDataChannel: %v", err)
 	}
 

@@ -226,13 +226,17 @@ func (c *Client) recorder() *sessionRecorder {
 
 // counters snapshots the data-channel tallies for the report.
 func (c *Client) counters() diag.Counters {
+	var decompressed uint64
+	if codec := c.codec.Load(); codec != nil {
+		decompressed = codec.Decompressed()
+	}
 	return diag.Counters{
 		BytesSent:       c.bytesSent.Load(),
 		BytesRecv:       c.bytesRecv.Load(),
 		PacketsSent:     c.packetsSent.Load(),
 		PacketsRecv:     c.packetsRecv.Load(),
 		DecryptFailures: c.decryptFailures.Load(),
-		Decompressed:    c.decompressed.Load(),
+		Decompressed:    decompressed,
 		Retransmits:     c.retransmits.Load(),
 		Rekeys:          c.rekeys.Load(),
 		// Replays is deliberately left at zero: the sliding window lives in

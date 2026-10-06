@@ -363,13 +363,14 @@ func TestCompressReproducesCapturedFraming(t *testing.T) {
 				// Never a Wrap assertion here: we do not compress on send. The
 				// packet must come back exactly, and not one byte past the
 				// bound.
-				got, decompressed, err := compress.Unwrap(mode, framed, len(plain))
-				if err != nil || !decompressed || !bytes.Equal(got, plain) {
-					t.Errorf("Unwrap(%v, <%s payload>) = %s (%d bytes), %v, %v; want the "+
+				codec := compress.NewCodec(mode, len(plain))
+				got, err := codec.Unwrap(framed)
+				if err != nil || codec.Decompressed() != 1 || !bytes.Equal(got, plain) {
+					t.Errorf("Unwrap(%v, <%s payload>) = %s (%d bytes), %v; want the "+
 						"captured %d-byte packet, decompressed", mode, v.Directive,
-						head(got, 8), len(got), decompressed, err, len(plain))
+						head(got, 8), len(got), err, len(plain))
 				}
-				if _, _, err := compress.Unwrap(mode, framed, len(plain)-1); err == nil ||
+				if _, err := compress.NewCodec(mode, len(plain)-1).Unwrap(framed); err == nil ||
 					errors.Is(err, compress.ErrCompressed) {
 					t.Errorf("Unwrap(%v, <%s payload>, %d) = %v; want a decompression "+
 						"error for a packet one byte past the bound", mode, v.Directive, len(plain)-1, err)
@@ -377,7 +378,7 @@ func TestCompressReproducesCapturedFraming(t *testing.T) {
 				return
 			}
 			if v.Compressed {
-				got, _, err := compress.Unwrap(mode, framed, len(plain))
+				got, err := compress.NewCodec(mode, len(plain)).Unwrap(framed)
 				if err == nil {
 					t.Errorf("Unwrap(%v, <%s payload, %d bytes>) returned %d bytes and no error; "+
 						"want a compressed-payload error naming %s. This is the "+
@@ -399,7 +400,7 @@ func TestCompressReproducesCapturedFraming(t *testing.T) {
 				return
 			}
 
-			got, err := compress.Wrap(mode, plain)
+			got, err := compress.NewCodec(mode, mtu).Wrap(plain)
 			if err != nil {
 				t.Fatalf("Wrap(%v, plain): %v", mode, err)
 			}
@@ -410,7 +411,7 @@ func TestCompressReproducesCapturedFraming(t *testing.T) {
 					diffAt(got, framed), v.OpenVPNVersion, v.Directive)
 			}
 
-			got, _, err = compress.Unwrap(mode, framed, len(plain))
+			got, err = compress.NewCodec(mode, len(plain)).Unwrap(framed)
 			if err != nil {
 				t.Errorf("Unwrap(%v, framed): %v", mode, err)
 				return
