@@ -24,13 +24,15 @@ fi
 
 build_one() {
     local series="$1"
-    local key version sha base flags tag
+    local key version sha base flags openssl_url openssl_sha tag
 
     key="${series//./}"
     eval "version=\${OPENVPN_${key}_VERSION:-}"
     eval "sha=\${OPENVPN_${key}_SHA256:-}"
     eval "base=\${OPENVPN_${key}_BASE:-}"
     eval "flags=\${OPENVPN_${key}_CONFIGURE:-}"
+    eval "openssl_url=\${OPENVPN_${key}_OPENSSL_URL:-}"
+    eval "openssl_sha=\${OPENVPN_${key}_OPENSSL_SHA256:-}"
 
     if [ -z "$version" ]; then
         echo "build.sh: unknown OpenVPN series '$series' (no OPENVPN_${key}_VERSION in versions.env)" >&2
@@ -42,12 +44,15 @@ build_one() {
     echo "    base:      ${base}"
     echo "    sha256:    ${sha}"
     echo "    configure: ${flags}"
+    echo "    openssl:   ${openssl_url:-distro}"
 
     "$DOCKER" build \
         --build-arg "BASE_IMAGE=${base}" \
         --build-arg "OPENVPN_VERSION=${version}" \
         --build-arg "OPENVPN_SHA256=${sha}" \
         --build-arg "CONFIGURE_FLAGS=${flags}" \
+        --build-arg "OPENSSL_URL=${openssl_url}" \
+        --build-arg "OPENSSL_SHA256=${openssl_sha}" \
         --build-arg "SOURCE_URL_BASE=${MATRIX_SOURCE_URL_BASE}" \
         -t "$tag" \
         "$here"

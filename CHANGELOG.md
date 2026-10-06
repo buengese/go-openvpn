@@ -273,6 +273,11 @@ and releases follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `compress lzo` and `allow-compression asym`/`yes` are graded `supported`.
   The codec is `github.com/buengese/go-lzo`.
 
+- The test matrix images are built on Debian trixie, since bullseye's packages
+  are no longer served. 2.4 and 2.5 link OpenSSL 1.1.1w built from source with
+  bullseye's TLS defaults; 2.6 links trixie's OpenSSL 3.5. Run
+  `make matrix-images` again.
+
 - Two capability-registry verdicts no longer refuse a profile before
   dialling. `ping-timer-rem` is `ignored`: a client that dials already has
   what it asks for. `fragment 0` is `ignored`: it asks for no fragmentation.

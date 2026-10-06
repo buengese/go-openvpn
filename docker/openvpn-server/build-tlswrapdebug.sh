@@ -57,6 +57,7 @@ echo "==> building ${tag}"
 echo "    base:      ${OPENVPN_24_BASE}"
 echo "    sha256:    ${OPENVPN_24_SHA256}"
 echo "    configure: ${OPENVPN_24_CONFIGURE}"
+echo "    openssl:   ${OPENVPN_24_OPENSSL_URL}"
 echo "    patches:   ${TLSWRAPDEBUG_PATCH_DIR}"
 
 "$DOCKER" build \
@@ -64,6 +65,8 @@ echo "    patches:   ${TLSWRAPDEBUG_PATCH_DIR}"
     --build-arg "OPENVPN_VERSION=${OPENVPN_24_VERSION}" \
     --build-arg "OPENVPN_SHA256=${OPENVPN_24_SHA256}" \
     --build-arg "CONFIGURE_FLAGS=${OPENVPN_24_CONFIGURE}" \
+    --build-arg "OPENSSL_URL=${OPENVPN_24_OPENSSL_URL}" \
+    --build-arg "OPENSSL_SHA256=${OPENVPN_24_OPENSSL_SHA256}" \
     --build-arg "SOURCE_URL_BASE=${MATRIX_SOURCE_URL_BASE}" \
     --build-arg "PATCH_DIR=${TLSWRAPDEBUG_PATCH_DIR}" \
     -t "$tag" \

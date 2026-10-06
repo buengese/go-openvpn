@@ -37,14 +37,14 @@ const (
 	OpenVPN26SHA256 = "f46df740f05f86020137a41cfc8814352391cf861ed57f57b4e815cb97c1d2cf"
 )
 
-// Base images, pinned by manifest digest. 2.4 and 2.5 need OpenSSL 1.1.1
-// (bullseye) — 2.4 does not build against OpenSSL 3.x. 2.6 requires OpenSSL 3.x
-// (bookworm).
+// Base images, pinned by manifest digest. 2.4 and 2.5 link an OpenSSL 1.1.1
+// built from source — 2.4 does not build against OpenSSL 3.x — and 2.6 the
+// distro's 3.x.
 const (
 	// OpenVPN24Base is the pinned base image for the 2.4 matrix image.
-	OpenVPN24Base = "debian:bullseye-slim@sha256:e5b6442dd2e9684cf5e87d8338b5968f3b348636fc0be6d7850a381e3731a2bd"
+	OpenVPN24Base = "debian:trixie-slim@sha256:a29215f6a35e51e22adffa17f89e9d2ef06214e64a2bad10d765c46aea49f11f"
 	// OpenVPN25Base is the pinned base image for the 2.5 matrix image.
-	OpenVPN25Base = "debian:bullseye-slim@sha256:e5b6442dd2e9684cf5e87d8338b5968f3b348636fc0be6d7850a381e3731a2bd"
+	OpenVPN25Base = "debian:trixie-slim@sha256:a29215f6a35e51e22adffa17f89e9d2ef06214e64a2bad10d765c46aea49f11f"
 	// OpenVPN26Base is the pinned base image for the 2.6 matrix image.
-	OpenVPN26Base = "debian:bookworm-slim@sha256:88200866dfff7ea7f5cbcb6ec7c8a701889efe6fe859fe64d6990e4b07ea4171"
+	OpenVPN26Base = "debian:trixie-slim@sha256:a29215f6a35e51e22adffa17f89e9d2ef06214e64a2bad10d765c46aea49f11f"
 )

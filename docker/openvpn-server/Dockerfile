@@ -18,7 +18,7 @@
 # instrumented server that answered to the plain `:2.4.12` tag would silently
 # print key material into every later test's logs. See docker/PRF-VECTORS.md.
 
-ARG BASE_IMAGE=debian:bullseye-slim
+ARG BASE_IMAGE=debian:trixie-slim
 
 # ---------------------------------------------------------------------------
 # Build stage
@@ -30,6 +30,8 @@ ARG OPENVPN_SHA256
 ARG SOURCE_URL_BASE=https://build.openvpn.net/downloads/releases
 ARG CONFIGURE_FLAGS="--prefix=/usr --enable-lzo --enable-lz4 --disable-plugin-auth-pam"
 ARG PATCH_DIR=patches
+ARG OPENSSL_URL=
+ARG OPENSSL_SHA256=
 
 SHELL ["/bin/sh", "-eux", "-c"]
 
@@ -49,6 +51,22 @@ RUN export DEBIAN_FRONTEND=noninteractive; \
     rm -rf /var/lib/apt/lists/*
 
 WORKDIR /usr/src
+
+# With OPENSSL_URL set, OpenSSL is built from that tarball and linked
+# statically, reading openssl-1.1.cnf rather than the distro's 3.x config.
+COPY openssl-1.1.cnf /usr/src/
+RUN [ -n "${OPENSSL_URL}" ] || exit 0; \
+    curl -fsSL -o openssl.tar.gz "${OPENSSL_URL}"; \
+    echo "${OPENSSL_SHA256}  openssl.tar.gz" | sha256sum -c -; \
+    mkdir openssl; \
+    tar -xzf openssl.tar.gz -C openssl --strip-components=1; \
+    cd openssl; \
+    ./config --prefix=/opt/openssl --openssldir=/usr/lib/ssl-1.1 no-shared no-tests; \
+    make -j"$(nproc)"; \
+    make install_sw; \
+    install -D -m 0644 /usr/src/openssl-1.1.cnf /out/usr/lib/ssl-1.1/openssl.cnf; \
+    cd ..; \
+    rm -rf openssl openssl.tar.gz
 
 RUN test -n "${OPENVPN_VERSION}"; \
     test -n "${OPENVPN_SHA256}"; \
@@ -70,6 +88,10 @@ RUN cd /usr/src/openvpn; \
     done
 
 RUN cd /usr/src/openvpn; \
+    if [ -n "${OPENSSL_URL}" ]; then \
+        export OPENSSL_CFLAGS="-I/opt/openssl/include" \
+            OPENSSL_LIBS="-L/opt/openssl/lib -lssl -lcrypto -ldl -pthread"; \
+    fi; \
     ./configure ${CONFIGURE_FLAGS}; \
     make -j"$(nproc)"; \
     make DESTDIR=/out install; \
