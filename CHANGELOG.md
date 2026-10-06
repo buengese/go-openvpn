@@ -485,6 +485,9 @@ and releases follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   left the data path running: `WaitForDisconnect` never returned, or a later
   `Reconnect` panicked.
 
+- Receiving a UDP packet no longer allocates 64 KiB: the read buffer is reused
+  and the packet copied out at its own size.
+
 - A server that ends an established session is noticed on every connection, not
   only on federated ones. Certificate and username/password profiles — every
   non-AWS provider — authenticate in one exchange, and that path handed the

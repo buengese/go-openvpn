@@ -274,15 +274,14 @@ func (c *Client) tlsHandshake(ctx context.Context, rawConn net.Conn) (*tls.Conn,
 					//
 					// dataCh is installed after this goroutine starts, so it
 					// is asked for until there is one and then kept; nothing
-					// closes it, so it stays safe to send on.
+					// closes it, so it stays safe to send on. pkt is ours:
+					// the reader allocates each packet.
 					if dataCh == nil {
 						dataCh = c.dataChannel()
 					}
 					if dataCh != nil {
-						buf := make([]byte, len(pkt))
-						copy(buf, pkt)
 						select {
-						case dataCh <- buf:
+						case dataCh <- pkt:
 						default:
 						}
 					}

@@ -3,6 +3,7 @@ package framing_test
 import (
 	"bytes"
 	"encoding/binary"
+	"net"
 	"testing"
 
 	"github.com/buengese/go-openvpn/internal/framing"
@@ -113,5 +114,31 @@ func TestBuildAckCarriesTheRequestedKeyID(t *testing.T) {
 	}
 	if got := framing.OpcodeFromByte(pkt[0]); got != framing.P_ACK_V1 {
 		t.Fatalf("ACK opcode = %d, want P_ACK_V1", got)
+	}
+}
+
+// TestReadUDPReturnsAnOwnedSlice guards the pooled read buffer: the reader
+// hands a packet to the relay and reads the next while the first is in use.
+func TestReadUDPReturnsAnOwnedSlice(t *testing.T) {
+	client, server := net.Pipe()
+	defer client.Close() //nolint:errcheck
+	defer server.Close() //nolint:errcheck
+	go func() {
+		server.Write([]byte{0x48, 0x01, 0x02, 0x03})       //nolint:errcheck
+		server.Write([]byte{0x20, 0x09, 0x09, 0x09, 0x09}) //nolint:errcheck
+	}()
+
+	first, err := framing.ReadUDP(client)
+	if err != nil {
+		t.Fatalf("first read: %v", err)
+	}
+	if _, err := framing.ReadUDP(client); err != nil {
+		t.Fatalf("second read: %v", err)
+	}
+	if want := []byte{0x48, 0x01, 0x02, 0x03}; !bytes.Equal(first, want) {
+		t.Errorf("first packet = %x after a second read, want %x", first, want)
+	}
+	if cap(first) == framing.MaxPacketSize {
+		t.Errorf("first packet holds a %d-byte buffer for %d bytes", cap(first), len(first))
 	}
 }

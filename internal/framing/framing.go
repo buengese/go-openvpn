@@ -1,10 +1,12 @@
 package framing
 
 import (
+	"bytes"
 	"encoding/binary"
 	"fmt"
 	"io"
 	"net"
+	"sync"
 )
 
 // MaxPacketSize is the maximum allowed size of a single OpenVPN packet.
@@ -52,17 +54,23 @@ func WriteTCP(w io.Writer, payload []byte) error {
 	return nil
 }
 
-// ReadUDP reads one OpenVPN packet from a UDP connection.
-// UDP packets are raw (no 2-byte length prefix); each datagram is one packet.
+// udpBufs holds read buffers large enough for any datagram, so that a read
+// allocates the datagram's size rather than MaxPacketSize.
+var udpBufs = sync.Pool{New: func() any { return new([MaxPacketSize]byte) }}
+
+// ReadUDP reads one OpenVPN packet from a UDP connection, into a slice the
+// caller owns. UDP packets are raw (no 2-byte length prefix); each datagram is
+// one packet.
 //
 // Reference: openvpn3-core transport/udplink.hpp
 func ReadUDP(conn net.Conn) ([]byte, error) {
-	buf := make([]byte, MaxPacketSize)
-	n, err := conn.Read(buf)
+	buf := udpBufs.Get().(*[MaxPacketSize]byte)
+	defer udpBufs.Put(buf)
+	n, err := conn.Read(buf[:])
 	if err != nil {
 		return nil, fmt.Errorf("framing: udp read: %w", err)
 	}
-	return buf[:n], nil
+	return bytes.Clone(buf[:n]), nil
 }
 
 // WriteUDP writes one OpenVPN packet to a UDP connection.
