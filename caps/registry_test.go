@@ -87,7 +87,7 @@ func TestRegistrySeverityForKeyDirectives(t *testing.T) {
 		want      diag.Severity
 	}{
 		{"tls-crypt-v2", diag.SeverityFatal},
-		{"comp-lzo", diag.SeverityDegraded},
+		{"comp-lzo", diag.SeveritySupported},
 		{"fast-io", diag.SeverityIgnored},
 	}
 	for _, tc := range cases {

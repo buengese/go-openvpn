@@ -268,15 +268,9 @@ func classifyAuthUserPass(_ *profile.Profile, d profile.Directive) (Support, str
 		"a credentials file is not read; supply the username and password through CredentialsFn"}, ""
 }
 
-// classifyCompression separates the compression directives that can only ever
-// frame from the ones whose peer may actually compress.
-//
-// What separates supported from degraded is the codec, not the framing. A stub
-// — bare 'compress', 'compress stub', 'compress stub-v2', 'comp-lzo no' —
-// never compresses, so its framing is the entire behaviour. The rest name a
-// real algorithm, and a peer using one may compress a payload this client
-// cannot decompress: refused by class at StageData rather than passed on as an
-// IP packet, but the session ends, so the directive is degraded.
+// classifyCompression grades a compression directive by whether this client
+// can decompress what a peer using it sends. A stub never compresses; LZO is
+// decompressed; LZ4 ends the session at StageData, so it is degraded.
 func classifyCompression(_ *profile.Profile, d profile.Directive) (Support, string) {
 	v := arg(d, 0)
 	mode, ok := compress.ModeForDirective(d.Name, v)
@@ -284,7 +278,12 @@ func classifyCompression(_ *profile.Profile, d profile.Directive) (Support, stri
 		return Support{fatal,
 			"not a compression algorithm this client — or OpenVPN — recognises"}, v
 	}
-	if mode.Compresses() {
+	switch {
+	case mode.Decompresses():
+		return Support{supported,
+			"the framing is applied and a compressed payload is decompressed; " +
+				"nothing is compressed on send"}, v
+	case mode.Compresses():
 		return Support{degraded,
 			"the framing is applied and nothing is compressed on send; a peer that " +
 				"compresses ends the session rather than corrupting it"}, v
@@ -298,8 +297,8 @@ func classifyCompression(_ *profile.Profile, d profile.Directive) (Support, stri
 // 'no' is honoured: compress.EffectiveMode refuses a compressing algorithm
 // from the profile and from the PUSH_REPLY alike, as
 // check_compression_settings_valid() does with COMP_F_ALLOW_STUB_ONLY. 'yes'
-// and 'asym' permit a peer to compress, which this client cannot decompress,
-// so the session ends as unsupported if the peer takes the offer up.
+// and 'asym' permit a peer to compress; whether this client can decompress it
+// is graded on the compression directive.
 func classifyAllowCompression(_ *profile.Profile, d profile.Directive) (Support, string) {
 	v := arg(d, 0)
 	allow, ok := compress.ParseAllowCompression(v)
@@ -312,9 +311,8 @@ func classifyAllowCompression(_ *profile.Profile, d profile.Directive) (Support,
 			"a compressing algorithm is refused from the profile and from the PUSH_REPLY alike, " +
 				"and a framing stub is permitted"}, v
 	}
-	return Support{degraded,
-		"compression is permitted but no codec is linked, so a peer that takes the offer up " +
-			"ends the session as unsupported"}, v
+	return Support{supported,
+		"the peer may compress; this client decompresses and never compresses on send"}, v
 }
 
 // classifyRemoteCertTLS reports the directive as honoured.

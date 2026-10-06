@@ -757,9 +757,8 @@ SECRETCERTBODY
 
 // TestInspectCompression grades the compression directives on the codec rather
 // than the framing. Every one of them is read from the profile and framed
-// correctly on the wire, so a stub compresses nothing and is honoured in full,
-// while a directive naming a real algorithm may meet a peer that compressed and
-// this client has no codec to answer with.
+// correctly on the wire; LZO is decompressed, while LZ4 may meet a peer that
+// compressed with a codec this client lacks.
 func TestInspectCompression(t *testing.T) {
 	cases := []struct {
 		src       string
@@ -768,10 +767,12 @@ func TestInspectCompression(t *testing.T) {
 		want      diag.Severity
 		why       string
 	}{
-		{"comp-lzo\n", "comp-lzo", "", diag.SeverityDegraded,
-			"COMP_ALG_LZO: the peer may compress and we cannot decompress"},
-		{"comp-lzo yes\n", "comp-lzo", "yes", diag.SeverityDegraded,
-			"adaptive off, so the peer compresses whatever shrinks"},
+		{"comp-lzo\n", "comp-lzo", "", diag.SeveritySupported,
+			"COMP_ALG_LZO: the peer may compress and we decompress"},
+		{"comp-lzo yes\n", "comp-lzo", "yes", diag.SeveritySupported,
+			"adaptive off, so the peer compresses whatever shrinks, and we decompress it"},
+		{"compress lzo\n", "compress", "lzo", diag.SeveritySupported,
+			"the same COMP_ALG_LZO, spelled the 2.4 way"},
 		{"comp-lzo no\n", "comp-lzo", "no", diag.SeveritySupported,
 			"COMP_ALG_STUB with no flags: framing only, and we produce it"},
 		{"compress\n", "compress", "", diag.SeveritySupported,
@@ -784,8 +785,8 @@ func TestInspectCompression(t *testing.T) {
 			"a real codec behind the v2 framing"},
 		{"allow-compression no\n", "allow-compression", "no", diag.SeveritySupported,
 			"refused from both sources, exactly as COMP_F_ALLOW_STUB_ONLY does"},
-		{"allow-compression yes\n", "allow-compression", "yes", diag.SeverityDegraded,
-			"permitted, but there is no codec to take the offer up with"},
+		{"allow-compression yes\n", "allow-compression", "yes", diag.SeveritySupported,
+			"permitted; the codec is graded on the compression directive"},
 		{"comp-noadapt\n", "comp-noadapt", "", diag.SeverityIgnored,
 			"adaptive only decides how eagerly a peer compresses; we never do"},
 	}

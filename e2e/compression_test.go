@@ -3,7 +3,7 @@
 //go:build docker
 
 // Compression: a data channel that survives its profile's compression setting,
-// and a peer that really compressed refused rather than misread.
+// and a peer that really compressed decompressed rather than misread.
 //
 // A peer with a compression directive frames every data packet and drops what
 // it cannot parse, so the framing is the difference between a tunnel and a
@@ -15,14 +15,9 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/base64"
-	"fmt"
-	"io"
-	"net/http"
 	"strings"
 	"testing"
 	"time"
-
-	"github.com/buengese/go-openvpn/diag"
 )
 
 // compressionEntries is the framing ladder: one entry per wire framing this
@@ -101,76 +96,34 @@ func TestCompressionFramingCarriesTraffic(t *testing.T) {
 	}
 }
 
-// TestCompressedPayloadIsUnsupportedNotCorruption drives the one matrix entry
-// that puts a genuinely compressed payload on the wire: `comp-lzo yes`, so
-// adaptive compression is off. The body is a long run of one byte, because LZO
-// still emits the uncompressed marker when compression would not shrink the
-// payload. What must happen is a refusal: no codec is linked, so the blob
-// behind a 0x66 marker would carry garbage into the tunnel.
-func TestCompressedPayloadIsUnsupportedNotCorruption(t *testing.T) {
+// TestCompressedPayloadIsDecompressed drives the one matrix entry that puts a
+// genuinely compressed payload on the wire: `comp-lzo yes`, so adaptive
+// compression is off. The body is a long run of one byte, because LZO still
+// emits the uncompressed marker when compression would not shrink the payload.
+func TestCompressedPayloadIsDecompressed(t *testing.T) {
 	const entry = "v24-cbc256-sha1-complzoyes-udp"
 	srv, tun := startMatrixTunnel(t, entry)
 
 	if got := tun.Report().Negotiated.Compression; got != "comp-lzo" {
 		t.Fatalf("negotiated compression = %q, want %q; without the LZO framing this "+
-			"entry cannot produce a compressed payload to refuse", got, "comp-lzo")
+			"entry cannot produce a compressed payload", got, "comp-lzo")
 	}
 
-	// Maximally compressible, and long enough to span several full segments
-	// so that at least one is far past COMPRESS_THRESHOLD.
-	body := strings.Repeat("A", 4096)
-	const port = 8085
-	startResponder(t, srv, port, body)
+	// Several full segments, each far past COMPRESS_THRESHOLD.
+	fetchThroughTunnel(t, srv, tun, 8085, strings.Repeat("A", 4096))
+	assertCarriedBothWays(t, tun)
 
-	// Not fetchThroughTunnel: the fetch is expected to fail, and a fetch that
-	// succeeds is itself the diagnosis rather than an ordinary mismatch.
-	client := &http.Client{
-		Transport: &http.Transport{DialContext: tun.DialContext},
-		Timeout:   20 * time.Second,
+	rep := tun.Report()
+	if rep.Counters.Decompressed == 0 {
+		t.Fatal("the fetch succeeded and no packet was decompressed, so the server never " +
+			"compressed one: this entry is not exercising the decompressor. Check that it " +
+			"is still `comp-lzo yes` on 2.4 — 2.5 and 2.6 never compress on send without " +
+			"allow-compression yes")
 	}
-	url := fmt.Sprintf("http://%s:%d/", serverTunIP, port)
-	resp, err := client.Get(url)
-	if err == nil {
-		got, readErr := io.ReadAll(resp.Body)
-		resp.Body.Close() //nolint:errcheck
-		if readErr == nil && string(got) == body {
-			t.Fatalf("the fetch succeeded and returned all %d bytes, so the server never "+
-				"compressed a packet: this entry is not exercising the branch it exists "+
-				"for. Check that it is still `comp-lzo yes` on 2.4 — 2.5 and 2.6 never "+
-				"compress on send without allow-compression yes", len(body))
-		}
+	if rep.Counters.DecryptFailures > 0 {
+		t.Errorf("%d packets failed to decrypt or decompress", rep.Counters.DecryptFailures)
 	}
-
-	// The session must have ended as unsupported, at the data stage, naming
-	// the algorithm. Poll: the refusal happens on the receive path, and the
-	// fetch above may return before the report is written.
-	var rep *diag.SessionReport
-	deadline := time.Now().Add(20 * time.Second)
-	for {
-		rep = tun.Report()
-		if rep.Outcome.Class == diag.ClassUnsupported || time.Now().After(deadline) {
-			break
-		}
-		time.Sleep(200 * time.Millisecond)
-	}
-
-	if rep.Outcome.Class != diag.ClassUnsupported {
-		t.Fatalf("outcome = %s at %s (%v), want %s: a peer that compressed a payload we "+
-			"cannot decompress must end the session, not be counted as %d dropped packets",
-			rep.Outcome.Class, rep.Outcome.Stage, rep.Outcome.ErrorChain,
-			diag.ClassUnsupported, rep.Counters.DecryptFailures)
-	}
-	if rep.Outcome.Stage != diag.StageData {
-		t.Errorf("stage = %s, want %s: the payload arrived through a finished tunnel",
-			rep.Outcome.Stage, diag.StageData)
-	}
-	if !strings.Contains(rep.Outcome.Feature, "lzo") {
-		t.Errorf("feature = %q, want it to name the algorithm the peer used; a sweep has "+
-			"to be able to attribute this to a directive rather than to a byte",
-			rep.Outcome.Feature)
-	}
-	t.Logf("%s: outcome=%s at %s feature=%q chain=%v",
-		entry, rep.Outcome.Class, rep.Outcome.Stage, rep.Outcome.Feature, rep.Outcome.ErrorChain)
+	t.Logf("%s: decompressed=%d recv=%d", entry, rep.Counters.Decompressed, rep.Counters.PacketsRecv)
 }
 
 // probePayload is a full-MTU-ish payload, large enough that a peer's
@@ -178,77 +131,52 @@ func TestCompressedPayloadIsUnsupportedNotCorruption(t *testing.T) {
 const probePayload = 1200
 
 // TestPingProbeDistinguishesACompressingPeer is the instrument check for
-// Tunnel.Ping used as a compression probe, and a 2x2 rather than a single case:
-// only the compressing peer given something worth compressing may fail, and the
-// random payload against the same server is what proves the tunnel was
-// otherwise fine.
+// Tunnel.Ping used as a compression probe, and a 2x2: only the compressing
+// peer given something worth compressing may show a decompressed packet, and
+// every payload must cross.
 func TestPingProbeDistinguishesACompressingPeer(t *testing.T) {
 	for _, tc := range []struct {
 		entry string
 		// wantCompressed is whether a repetitive payload should come back
-		// compressed, ending the connection as ClassUnsupported.
+		// compressed.
 		wantCompressed bool
 	}{
 		{"v24-cbc256-sha1-complzo-udp", true},
 		{"v26-gcm256-sha256-plain-udp", false},
 	} {
 		t.Run(tc.entry, func(t *testing.T) {
-			// Random first, in its own tunnel: a peer that compresses ends
-			// the connection, so the two payloads cannot share one.
-			t.Run("random payload always crosses", func(t *testing.T) {
-				_, tun := startMatrixTunnel(t, tc.entry)
-				gw, err := tun.Gateway()
-				if err != nil {
-					t.Fatalf("Gateway: %v", err)
-				}
-				payload := make([]byte, probePayload)
-				if _, err := rand.Read(payload); err != nil {
-					t.Fatal(err)
-				}
+			_, tun := startMatrixTunnel(t, tc.entry)
+			gw, err := tun.Gateway()
+			if err != nil {
+				t.Fatalf("Gateway: %v", err)
+			}
+			random := make([]byte, probePayload)
+			if _, err := rand.Read(random); err != nil {
+				t.Fatal(err)
+			}
+			// Repetitive first: 2.4's adaptive compression switches itself off
+			// for a minute after a sample that did not compress.
+			for i, p := range []struct {
+				name         string
+				payload      []byte
+				compressible bool
+			}{
+				{"repetitive", bytes.Repeat([]byte("A"), probePayload), true},
+				{"random", random, false},
+			} {
+				before := tun.Report().Counters.Decompressed
 				ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
-				defer cancel()
-				rtt, err := tun.Ping(ctx, gw, payload, 1)
+				_, err := tun.Ping(ctx, gw, p.payload, uint16(i+1))
+				cancel()
 				if err != nil {
-					t.Fatalf("random payload to %s: %v — incompressible bytes give even a "+
-						"compressing peer nothing to compress, so this must cross", gw, err)
+					t.Fatalf("%s payload to %s: %v", p.name, gw, err)
 				}
-				if rtt <= 0 {
-					t.Errorf("rtt = %v, want a positive round trip", rtt)
+				got := tun.Report().Counters.Decompressed - before
+				if want := tc.wantCompressed && p.compressible; (got > 0) != want {
+					t.Errorf("%s payload: %d packets decompressed, want compressed=%v",
+						p.name, got, want)
 				}
-			})
-
-			t.Run("repetitive payload", func(t *testing.T) {
-				_, tun := startMatrixTunnel(t, tc.entry)
-				gw, err := tun.Gateway()
-				if err != nil {
-					t.Fatalf("Gateway: %v", err)
-				}
-				ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
-				defer cancel()
-				_, err = tun.Ping(ctx, gw, bytes.Repeat([]byte("A"), probePayload), 1)
-
-				rep := tun.Report()
-				if !tc.wantCompressed {
-					if err != nil {
-						t.Fatalf("repetitive payload to a peer that does not compress: %v", err)
-					}
-					return
-				}
-				if err == nil {
-					t.Fatal("repetitive payload crossed a comp-lzo peer intact; the probe " +
-						"measures nothing if a compressing peer never compresses")
-				}
-				if rep.Outcome.Class != diag.ClassUnsupported || rep.Outcome.Stage != diag.StageData {
-					t.Errorf("outcome = %s/%s, want %s/%s — a compressed payload is a "+
-						"capability we lack, not a transport fault",
-						rep.Outcome.Class, rep.Outcome.Stage, diag.ClassUnsupported, diag.StageData)
-				}
-				if rep.Outcome.Feature == "" {
-					t.Error("outcome names no feature; the algorithm is the actionable half")
-				}
-				t.Logf("compressing peer detected: %s/%s feature=%q",
-					rep.Outcome.Class, rep.Outcome.Stage, rep.Outcome.Feature)
-			})
+			}
 		})
 	}
 }

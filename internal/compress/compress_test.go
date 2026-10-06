@@ -14,8 +14,13 @@ import (
 	"errors"
 	"testing"
 
+	lzo "github.com/buengese/go-lzo"
+
 	"github.com/buengese/go-openvpn/internal/compress"
 )
+
+// mtu bounds decompression in the tests that do not exercise the bound.
+const mtu = 1500
 
 // TestParseModeReadsEveryDirective walks the directive-to-mode table: a
 // directive read as ModeNone sends unframed packets to a peer that frames
@@ -108,7 +113,7 @@ func TestRoundTripEveryFraming(t *testing.T) {
 			if want := n + m.Overhead(); len(framed) != want {
 				t.Errorf("Wrap(%v, %d bytes) produced %d bytes, want %d", m, n, len(framed), want)
 			}
-			got, err := compress.Unwrap(m, framed)
+			got, _, err := compress.Unwrap(m, framed, mtu)
 			if err != nil {
 				t.Fatalf("Unwrap(%v, %d framed bytes): %v", m, len(framed), err)
 			}
@@ -163,20 +168,49 @@ func TestSwapMovesTheFirstByteToTheTail(t *testing.T) {
 	}
 }
 
-// TestUnwrapRefusesACompressedPayload covers each mode that can meet one, with
-// the marker its own algorithm uses.
+// TestUnwrapDecompressesLZO covers the LZO path and its bound: a payload past
+// maxLen, or a stream that does not decode, is an error but not ErrCompressed,
+// so the data path drops the packet rather than the session.
+func TestUnwrapDecompressesLZO(t *testing.T) {
+	plain := bytes.Repeat([]byte{0x45, 0x00, 0x05, 0xdc}, 300)
+	framed := append([]byte{0x66}, lzo.Compress(nil, plain)...)
+
+	got, decompressed, err := compress.Unwrap(compress.ModeLZO, framed, len(plain))
+	if err != nil || !decompressed || !bytes.Equal(got, plain) {
+		t.Fatalf("Unwrap = %d bytes, %v, %v; want the %d-byte packet, decompressed",
+			len(got), decompressed, err, len(plain))
+	}
+
+	for _, tc := range []struct {
+		framed []byte
+		maxLen int
+		why    string
+	}{
+		{framed, len(plain) - 1, "one byte past the bound"},
+		{framed[:len(framed)-1], mtu, "a truncated stream"},
+		{append(framed, 0x00), mtu, "bytes after the end of the stream"},
+		{[]byte{0x66, 0x01, 0x02, 0x03}, mtu, "a stream that is not LZO at all"},
+	} {
+		_, _, err := compress.Unwrap(compress.ModeLZO, tc.framed, tc.maxLen)
+		if err == nil || errors.Is(err, compress.ErrCompressed) {
+			t.Errorf("%s: Unwrap = %v, want a decompression error", tc.why, err)
+		}
+	}
+}
+
+// TestUnwrapRefusesACompressedPayload covers each mode whose codec is not
+// linked, with the marker its own algorithm uses.
 func TestUnwrapRefusesACompressedPayload(t *testing.T) {
 	cases := []struct {
 		mode    compress.Mode
 		framed  []byte
 		wantAlg string
 	}{
-		{compress.ModeLZO, []byte{0x66, 0x01, 0x02, 0x03}, "lzo"},
 		{compress.ModeLZ4, []byte{0x69, 0x01, 0x02, 0x03}, "lz4"},
 		{compress.ModeLZ4v2, []byte{0x50, 0x01, 0x02, 0x03}, "lz4v2"},
 	}
 	for _, tc := range cases {
-		got, err := compress.Unwrap(tc.mode, tc.framed)
+		got, _, err := compress.Unwrap(tc.mode, tc.framed, mtu)
 		if err == nil {
 			t.Errorf("Unwrap(%v, %x) returned %x and no error; a compressed blob must "+
 				"never reach the tunnel as an IP packet", tc.mode, tc.framed, got)
@@ -219,7 +253,7 @@ func TestUnwrapRefusesAHostileFramingByte(t *testing.T) {
 		{compress.ModeStubV2, []byte{0x50, 0x7F, 0x45}, "same, on the codec-free v2 mode"},
 	}
 	for _, tc := range cases {
-		got, err := compress.Unwrap(tc.mode, tc.framed)
+		got, _, err := compress.Unwrap(tc.mode, tc.framed, mtu)
 		if err == nil {
 			t.Errorf("Unwrap(%v, %x) returned %x and no error — %s", tc.mode, tc.framed, got, tc.why)
 		}
@@ -238,7 +272,7 @@ func TestV2FramingLeavesAnIPPacketAlone(t *testing.T) {
 		if !bytes.Equal(framed, plain) {
 			t.Errorf("Wrap(%v, %x) = %x, want the payload unchanged", m, plain, framed)
 		}
-		got, err := compress.Unwrap(m, plain)
+		got, _, err := compress.Unwrap(m, plain, mtu)
 		if err != nil {
 			t.Fatalf("Unwrap(%v): %v", m, err)
 		}
@@ -265,13 +299,13 @@ func TestV2EscapeUsesTheDecodersConstant(t *testing.T) {
 			t.Errorf("Wrap(%v, %x) = %x, want %x — the escape must carry the byte "+
 				"stubv2_decompress() checks for", m, plain, framed, want)
 		}
-		got, err := compress.Unwrap(m, framed)
+		got, _, err := compress.Unwrap(m, framed, mtu)
 		if err != nil || !bytes.Equal(got, plain) {
 			t.Errorf("Unwrap(%v, %x) = %x, %v; want %x and no error", m, framed, got, err, plain)
 		}
 		// What a real peer's encoder actually writes.
 		upstream := []byte{0x50, 0x0A, 0x50, 0xAA, 0xBB}
-		got, err = compress.Unwrap(m, upstream)
+		got, _, err = compress.Unwrap(m, upstream, mtu)
 		if err != nil || !bytes.Equal(got, plain) {
 			t.Errorf("Unwrap(%v, %x) = %x, %v; want %x and no error — 0x0A is what "+
 				"compv2_escape_data_ifneeded() emits", m, upstream, got, err, plain)

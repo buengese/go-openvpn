@@ -23,24 +23,24 @@ fixtures
   unrecognised blocks                   0
 
 severity totals
-  supported                           307
+  supported                           312
   ignored                              43
-  degraded                             20
+  degraded                             15
   fatal                                 4
 
 configs by worst severity
-  supported                            25
-  ignored                               6
-  degraded                             12
+  supported                            28
+  ignored                               7
+  degraded                              8
   fatal                                 4
 
 per group
   group                           configs       gaps  supported    ignored   degraded      fatal
-  compression                           8         50         45          1          4          0
+  compression                           8         50         48          1          1          0
   crypto                                6         43         37          1          5          0
-  lexical                               3         24         23          0          1          0
+  lexical                               3         24         24          0          0          0
   misc                                  5         67         32         27          7          1
-  provider                              1         24         14          8          1          1
+  provider                              1         24         15          8          0          1
   session                               5         45         40          4          1          0
   transport                             7         47         46          0          1          0
   trust                                 5         30         29          1          0          0
@@ -66,7 +66,7 @@ per directive
   cert                                  1          1          1          0          0          0
   cipher                                7          7          6          0          0          1
   client                               47         47         47          0          0          0
-  comp-lzo                              6          6          1          0          5          0
+  comp-lzo                              6          6          6          0          0          0
   comp-noadapt                          1          1          0          1          0          0
   compress                              3          3          2          0          1          0
   connect-retry-max                     1          1          0          1          0          0

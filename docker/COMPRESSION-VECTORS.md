@@ -13,8 +13,8 @@ it again from a clean checkout. It is the compression analogue of
 
 ## 1. Why a reading of the header was not enough
 
-Most provider profiles declare compression. None of them can compress here — no
-codec is linked, deliberately — but all of them need the *framing* to be right,
+Most provider profiles declare compression. The client never compresses on send,
+and decompresses only LZO, but all of them need the *framing* to be right,
 because a server that frames every data packet expects one back and drops what
 it cannot parse. When these vectors were captured, `comp-lzo` was the matrix's
 only entry that timed out, and it is the commonest form a profile asks for.
@@ -261,7 +261,7 @@ claim broke:
 - a compressed framing must not carry an unchanged payload under a
   compressed marker;
 - at least one vector across the whole capture must be genuinely compressed,
-  or `compress.ErrCompressed` would have nothing to detect.
+  or the decompressor would have nothing real to decode.
 
 ---
 
@@ -347,7 +347,7 @@ requires `COMP_F_ALLOW_COMPRESS`, which only `allow-compression yes` sets, so a
 it is — §6 measures exactly that on a 1259-byte run of `'A'`. 2.4 has no such
 gate. So the same directive against two servers one release apart produces a
 compressed payload from one and never from the other, and an implementation
-tested only against 2.5 would never meet `ErrCompressed` at all.
+tested only against 2.5 would never meet a compressed payload at all.
 
 ---
 
@@ -451,7 +451,9 @@ Docker; `go test ./...` runs them from the committed JSON.
   below.
 - **`TestCompressReproducesCapturedFraming`** — the known-answer test. §6 is
   what it printed the first time it was run; all 28 vectors now pass in both
-  directions against `internal/compress`.
+  directions against `internal/compress`. The compressed `comp-lzo yes`
+  payloads must decompress to the captured packet exactly, and fail one byte
+  short of it.
 
 `mode := compress.ParseMode(v.Mode)` in that last test is deliberate. It feeds
 the vector through the parser rather than around it, because a framing that is

@@ -204,8 +204,8 @@ var registry = map[string]entry{
 
 	// ---- Compression -------------------------------------------------
 
-	"comp-lzo": ref(degraded,
-		"the framing is applied; nothing is compressed on send, and a peer that compresses is refused",
+	"comp-lzo": ref(supported,
+		"the framing is applied and a compressed payload is decompressed; nothing is compressed on send",
 		classifyCompression),
 	"compress": ref(supported,
 		"the framing is applied, in the prepending and the swapping form alike",

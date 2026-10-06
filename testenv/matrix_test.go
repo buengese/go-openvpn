@@ -850,8 +850,7 @@ func TestClientUnsupportedEntriesExplainThemselves(t *testing.T) {
 // yes` is accepted by 2.4 and 2.5 alike and only 2.4 acts on it: 2.5 and 2.6
 // never compress on send without `allow-compression yes`, which nothing here
 // emits (docker/COMPRESSION-VECTORS.md). An entry moved to 2.5 would still
-// start and still connect, and would stop being what ErrCompressed is measured
-// against.
+// start and still connect, and would stop exercising the decompressor.
 func TestForcedLZOIsOnAVersionThatCompresses(t *testing.T) {
 	forced := 0
 	for _, e := range testenv.Matrix() {
@@ -867,8 +866,8 @@ func TestForcedLZOIsOnAVersionThatCompresses(t *testing.T) {
 		}
 	}
 	if forced == 0 {
-		t.Error("no entry forces compression; the client's ErrCompressed has nothing " +
-			"real to detect")
+		t.Error("no entry forces compression; the client's decompressor has nothing " +
+			"real to decode")
 	}
 }
 

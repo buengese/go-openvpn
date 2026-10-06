@@ -954,6 +954,7 @@ func (c *Client) startDataChannel(pushOpts *routing.PushOptions, keyMat256 []byt
 		RenegSec:   c.prof.RenegSec,
 		RenegBytes: c.prof.RenegBytes,
 		Compress:   mode,
+		MaxPayload: effectiveTunMTU(pushOpts.TunMTU, c.prof.TunMTU),
 	})
 	c.completeStage(diag.StageKeys)
 

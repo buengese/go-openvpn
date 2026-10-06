@@ -350,7 +350,7 @@ go-openvpn/
     datachannel/    — encrypt/decrypt pipeline, replay window, key rotation
     occ/            — in-band plaintexts: keepalive magic and OCC messages
     tlsverify/      — certificate verification and its verb>=4 rendering
-    compress/       — lz4-v2 / comp-lzo framing (links no codec, compresses nothing)
+    compress/       — compression framing and LZO decompression (compresses nothing)
     mssfix/         — software TCP MSS clamping (SYN/SYN-ACK rewrite)
   e2e/              — every end-to-end test; tagged docker / mockserver / soak
   testenv/          — the rig: Docker matrix, the stock-openvpn oracle, mock harness

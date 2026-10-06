@@ -1,11 +1,11 @@
-// Package compress implements OpenVPN's data-channel compression *framing*.
+// Package compress implements OpenVPN's data-channel compression framing and
+// LZO decompression.
 //
-// It links no codec and compresses nothing, ever. What it does is put the
-// bytes on the wire that a peer configured for compression expects to see, and
-// take them off again — and refuse, loudly and by a typed error, a payload the
-// peer genuinely compressed.
+// Nothing is compressed on send: every payload goes out behind the
+// uncompressed marker. A payload the peer LZO-compressed is decompressed; one
+// it LZ4-compressed is refused with ErrCompressed.
 //
-// # Why framing alone is enough, and why it is load-bearing
+// # Why the framing is load-bearing
 //
 // A peer with a compression directive frames *every* data packet, whether or
 // not it compressed that packet, and drops what it cannot parse. A client that
@@ -49,12 +49,16 @@
 //   - src/openvpn/compstub.c — stub_compress(), stubv2_decompress()
 //   - src/openvpn/comp-lz4.c — lz4_compress(), lz4v2_compress()
 //   - src/openvpn/comp.c — check_compression_settings_valid()
+//
+// The LZO1X codec is github.com/buengese/go-lzo.
 package compress
 
 import (
 	"errors"
 	"fmt"
 	"strings"
+
+	lzo "github.com/buengese/go-lzo"
 )
 
 // OpenVPN's compression framing bytes, from src/openvpn/comp.h.
@@ -143,7 +147,7 @@ type Mode int
 
 // The compression modes this client can frame for. None of them compresses on
 // send; ModeLZO, ModeLZ4 and ModeLZ4v2 differ from the stubs only in that a
-// peer using them may compress, which Unwrap refuses with ErrCompressed.
+// peer using them may compress.
 const (
 	// ModeNone is no compression framing at all: nothing is added on send
 	// and nothing is stripped on receive. It is what a profile with no
@@ -234,8 +238,7 @@ func (m Mode) Framing() Framing {
 }
 
 // Compresses reports whether a peer in this mode may put a genuinely
-// compressed payload on the wire. The stub modes never can: only ModeLZO,
-// ModeLZ4 and ModeLZ4v2 yield ErrCompressed, and only they are refused by
+// compressed payload on the wire. Only these modes are refused by
 // "allow-compression no".
 func (m Mode) Compresses() bool {
 	switch m {
@@ -244,6 +247,12 @@ func (m Mode) Compresses() bool {
 	default:
 		return false
 	}
+}
+
+// Decompresses reports whether Unwrap decompresses what a peer in this mode
+// compresses. Only ModeLZO does; ModeLZ4 and ModeLZ4v2 yield ErrCompressed.
+func (m Mode) Decompresses() bool {
+	return m == ModeLZO
 }
 
 // Overhead is the number of bytes this mode's framing adds to an uncompressed
@@ -289,8 +298,7 @@ const (
 	// what check_compression_settings_valid() enforces.
 	AllowNo
 	// AllowAsym is "allow-compression asym": accept a compressed payload from
-	// the peer, never send one. This client does neither, so it is recorded
-	// and changes nothing.
+	// the peer, never send one, which this client does whatever the policy.
 	AllowAsym
 	// AllowYes is "allow-compression yes": compression permitted in both
 	// directions. It is the only value under which a 2.5 or 2.6 peer will
@@ -408,19 +416,17 @@ func ParseMode(options string) Mode {
 	return mode
 }
 
-// ErrCompressed reports a peer that actually compressed a payload. No codec is
-// linked here, so the payload cannot be recovered; returning it as though it
-// were an IP packet is the failure Unwrap exists to prevent. Unwrap returns a
-// *CompressedPayloadError, which names the algorithm and satisfies errors.Is
-// against this sentinel.
+// ErrCompressed reports a peer that compressed a payload with an algorithm
+// this package cannot decompress. Unwrap returns a *CompressedPayloadError,
+// which names the algorithm and satisfies errors.Is against this sentinel.
 var ErrCompressed = errors.New("compress: peer sent a compressed payload and no codec is linked")
 
-// CompressedPayloadError is the error Unwrap returns for a genuinely
-// compressed payload. It carries the algorithm so that the caller can name it
-// in a ClassUnsupported failure rather than reporting an anonymous bad byte.
+// CompressedPayloadError is the error Unwrap returns for a payload compressed
+// with an algorithm it cannot decompress. It carries the algorithm so that the
+// caller can name it in a ClassUnsupported failure.
 type CompressedPayloadError struct {
-	// Algorithm is OpenVPN's name for the codec the peer used: "lzo",
-	// "lz4" or "lz4v2".
+	// Algorithm is OpenVPN's name for the codec the peer used: "lz4" or
+	// "lz4v2".
 	Algorithm string
 	// Marker is the framing byte that announced the compression.
 	Marker byte
@@ -509,20 +515,20 @@ func Wrap(m Mode, payload []byte) ([]byte, error) {
 	}
 }
 
-// Unwrap strips m's incoming framing from payload and returns the IP packet.
+// Unwrap strips m's incoming framing from payload and returns the IP packet,
+// and whether the peer had compressed it. An LZO payload decompresses to at
+// most maxLen bytes; a longer or malformed stream is an error.
 //
-// A payload the peer genuinely compressed returns a *CompressedPayloadError,
-// which errors.Is matches against ErrCompressed. So does a framing byte that
-// belongs to no known state: OpenVPN drops such a packet, and so must this,
-// because the alternative is handing the tunnel bytes that are not an IP
-// packet.
-func Unwrap(m Mode, payload []byte) ([]byte, error) {
+// A payload the peer compressed with LZ4 returns a *CompressedPayloadError,
+// which errors.Is matches against ErrCompressed. A framing byte that belongs
+// to no known state is an error too: OpenVPN drops such a packet.
+func Unwrap(m Mode, payload []byte, maxLen int) ([]byte, bool, error) {
 	framing := m.Framing()
 	if framing == FramingNone {
-		return payload, nil
+		return payload, false, nil
 	}
 	if len(payload) == 0 {
-		return nil, fmt.Errorf("compress: %s: empty payload, missing framing byte", m)
+		return nil, false, fmt.Errorf("compress: %s: empty payload, missing framing byte", m)
 	}
 	marker, hasMarker := m.compressMarker()
 
@@ -533,13 +539,18 @@ func Unwrap(m Mode, payload []byte) ([]byte, error) {
 		// algorithm's own compress marker.
 		switch head := payload[0]; {
 		case head == noCompressByte:
-			return payload[1:], nil
-		case hasMarker && head == marker:
-			return nil, &CompressedPayloadError{
-				Algorithm: m.Algorithm(), Marker: head, Length: len(payload) - 1,
+			return payload[1:], false, nil
+		case m == ModeLZO && head == lzoCompressByte:
+			// lzo_decompress() caps the output at the frame size and drops a
+			// packet that fails to decode; so does this, at maxLen.
+			// Reference: openvpn3-core compress/lzo.hpp CompressLZO::decompress_work() line ~58
+			plain, err := lzo.Decompress(make([]byte, maxLen), payload[1:])
+			if err != nil {
+				return nil, false, fmt.Errorf("compress: %s: %w", m, err)
 			}
+			return plain, true, nil
 		default:
-			return nil, fmt.Errorf("compress: %s: bad framing byte 0x%02x, want 0x%02x",
+			return nil, false, fmt.Errorf("compress: %s: bad framing byte 0x%02x, want 0x%02x",
 				m, head, noCompressByte)
 		}
 
@@ -549,7 +560,7 @@ func Unwrap(m Mode, payload []byte) ([]byte, error) {
 		// middle keeps its position.
 		head := payload[0]
 		if len(payload) < 2 {
-			return nil, fmt.Errorf("compress: %s: %d-byte payload carries a framing byte and no packet",
+			return nil, false, fmt.Errorf("compress: %s: %d-byte payload carries a framing byte and no packet",
 				m, len(payload))
 		}
 		switch {
@@ -557,13 +568,13 @@ func Unwrap(m Mode, payload []byte) ([]byte, error) {
 			out := make([]byte, len(payload)-1)
 			out[0] = payload[len(payload)-1]
 			copy(out[1:], payload[1:len(payload)-1])
-			return out, nil
+			return out, false, nil
 		case hasMarker && head == marker:
-			return nil, &CompressedPayloadError{
+			return nil, false, &CompressedPayloadError{
 				Algorithm: m.Algorithm(), Marker: head, Length: len(payload) - 1,
 			}
 		default:
-			return nil, fmt.Errorf("compress: %s: bad framing byte 0x%02x, want 0x%02x",
+			return nil, false, fmt.Errorf("compress: %s: bad framing byte 0x%02x, want 0x%02x",
 				m, head, noCompressByteSwap)
 		}
 
@@ -572,10 +583,10 @@ func Unwrap(m Mode, payload []byte) ([]byte, error) {
 		// not begin with the indicator carries no header and is returned as
 		// it stands. This is the branch every stub-v2 packet takes.
 		if payload[0] != algV2IndicatorByte {
-			return payload, nil
+			return payload, false, nil
 		}
 		if len(payload) < 2 {
-			return nil, fmt.Errorf("compress: %s: v2 indicator with no algorithm byte", m)
+			return nil, false, fmt.Errorf("compress: %s: v2 indicator with no algorithm byte", m)
 		}
 		switch alg := payload[1]; alg {
 		case algV2UncompressedByte, algV2UncompressedAlgID:
@@ -583,17 +594,17 @@ func Unwrap(m Mode, payload []byte) ([]byte, error) {
 			// compv2_escape_data_ifneeded() actually writes. Both are
 			// accepted so that a peer's escape is readable whichever of its
 			// own two constants it used.
-			return payload[2:], nil
+			return payload[2:], false, nil
 		case algV2LZ4Byte:
-			return nil, &CompressedPayloadError{
+			return nil, false, &CompressedPayloadError{
 				Algorithm: "lz4v2", Marker: alg, Length: len(payload) - 2,
 			}
 		default:
-			return nil, fmt.Errorf("compress: %s: bad v2 algorithm byte 0x%02x", m, alg)
+			return nil, false, fmt.Errorf("compress: %s: bad v2 algorithm byte 0x%02x", m, alg)
 		}
 
 	default:
-		return nil, fmt.Errorf("compress: %s: unknown framing %s", m, framing)
+		return nil, false, fmt.Errorf("compress: %s: unknown framing %s", m, framing)
 	}
 }
 

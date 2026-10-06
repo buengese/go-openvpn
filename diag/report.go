@@ -269,7 +269,7 @@ type NegotiatedInfo struct {
 	//
 	// It is a different question from Compression, which is what this client
 	// settled on. A peer that declares none disables a framing the profile
-	// asked for, and a peer that declares one this client cannot decompress
+	// asked for, and a peer that compresses with a codec this client lacks
 	// ends the session. The conclusion is recorded rather than left to be
 	// recomputed from ServerOpts, so that a reader of this report and the data
 	// channel cannot disagree about the same peer.
@@ -347,6 +347,9 @@ type Counters struct {
 	PacketsRecv uint64 `json:"packets_recv"`
 	// DecryptFailures is packets that failed authentication or decryption.
 	DecryptFailures uint64 `json:"decrypt_failures"`
+	// Decompressed is data-channel packets the peer compressed and this client
+	// decompressed.
+	Decompressed uint64 `json:"decompressed"`
 	// Replays is data-channel packets dropped by the replay window.
 	Replays uint64 `json:"replays"`
 	// ControlAuthFailures is control packets the control-channel wrap could

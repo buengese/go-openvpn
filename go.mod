@@ -3,6 +3,7 @@ module github.com/buengese/go-openvpn
 go 1.25.5
 
 require (
+	github.com/buengese/go-lzo v0.2.0
 	github.com/godbus/dbus/v5 v5.2.2
 	golang.org/x/sys v0.43.0
 	gvisor.dev/gvisor v0.0.0-20260224225140-573d5e7127a8

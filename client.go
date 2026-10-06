@@ -377,12 +377,14 @@ type Client struct {
 	bytesSent atomic.Uint64
 	bytesRecv atomic.Uint64
 
-	// packetsSent, packetsRecv, decryptFailures, retransmits and rekeys are
-	// the remaining diag.Counters fields. They are separate from Stats, which
-	// is the public traffic snapshot and part of the D-Bus surface.
+	// packetsSent, packetsRecv, decryptFailures, decompressed, retransmits
+	// and rekeys are the remaining diag.Counters fields. They are separate
+	// from Stats, which is the public traffic snapshot and part of the D-Bus
+	// surface.
 	packetsSent     atomic.Uint64
 	packetsRecv     atomic.Uint64
 	decryptFailures atomic.Uint64
+	decompressed    atomic.Uint64
 	retransmits     atomic.Uint64
 	rekeys          atomic.Uint64
 

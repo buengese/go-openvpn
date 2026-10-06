@@ -47,12 +47,10 @@ const pingIdent = 0
 // It exists as a measurement rather than as a reachability check, and the
 // payload is the reason: compression is applied to whole data-channel packets,
 // so an echo request whose payload the peer will compress comes back compressed
-// if the peer compresses at all. A client that frames compression and links no
-// codec — which is what this one does — cannot tell those peers apart any other
-// way, because a tunnel carrying incompressible traffic looks identical to one
-// whose peer never compresses. Sending it to the gateway keeps the probe inside
-// the operator's own network rather than borrowing a third party's server to
-// answer a question about this one.
+// if the peer compresses at all, which the session report's Decompressed
+// counter then shows. A tunnel carrying incompressible traffic cannot tell
+// those peers apart. Sending it to the gateway keeps the probe inside the
+// operator's own network.
 //
 // The payload is echoed back verbatim by any conforming peer, so the caller
 // chooses how compressible the reply is by choosing what to send.

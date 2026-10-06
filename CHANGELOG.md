@@ -8,6 +8,9 @@ and releases follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- `diag.Counters.Decompressed`: data-channel packets the peer compressed and
+  this client decompressed.
+
 - `profile.ParseFileInFS(r io.Reader, fsys fs.FS)` resolves file-referenced
   `ca`, `cert` and `key` directives against an `fs.FS`, so an archive held in
   memory parses where it is. `os.DirFS` does not confine symlinks; for a real
@@ -262,6 +265,13 @@ and releases follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   per value, ahead of the pushed figure and the built-in default.
 
 ### Changed
+
+- A data-channel payload the peer compressed with LZO is decompressed and
+  carried; it used to end the session as unsupported. The output is bounded by
+  the tunnel MTU, and a stream that does not decode is dropped as a bad packet.
+  Nothing is compressed on send, and LZ4 is still refused. `comp-lzo`,
+  `compress lzo` and `allow-compression asym`/`yes` are graded `supported`.
+  The codec is `github.com/buengese/go-lzo`.
 
 - Two capability-registry verdicts no longer refuse a profile before
   dialling. `ping-timer-rem` is `ignored`: a client that dials already has

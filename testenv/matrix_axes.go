@@ -177,8 +177,7 @@ const (
 	// It is the only mode in the matrix that puts a genuinely compressed
 	// payload on the wire — every other compression entry negotiates a framing
 	// byte and sends plaintext behind it — so it is the only vehicle for the
-	// branch that has to come back as ErrCompressed rather than hand a
-	// compressed payload to a client with no codec linked.
+	// client's LZO decompression.
 	//
 	// It only works on 2.4: the captures in docker/COMPRESSION-VECTORS.md
 	// measured all three pinned builds, and 2.5 and 2.6 servers never compress

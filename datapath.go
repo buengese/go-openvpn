@@ -180,12 +180,9 @@ func (c *Client) sendExitNotify(copies int) {
 		"vpn: explicit-exit-notify: sent %d of %d exit notification(s)", sent, copies)})
 }
 
-// failCompressedPayload ends the session because the peer sent a payload it
-// genuinely compressed, and no codec is linked to decompress it. It is
-// ClassUnsupported at StageData rather than a dropped packet — passing the
-// blob on as an IP packet produces a tunnel that comes up, reports green and
-// carries garbage — and Feature names the directive that selected the
-// algorithm, as the profile or the PUSH_REPLY spells it.
+// failCompressedPayload ends the session because the peer compressed a payload
+// with an algorithm this client cannot decompress. It is ClassUnsupported at
+// StageData, and Feature names the directive that selected the algorithm.
 func (c *Client) failCompressedPayload(ctx context.Context, cause error) {
 	feature := c.compression.String()
 	var cpe *compress.CompressedPayloadError
@@ -196,7 +193,7 @@ func (c *Client) failCompressedPayload(ctx context.Context, cause error) {
 	// with nowhere to hand an error — and recorded before the teardown, because
 	// the first failure recorded wins the outcome.
 	c.failUnsupported(diag.StageData, feature, //nolint:errcheck
-		"the peer compressed a data-channel payload and this client links no codec: "+cause.Error())
+		"the peer compressed a data-channel payload with a codec this client lacks: "+cause.Error())
 	c.emit(Event{Type: EventLog, Message: "vpn: " + cause.Error()})
 	c.endSession(ctx, fmt.Errorf("vpn: wireToTun: %w", cause))
 }
@@ -228,11 +225,10 @@ func (c *Client) wireToTun(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case pkt := <-dataCh:
-			plain, err := c.manager.Decrypt(pkt)
+			plain, decompressed, err := c.manager.Decrypt(pkt)
 			if err != nil {
-				// A peer that genuinely compressed is not a dropped packet:
-				// no codec is linked, so nothing it sends can be carried.
-				// End the session, naming the algorithm.
+				// A peer compressing with a codec we lack will keep doing so:
+				// end the session, naming the algorithm.
 				if errors.Is(err, compress.ErrCompressed) {
 					c.failCompressedPayload(ctx, err)
 					return
@@ -243,6 +239,9 @@ func (c *Client) wireToTun(ctx context.Context) {
 				continue
 			}
 			c.packetsRecv.Add(1)
+			if decompressed {
+				c.decompressed.Add(1)
+			}
 			// Reset the last-received timestamp for dead-link detection.
 			c.lastRecv.Store(time.Now().UnixNano())
 			// Drop keepalive magic — it is not a real IP packet.

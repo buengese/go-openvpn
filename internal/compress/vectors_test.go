@@ -110,7 +110,7 @@ type vectorFile struct {
 }
 
 // loadVectors reads and parses testdata/vectors.json.
-func loadVectors(t *testing.T) vectorFile {
+func loadVectors(t testing.TB) vectorFile {
 	t.Helper()
 	raw, err := os.ReadFile(vectorsPath)
 	if err != nil {
@@ -124,7 +124,7 @@ func loadVectors(t *testing.T) vectorFile {
 }
 
 // mustHex decodes a hex field, failing the test with the field's name.
-func mustHex(t *testing.T, name, s string) []byte {
+func mustHex(t testing.TB, name, s string) []byte {
 	t.Helper()
 	b, err := hex.DecodeString(s)
 	if err != nil {
@@ -174,8 +174,8 @@ func swapped(lead byte, plain []byte) []byte {
 }
 
 // TestVectorsAreWellFormed guards the testdata itself: that every field parses,
-// that the file covers the axes it promises, and that it has something for
-// ErrCompressed to detect.
+// that the file covers the axes it promises, and that it carries genuinely
+// compressed payloads.
 func TestVectorsAreWellFormed(t *testing.T) {
 	vf := loadVectors(t)
 
@@ -282,7 +282,7 @@ func TestVectorsAreWellFormed(t *testing.T) {
 	}
 	if compressed == 0 {
 		t.Errorf("no vector carries a genuinely compressed payload; " +
-			"ErrCompressed would have nothing to detect")
+			"Unwrap's decompression and refusal would have nothing to meet")
 	}
 }
 
@@ -346,9 +346,8 @@ func TestVectorsDecomposeAsRecorded(t *testing.T) {
 
 // TestCompressReproducesCapturedFraming is the known-answer test: for every
 // captured vector, Wrap must produce the bytes a real OpenVPN peer put on the
-// wire and Unwrap must recover the packet a real OpenVPN peer accepted. A
-// payload the peer genuinely compressed must be refused rather than handed on
-// as an IP packet.
+// wire and Unwrap must recover the packet a real OpenVPN peer accepted. An LZO
+// payload must decompress to the captured packet; an LZ4 one must be refused.
 func TestCompressReproducesCapturedFraming(t *testing.T) {
 	for _, v := range loadVectors(t).Vectors {
 		t.Run(v.Name, func(t *testing.T) {
@@ -360,11 +359,25 @@ func TestCompressReproducesCapturedFraming(t *testing.T) {
 			// parser never produces is not right for anything.
 			mode := compress.ParseMode(v.Mode)
 
+			if v.Compressed && mode.Decompresses() {
+				// Never a Wrap assertion here: we do not compress on send. The
+				// packet must come back exactly, and not one byte past the
+				// bound.
+				got, decompressed, err := compress.Unwrap(mode, framed, len(plain))
+				if err != nil || !decompressed || !bytes.Equal(got, plain) {
+					t.Errorf("Unwrap(%v, <%s payload>) = %s (%d bytes), %v, %v; want the "+
+						"captured %d-byte packet, decompressed", mode, v.Directive,
+						head(got, 8), len(got), decompressed, err, len(plain))
+				}
+				if _, _, err := compress.Unwrap(mode, framed, len(plain)-1); err == nil ||
+					errors.Is(err, compress.ErrCompressed) {
+					t.Errorf("Unwrap(%v, <%s payload>, %d) = %v; want a decompression "+
+						"error for a packet one byte past the bound", mode, v.Directive, len(plain)-1, err)
+				}
+				return
+			}
 			if v.Compressed {
-				// Never a Wrap assertion here: we do not compress, ever. The
-				// only question a compressed vector asks is whether Unwrap
-				// refuses it, and refuses it *for the right reason*.
-				got, err := compress.Unwrap(mode, framed)
+				got, _, err := compress.Unwrap(mode, framed, len(plain))
 				if err == nil {
 					t.Errorf("Unwrap(%v, <%s payload, %d bytes>) returned %d bytes and no error; "+
 						"want a compressed-payload error naming %s. This is the "+
@@ -397,7 +410,7 @@ func TestCompressReproducesCapturedFraming(t *testing.T) {
 					diffAt(got, framed), v.OpenVPNVersion, v.Directive)
 			}
 
-			got, err = compress.Unwrap(mode, framed)
+			got, _, err = compress.Unwrap(mode, framed, len(plain))
 			if err != nil {
 				t.Errorf("Unwrap(%v, framed): %v", mode, err)
 				return

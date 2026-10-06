@@ -232,6 +232,7 @@ func (c *Client) counters() diag.Counters {
 		PacketsSent:     c.packetsSent.Load(),
 		PacketsRecv:     c.packetsRecv.Load(),
 		DecryptFailures: c.decryptFailures.Load(),
+		Decompressed:    c.decompressed.Load(),
 		Retransmits:     c.retransmits.Load(),
 		Rekeys:          c.rekeys.Load(),
 		// Replays is deliberately left at zero: the sliding window lives in

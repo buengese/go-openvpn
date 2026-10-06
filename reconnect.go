@@ -471,6 +471,7 @@ func (c *Client) reset() {
 	c.packetsSent.Store(0)
 	c.packetsRecv.Store(0)
 	c.decryptFailures.Store(0)
+	c.decompressed.Store(0)
 	c.retransmits.Store(0)
 	c.rekeys.Store(0)
 	c.sawPlaintextTx.Store(false)

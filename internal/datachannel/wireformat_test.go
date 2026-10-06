@@ -280,7 +280,7 @@ func TestManagerRefusesTheOtherFormat(t *testing.T) {
 		t.Fatalf("encrypt V2: %v", err)
 	}
 	m := datachannel.NewManager(v1, nil)
-	_, err = m.Decrypt(pktV2)
+	_, _, err = m.Decrypt(pktV2)
 	if err == nil {
 		t.Fatal("a P_DATA_V2 packet was accepted on a P_DATA_V1 connection")
 	}
@@ -294,7 +294,7 @@ func TestManagerRefusesTheOtherFormat(t *testing.T) {
 	if err != nil {
 		t.Fatalf("encrypt V1: %v", err)
 	}
-	if _, err := m.Decrypt(pktV1); err != nil {
+	if _, _, err := m.Decrypt(pktV1); err != nil {
 		t.Errorf("a P_DATA_V1 packet was refused on a P_DATA_V1 connection: %v", err)
 	}
 }
