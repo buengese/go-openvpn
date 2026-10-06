@@ -491,6 +491,7 @@ func (c *Client) teardown(preserveCredentials, deliberate bool) error {
 		return nil
 	}
 	c.state = stateDisconnecting
+	cancel, conn := c.cancelFn, c.rawConn
 	c.mu.Unlock()
 
 	c.emit(Event{Type: EventStateChanged, State: StateDisconnecting})
@@ -502,11 +503,11 @@ func (c *Client) teardown(preserveCredentials, deliberate bool) error {
 		c.sendExitNotify(n)
 	}
 
-	if c.cancelFn != nil {
-		c.cancelFn()
+	if cancel != nil {
+		cancel()
 	}
-	if c.rawConn != nil {
-		c.rawConn.Close()
+	if conn != nil {
+		conn.Close()
 	}
 
 	go func() {

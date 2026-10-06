@@ -1067,10 +1067,35 @@ func (c *Client) bringUpDevice(ctx context.Context, pushOpts *routing.PushOption
 // startDataPath marks the tunnel up and starts every goroutine that runs for
 // the life of the session.
 func (c *Client) startDataPath(pushOpts *routing.PushOptions) {
-	// Mark tunnel as up.
+	loops := []func(context.Context){
+		c.tunToWire,
+		c.wireToTun,
+		// Keepalive: send probes and detect dead links. The loop always runs,
+		// as openvpn3's does; what the server pushed goes in raw, and
+		// keepaliveFor decides what a zero means — the profile's ping
+		// directives, then defaults.
+		func(ctx context.Context) { c.keepaliveLoop(ctx, pushOpts.PingInterval, pushOpts.PingRestart) },
+		// Key renegotiation loop — initiates SOFT_RESET when keys are due for rotation.
+		// Reference: openvpn3-core ssl/proto.hpp ProtoContext::renegotiate() line ~4108.
+		c.rekeyLoop,
+		c.sessionMonitor,
+	}
+	// Inactive session timeout: disconnect if traffic falls below the server's threshold.
+	if pushOpts.InactiveTimeout > 0 {
+		loops = append(loops, func(ctx context.Context) {
+			c.inactiveLoop(ctx, pushOpts.InactiveTimeout, pushOpts.InactiveBytes)
+		})
+	}
+	cctx, cancel := context.WithCancel(context.Background())
+
+	// One step under the lock: a teardown that sees stateTunnelUp must also
+	// find cancelFn and the goroutines in wg, or it cancels nothing and waits
+	// for nothing while they run on.
 	c.mu.Lock()
 	c.state = stateTunnelUp
 	c.connectedAt = time.Now()
+	c.cancelFn = cancel
+	c.wg.Add(len(loops))
 	serverIP := c.backendIP
 	assignedIP := ""
 	if pushOpts.Ifconfig != nil {
@@ -1085,35 +1110,9 @@ func (c *Client) startDataPath(pushOpts *routing.PushOptions) {
 		Message:  assignedIP,
 	})
 
-	// Start data-channel goroutines.
-	cctx, cancel := context.WithCancel(context.Background())
-	c.cancelFn = cancel
-
-	c.wg.Add(2)
-	go c.tunToWire(cctx)
-	go c.wireToTun(cctx)
-
-	// Keepalive: send probes and detect dead links. The loop always runs, as
-	// openvpn3's does; what the server pushed goes in raw, and keepaliveFor
-	// decides what a zero means — the profile's ping directives, then defaults.
-	c.wg.Add(1)
-	go c.keepaliveLoop(cctx, pushOpts.PingInterval, pushOpts.PingRestart)
-
-	// Inactive session timeout: disconnect if traffic falls below the server's threshold.
-	if pushOpts.InactiveTimeout > 0 {
-		c.wg.Add(1)
-		go c.inactiveLoop(cctx, pushOpts.InactiveTimeout, pushOpts.InactiveBytes)
+	for _, loop := range loops {
+		go loop(cctx)
 	}
-
-	// Key renegotiation loop — initiates SOFT_RESET when keys are due for rotation.
-	// Reference: openvpn3-core ssl/proto.hpp ProtoContext::renegotiate() line ~4108.
-	c.wg.Add(1)
-	go c.rekeyLoop(cctx)
-
-	// Start session monitor.
-	c.wg.Add(1)
-	go c.sessionMonitor(cctx)
-
 }
 
 // exportDataChannelKeys derives the pushed tls-ekm key block, recording the

@@ -481,6 +481,10 @@ and releases follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- A `Disconnect` that arrived while `Connect` was announcing StateConnected
+  left the data path running: `WaitForDisconnect` never returned, or a later
+  `Reconnect` panicked.
+
 - A server that ends an established session is noticed on every connection, not
   only on federated ones. Certificate and username/password profiles — every
   non-AWS provider — authenticate in one exchange, and that path handed the

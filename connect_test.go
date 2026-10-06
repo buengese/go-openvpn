@@ -637,3 +637,33 @@ func TestConnectErrorCarriesTheReport(t *testing.T) {
 		t.Errorf("marshal the attached report: %v", err)
 	}
 }
+
+// TestDisconnectOnConnectedStopsTheDataPath disconnects from inside the
+// StateConnected event, between startDataPath marking the tunnel up and its
+// goroutines starting. The teardown must still cancel them and wait for them.
+func TestDisconnectOnConnectedStopsTheDataPath(t *testing.T) {
+	c := New(&profile.Profile{})
+	c.state = stateConnecting
+	c.EventFn = func(e Event) {
+		if e.Type == EventStateChanged && e.State == StateConnected {
+			c.Disconnect() //nolint:errcheck
+		}
+	}
+	c.startDataPath(&routing.PushOptions{})
+
+	select {
+	case <-c.Done():
+	case <-time.After(5 * time.Second):
+		t.Fatal("the client never finished disconnecting")
+	}
+	drained := make(chan struct{})
+	go func() {
+		c.wg.Wait()
+		close(drained)
+	}()
+	select {
+	case <-drained:
+	case <-time.After(5 * time.Second):
+		t.Fatal("data-path goroutines outlived the disconnect: they were never cancelled")
+	}
+}
