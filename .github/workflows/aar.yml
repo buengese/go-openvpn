@@ -1,8 +1,7 @@
 name: Build AAR
 
+# Run by hand only while releases are not published; see release.yml.
 on:
-  push:
-    tags: ['v*']
   workflow_dispatch:
     inputs:
       tag:

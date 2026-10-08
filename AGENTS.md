@@ -63,8 +63,9 @@ its own versions.
 The library's version is its tag; no file in the tree carries it. Move the
 entries under `Unreleased` in `CHANGELOG.md` to the new version and date,
 create a fresh empty `Unreleased` section, commit, then tag `vX.Y.Z`. The
-release workflows (`release.yml`, `aar.yml`, `xcframework.yml`) run on the
-tag. The desktop app, its RPM spec and its PKGBUILD are versioned and released
+release workflows (`release.yml`, `aar.yml`, `xcframework.yml`) do not run on
+the tag for now: nothing is signed or published, and they are run by hand
+when that resumes. The desktop app, its RPM spec and its PKGBUILD are versioned and released
 from go-openvpn-linux.
 
 ### Retired / archived — do NOT treat as current
